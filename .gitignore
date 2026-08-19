@@ -1,0 +1,15 @@
+node_modules/
+dist/
+target/
+src-tauri/target/
+src-tauri/gen/
+coverage/
+.DS_Store
+
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+
+# tsc -b build-mode artifacts
+*.tsbuildinfo
+node_modules/.tmp/

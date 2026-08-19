@@ -1,0 +1,38 @@
+name: setup
+description: Node, yarn, and Rust with caching
+inputs:
+  rust-components:
+    description: Extra rustup components, comma separated
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    # Corepack must be enabled BEFORE setup-node runs. setup-node's
+    # package-manager-cache defaults to true, which shells out to
+    # `yarn cache dir` during its own setup -- and the runner's global yarn is
+    # 1.22, which hard-refuses any project whose package.json pins
+    # "packageManager": "yarn@4.5.1". That fails setup-node itself, before any
+    # later `corepack enable` step could possibly run.
+    - shell: bash
+      run: corepack enable
+
+    - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+      with:
+        node-version: "24"
+        # Yarn 4's own cache lives in the project and is restored by
+        # `yarn install --immutable`; setup-node's yarn-1-shaped cache probe
+        # only reintroduces the version conflict above.
+        package-manager-cache: false
+
+    - shell: bash
+      run: yarn install --immutable
+
+    - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      with:
+        toolchain: stable
+        components: ${{ inputs.rust-components }}
+
+    - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.1
+      with:
+        workspaces: src-tauri

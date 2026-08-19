@@ -332,11 +332,28 @@ def squircle_mask(size: int, radius_ratio: float = 0.2225) -> Image.Image:
 
 
 def crop_glyph(splash: Image.Image) -> Image.Image:
-    """Cut the branch mark out of the splash, above the wordmark."""
+    """Cut the branch mark out of the splash, above the wordmark.
+
+    The source splash is a flat, fully-opaque RGB(A) image -- there is no
+    transparency around the glyph. A naive crop therefore carries its own
+    near-black background rectangle as opaque pixels, which shows up as a
+    visible seam on the app icon and turns the tray silhouette into a solid
+    black square. Key the near-black background out to alpha=0 so only the
+    glyph strokes/nodes survive.
+    """
     w, h = splash.size
     # The mark sits centered in the upper ~62% of the 1600x1000 art.
     box = (int(w * 0.32), int(h * 0.13), int(w * 0.68), int(h * 0.66))
-    return splash.crop(box)
+    glyph = splash.crop(box).convert("RGBA")
+    px = glyph.load()
+    gw, gh = glyph.size
+    bg_thresh = 45  # max(r, g, b) below this is background, not glyph.
+    for y in range(gh):
+        for x in range(gw):
+            r, g, b, a = px[x, y]
+            if max(r, g, b) <= bg_thresh:
+                px[x, y] = (r, g, b, 0)
+    return glyph
 
 
 def make_app_icon(glyph: Image.Image) -> None:
@@ -575,7 +592,7 @@ runs:
         node-version: "24"
     - shell: bash
       run: corepack enable && yarn install --immutable
-    - uses: dtolnay/rust-toolchain@b3b07ba8b418998c39fb2c1c2f0470a9fd848ead # stable
+    - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
       with:
         toolchain: stable
         components: ${{ inputs.rust-components }}
@@ -598,17 +615,36 @@ Create `scripts/check-privacy.sh`:
 #
 # This is an ALLOW-list, deliberately. A deny-list would have to spell out
 # the very names it exists to keep out, putting them in the repo in plain
-# text and defeating itself. An allow-list also catches names nobody thought
-# to add.
+# text and defeating itself. An allow-list also catches owners nobody
+# thought to enumerate.
+#
+# Two patterns are scanned, both anchored so they cannot match ordinary
+# prose. An earlier unanchored `owner/repo` pattern matched things like
+# `api/hooks.ts`, `read/write`, and `5000/hour` -- a gate that cries wolf
+# gets disabled, so anchoring is load-bearing, not tidiness.
+#   1. github.com/<owner>/<repo>   -- any GitHub URL
+#   2. <owner>/<repo>#<number>     -- the PR/issue shorthand
 set -euo pipefail
 
 # The only repository owners this project legitimately references.
-ALLOWED='octocat|pktstorm|tauri-apps|shadcn-ui|rust-lang|actions|dtolnay|Swatinem'
+# `org` and `owner` are the generic placeholders used in format examples
+# (`- [org/repo#123] Title`), not real accounts.
+ALLOWED='octocat|pktstorm|tauri-apps|shadcn-ui|rust-lang|actions|dtolnay|Swatinem|org|owner'
 
-# Every owner/repo-shaped token and github.com URL in committed files.
-found=$(git grep -hoIE '(github\.com/|[[:space:]`"(])[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+' \
-          -- ':!scripts/check-privacy.sh' 2>/dev/null \
-        | sed -E 's#.*github\.com/##; s#^[[:space:]`"(]##' \
+# Lockfiles are machine-generated dependency graphs naming hundreds of
+# upstream repos; they are not a leak vector for private names.
+EXCLUDES=(':!scripts/check-privacy.sh' ':!yarn.lock' ':!src-tauri/Cargo.lock')
+
+urls=$(git grep -hoIE 'github\.com/[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+' \
+         -- "${EXCLUDES[@]}" 2>/dev/null \
+       | sed -E 's#.*github\.com/##' || true)
+
+refs=$(git grep -hoIE '[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+#[0-9]+' \
+         -- "${EXCLUDES[@]}" 2>/dev/null \
+       | sed -E 's/#[0-9]+$//' || true)
+
+found=$(printf '%s\n%s\n' "$urls" "$refs" \
+        | grep -vE '^[[:space:]]*$' \
         | grep -vE "^($ALLOWED)/" \
         | sort -u || true)
 
@@ -754,9 +790,24 @@ export default tseslint.config(
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": ["src/main.tsx", "vite.config.ts"],
   "project": ["src/**/*.{ts,tsx}"],
-  "ignoreDependencies": ["@tailwindcss/vite", "tailwindcss"]
+  "ignoreDependencies": [
+    "@tanstack/react-query",
+    "@tauri-apps/api",
+    "lucide-react",
+    "zustand",
+    "@testing-library/dom",
+    "@testing-library/react",
+    "tailwindcss"
+  ]
 }
 ```
+
+**Why the long `ignoreDependencies`:** these are installed in Task 1 but not
+imported until Tasks 8-20. Without the ignores, knip reports six unused
+dependencies and CI stays red from Task 4 until Task 20 -- and a permanently
+red gate is an ignored gate. `tailwindcss` is a genuine false positive: it is
+imported from CSS (`@import "tailwindcss"`), which knip does not follow.
+Verified: `yarn knip` exits 0 with this config against the Task 1-3 tree.
 
 `src-tauri/deny.toml`:
 

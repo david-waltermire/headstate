@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Least privilege: only the release job runs, and it needs contents:write
+# solely to create the GitHub Release and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+
+      # macos-latest runners are Apple Silicon, so aarch64-apple-darwin is
+      # present by default. The Intel slice of the universal binary needs
+      # its target added explicitly.
+      - name: Add Intel target
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Build universal bundle
+        run: yarn tauri build --target universal-apple-darwin --bundles app,dmg
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
+          tar -czf "Headstate-${GITHUB_REF_NAME}.app.tar.gz" -C "$BUNDLE/macos" Headstate.app
+
+          # v1 ships unsigned: Gatekeeper blocks it until the quarantine
+          # attribute is stripped. --generate-notes prepends --notes ahead
+          # of the auto-generated changelog, so this reaches every release.
+          NOTES="This build is unsigned. Before first launch, run:
+
+          \`\`\`
+          xattr -dr com.apple.quarantine /Applications/Headstate.app
+          \`\`\`
+
+          Otherwise Gatekeeper will refuse to open it."
+
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Headstate ${GITHUB_REF_NAME}" \
+            --notes "$NOTES" \
+            --generate-notes \
+            "Headstate-${GITHUB_REF_NAME}.app.tar.gz" \
+            "$BUNDLE"/dmg/*.dmg

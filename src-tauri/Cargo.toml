@@ -1,0 +1,31 @@
+[package]
+name = "headstate"
+version = "0.1.0"
+license = "Apache-2.0"
+description = "Your work. Your pull requests. One clear status."
+repository = "https://github.com/pktstorm/headstate"
+edition = "2021"
+
+[lib]
+name = "headstate_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+octocrab = { version = "0.54", default-features = false, features = [
+  "follow-redirect", "retry", "rustls", "timeout", "tracing",
+  "default-client", "rustls-ring", "jwt-aws-lc-rs",
+] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+tokio = { version = "1.53", features = ["full"] }
+thiserror = "2"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+wiremock = "0.6"
