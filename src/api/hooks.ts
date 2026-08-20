@@ -1,0 +1,125 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useEffect, useSyncExternalStore } from "react";
+import type { PullRequest } from "../types/pr";
+import { getCached, getStats, refreshNow } from "./tauri";
+
+/// The PR list. Seeded from the SQLite snapshot so the first paint shows
+/// real content, then reconciled by the Rust poll loop via `prs-updated`.
+/// React never talks to GitHub directly.
+///
+/// `get_cached` returns `[]` both on a genuinely PR-free account and while
+/// the first poll (~3s cold) hasn't landed yet. This hook does not attempt
+/// to tell those apart -- it falls back to `refresh_now` so the first paint
+/// is never a bare empty screen while a poll is in flight. Callers that
+/// need "never authenticated" vs. "authenticated, still loading" should
+/// consult `get_auth_state` (see `AuthGate`).
+export function usePullRequests() {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    // Cleanup must not race `listen()`'s own promise: if the effect tears
+    // down before `listen` resolves, a naive `un.then(f => f())` calls
+    // unlisten on a promise that hasn't produced `f` yet, so the listener
+    // registers *after* teardown and leaks. React 19 StrictMode mounts,
+    // unmounts, and remounts effects on purpose, so this is not
+    // theoretical -- it's the normal dev-mode path.
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+
+    listen<PullRequest[]>("prs-updated", (e) => {
+      qc.setQueryData(["prs"], e.payload);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [qc]);
+
+  return useQuery({
+    queryKey: ["prs"],
+    queryFn: async () => {
+      const cached = await getCached();
+      // Show the cache immediately; the poll loop supplies fresh data.
+      if (cached.length > 0) return cached;
+      return refreshNow();
+    },
+    staleTime: Infinity,
+  });
+}
+
+/// `Stats`'s five derived fields always come back zero from the Rust layer
+/// today (see `src/types/pr.ts`); only `merged_week`/`merged_month` are
+/// real. `refresh_now`-style: does not persist to SQLite, so this is always
+/// a live network call, not a cache read.
+export function useStats() {
+  return useQuery({ queryKey: ["stats"], queryFn: getStats, staleTime: 60_000 });
+}
+
+/// The Rust poll loop emits `poll-error` (payload: a display-ready message
+/// string) on every failed background poll, and nothing else listens for
+/// it. Without this, M2's error handling is invisible: the UI would show
+/// stale cached data forever with no indication a poll is failing.
+///
+/// Deliberately not a TanStack Query cache entry -- there's no `queryFn` to
+/// attach it to, it's a push notification from a background loop, not the
+/// result of a fetch this component initiated. A minimal module-level store
+/// subscribed via `useSyncExternalStore` is the smallest thing that works.
+let lastPollError: string | null = null;
+const listeners = new Set<() => void>();
+
+function setLastPollError(message: string | null): void {
+  lastPollError = message;
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+function getSnapshot(): string | null {
+  return lastPollError;
+}
+
+/// The most recent `poll-error` message, or `null` if no poll has failed
+/// since this window opened (or a later poll has since succeeded and
+/// re-emitted `prs-updated`, which clears it).
+export function usePollError(): string | null {
+  useEffect(() => {
+    let unlistenError: UnlistenFn | undefined;
+    let unlistenUpdated: UnlistenFn | undefined;
+    let cancelled = false;
+
+    listen<string>("poll-error", (e) => {
+      setLastPollError(e.payload);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenError = fn;
+    });
+
+    // A later successful poll clears the error banner. `prs-updated` is
+    // already listened to by `usePullRequests` (which updates the query
+    // cache); this listens independently only to clear the error flag, so
+    // the two hooks stay decoupled -- a banner can mount without the list
+    // being mounted too.
+    listen<PullRequest[]>("prs-updated", () => {
+      setLastPollError(null);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenUpdated = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlistenError?.();
+      unlistenUpdated?.();
+    };
+  }, []);
+
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
