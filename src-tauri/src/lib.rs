@@ -100,10 +100,16 @@ pub fn run() {
             // Only poll GitHub if we actually have a client; there is
             // nothing to fetch without one, and this task is the only
             // caller of GitHub in the whole app.
+            // Managed unconditionally: the tray menu is built whether or
+            // not auth succeeded, and its handler must always find a Waker
+            // to signal even when nothing is listening for it.
+            let waker = Arc::new(tokio::sync::Notify::new());
+            app.manage(poll::Waker(waker.clone()));
+
             if let Some(client) = gh_client {
                 let focused = Arc::new(AtomicBool::new(true));
                 app.manage(Focused(focused.clone()));
-                poll::spawn(handle, client, focused);
+                poll::spawn(handle, client, focused, waker);
             }
 
             tray::setup_tray(&app.handle().clone())?;
@@ -127,6 +133,16 @@ pub fn run() {
             tauri::WindowEvent::Focused(is_focused) => {
                 if let Some(focused) = window.try_state::<Focused>() {
                     mark_focus(&focused.0, *is_focused);
+                }
+                // Regaining focus is exactly when fresh data is wanted, and
+                // it is the reliable signal that a machine woke from sleep:
+                // `tokio::time::sleep` does not fire while suspended and
+                // does not compensate on wake, so without this the first
+                // tick after a closed lid was up to a full interval late.
+                if *is_focused {
+                    if let Some(waker) = window.try_state::<poll::Waker>() {
+                        waker.0.notify_one();
+                    }
                 }
             }
             _ => {}

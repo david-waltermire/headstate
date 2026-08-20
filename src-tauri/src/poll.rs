@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::Notify;
 
 pub const FOCUSED: Duration = Duration::from_secs(60);
 pub const BACKGROUND: Duration = Duration::from_secs(300);
@@ -148,7 +149,26 @@ fn spawn_recheck(app: AppHandle, client: Arc<GitHubClient>, last_known: Vec<Pull
 /// genuine hang and never truncates a merely slow response.
 pub const FETCH_TIMEOUT: Duration = Duration::from_secs(90);
 
-pub fn spawn(app: AppHandle, client: Arc<GitHubClient>, focused: Arc<AtomicBool>) {
+/// Wakes the poll loop out of its sleep.
+///
+/// Managed in Tauri state so the tray and the window-focus handler can
+/// reach it. One mechanism covers two problems:
+///
+/// 1. Tray "Refresh now" only emitted an event whose sole listener is a
+///    React effect inside `App` -- so while the window was hidden the
+///    click did a real fetch whose result landed in a cache nobody was
+///    looking at, never persisted, and never touched the badge.
+/// 2. `tokio::time::sleep` does not fire during macOS system sleep and
+///    does not compensate on wake, so after a closed lid the first tick
+///    was delayed up to a full interval (300s when backgrounded).
+pub struct Waker(pub Arc<Notify>);
+
+pub fn spawn(
+    app: AppHandle,
+    client: Arc<GitHubClient>,
+    focused: Arc<AtomicBool>,
+    waker: Arc<Notify>,
+) {
     tauri::async_runtime::spawn(async move {
         loop {
             // `timeout` collapses a hang into the Err arm the loop already
@@ -173,7 +193,15 @@ pub fn spawn(app: AppHandle, client: Arc<GitHubClient>, focused: Arc<AtomicBool>
                     }
                 }
             }
-            tokio::time::sleep(interval_for(focused.load(Ordering::Relaxed))).await;
+            // Whichever comes first: the cadence elapsing, or someone
+            // asking for a refresh. `Notify` stores one permit, so a
+            // request that arrives mid-fetch is not lost -- the next
+            // `notified()` returns immediately rather than waiting out a
+            // full interval.
+            tokio::select! {
+                _ = tokio::time::sleep(interval_for(focused.load(Ordering::Relaxed))) => {}
+                _ = waker.notified() => {}
+            }
         }
     });
 }
@@ -181,6 +209,37 @@ pub fn spawn(app: AppHandle, client: Arc<GitHubClient>, focused: Arc<AtomicBool>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `notify_one` stores a permit when nobody is waiting, so a refresh
+    /// requested WHILE a fetch is in flight is not lost -- the next
+    /// `notified()` returns immediately instead of waiting out a full
+    /// interval. Without that property, a tray click landing mid-tick
+    /// would appear to do nothing for up to 300s.
+    #[tokio::test]
+    async fn a_wake_requested_before_the_wait_is_not_lost() {
+        let n = Notify::new();
+        n.notify_one(); // arrives while the loop is busy fetching
+        let waited = tokio::time::timeout(Duration::from_millis(50), n.notified()).await;
+        assert!(waited.is_ok(), "a stored permit must satisfy the next wait");
+    }
+
+    /// And the select really does prefer whichever fires first, so a wake
+    /// short-circuits the cadence rather than being queued behind it.
+    #[tokio::test]
+    async fn a_wake_short_circuits_the_sleep() {
+        let n = Arc::new(Notify::new());
+        let n2 = n.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            n2.notify_one();
+        });
+        let start = std::time::Instant::now();
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(30)) => panic!("slept instead of waking"),
+            _ = n.notified() => {}
+        }
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
 
     /// A hung request must collapse into the error arm rather than
     /// awaiting forever. Without the `timeout` wrapper the poll loop had

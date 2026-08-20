@@ -3,6 +3,7 @@ import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
 import { PrList } from "./components/PrList";
+import { TriageChips } from "./components/TriageChips";
 import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { StatsPage } from "./components/StatsPage";
@@ -79,6 +80,10 @@ export default function App() {
         ) : (
           <div className="p-4">
             <PrioritiesStrip prs={scopedForStrip} />
+            {/* Counts come from the same predicates the chips apply, so a
+                chip can never open a list that disagrees with its number.
+                Scoped to the sidebar selection like the strip above. */}
+            <TriageChips prs={scopedForStrip} />
             <FilterBar prs={prs} />
             {isLoading ? (
               // `get_cached` returns `[]` both for "never polled" and for

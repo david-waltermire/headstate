@@ -50,6 +50,15 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 }
             }
             "refresh" => {
+                // Wake the Rust poll loop, which persists the snapshot,
+                // emits `prs-updated`, and repaints the badge. The event
+                // below only reaches a React listener mounted inside
+                // `App`, so on its own it was silently dead whenever the
+                // window was hidden -- which is most of the time for a
+                // tray app.
+                if let Some(waker) = app.try_state::<crate::poll::Waker>() {
+                    waker.0.notify_one();
+                }
                 let _ = app.emit_to("main", "refresh-requested", ());
             }
             "quit" => app.exit(0),
