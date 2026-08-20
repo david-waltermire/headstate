@@ -3,11 +3,14 @@
 //!
 //! Read-only: every query here is a `search`, never a mutation.
 
-use super::map::{map_history, map_list, map_merged_detail, map_rate_limit, map_search, map_total};
-use super::model::{History, MergedDetail, Periods, PullRequest, Stats};
+use super::map::{
+    map_cycle_trend, map_history, map_list, map_merged_detail, map_rate_limit, map_search,
+    map_total,
+};
+use super::model::{CycleTrend, History, MergedDetail, Periods, PullRequest, Stats};
 use super::query::{
-    history_query_range, history_query_range_with_periods, periods_query, HISTORY_CHUNK_DAYS,
-    MERGED_DETAIL_QUERY, PRS_QUERY, STATS_QUERY,
+    cycle_trend_query, history_query_range, history_query_range_with_periods, periods_query,
+    HISTORY_CHUNK_DAYS, MERGED_DETAIL_QUERY, PRS_QUERY, STATS_QUERY,
 };
 use chrono::{DateTime, Duration, Utc};
 use octocrab::Octocrab;
@@ -110,6 +113,14 @@ impl GitHubClient {
             }))
             .await?;
         Ok((map_list(&v, "authored"), map_list(&v, "reviewing")))
+    }
+
+    /// Median cycle time this week against last, in one request.
+    pub async fn fetch_cycle_trend(&self, now: DateTime<Utc>) -> Result<CycleTrend, ClientError> {
+        let v = self
+            .graphql_partial_ok(&json!({ "query": cycle_trend_query(now) }))
+            .await?;
+        Ok(map_cycle_trend(&v))
     }
 
     /// The PR list together with GitHub's own match count.
@@ -589,6 +600,12 @@ mod tests {
         let (authored, reviewing) = c.fetch_prs_and_reviewing().await.unwrap();
         println!("AUTHORED={} REVIEWING={}", authored.len(), reviewing.len());
         assert!(!authored.is_empty());
+
+        let t = c.fetch_cycle_trend(Utc::now()).await.unwrap();
+        println!(
+            "CYCLE cur={:.2}h ({} merged) prev={:.2}h ({} merged) sampled={}",
+            t.current_hours, t.current_count, t.previous_hours, t.previous_count, t.sampled
+        );
 
         let h = c.fetch_history(Utc::now(), 30).await.unwrap();
         println!("TIMING fetch_history(30) = {:?}", t0.elapsed());

@@ -7,7 +7,14 @@
 /// render on `get_auth_state` before anything else calls in.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { History, MergedDetail, Periods, PullRequest, Stats } from "../types/pr";
+import type {
+  CycleTrend,
+  History,
+  MergedDetail,
+  Periods,
+  PullRequest,
+  Stats,
+} from "../types/pr";
 
 export interface AuthState {
   ok: boolean;
@@ -30,6 +37,9 @@ export const getStats = () => invoke<Stats>("get_stats");
 /// PRs awaiting the user's review. Rides along in the same GraphQL
 /// document as the authored list, so it costs no extra rate limit.
 export const getReviewing = () => invoke<PullRequest[]>("get_reviewing");
+
+/// Median cycle time this week against last, in one request.
+export const getCycleTrend = () => invoke<CycleTrend>("get_cycle_trend");
 
 /// The period comparisons alone -- one small request (~1.6s) so the delta
 /// cards paint without waiting on the daily series.

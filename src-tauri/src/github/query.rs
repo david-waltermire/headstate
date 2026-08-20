@@ -215,6 +215,30 @@ pub fn history_query_range_with_periods(now: DateTime<Utc>, start: i64, len: i64
     q
 }
 
+/// Cycle time for two adjacent windows, so the headline figure has a prior
+/// period to compare against.
+///
+/// Both windows in ONE aliased document at a total cost of 1 point. Each
+/// window is capped at 100 nodes, so for a busy week these are SAMPLES of
+/// that week rather than a census -- `sampled` says so, and the UI must
+/// not present the result as complete.
+pub fn cycle_trend_query(now: DateTime<Utc>) -> String {
+    let r = period_ranges(now);
+    format!(
+        r#"query {{
+  current: search(query: "is:pr author:@me is:merged merged:{}..{}", type: ISSUE, first: 100) {{
+    issueCount
+    nodes {{ ... on PullRequest {{ createdAt mergedAt }} }}
+  }}
+  previous: search(query: "is:pr author:@me is:merged merged:{}..{}", type: ISSUE, first: 100) {{
+    issueCount
+    nodes {{ ... on PullRequest {{ createdAt mergedAt }} }}
+  }}
+}}"#,
+        r.week_current.0, r.week_current.1, r.week_previous.0, r.week_previous.1
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

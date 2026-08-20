@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useHistory, useMergedDetail, usePeriods } from "../api/hooks";
+import { useCycleTrend, useHistory, useMergedDetail, usePeriods } from "../api/hooks";
 import { QueryError, errorMessage } from "./QueryError";
 import { ActivityChart } from "./stats/ActivityChart";
 import { DeltaCards } from "./stats/DeltaCards";
@@ -23,6 +23,7 @@ export function StatsPage() {
   const periodsQ = usePeriods();
   const historyQ = useHistory(days);
   const detailQ = useMergedDetail();
+  const { data: cycleTrend } = useCycleTrend();
   const { data: periods } = periodsQ;
   const { data: history } = historyQ;
   const { data: detail } = detailQ;
@@ -105,7 +106,7 @@ export function StatsPage() {
 
       {detail ? (
         <>
-          <InsightCards detail={detail} />
+          <InsightCards detail={detail} trend={cycleTrend} />
           <Outliers slowest={detail.slowest} largest={detail.largest} />
           <RepoTable repos={detail.repo_counts} sampleSize={detail.sample_size} />
         </>

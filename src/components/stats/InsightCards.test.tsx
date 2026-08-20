@@ -52,3 +52,43 @@ describe("InsightCards", () => {
     expect(screen.queryByText(/NaN/)).toBeNull();
   });
 });
+
+describe("InsightCards cycle-time trend", () => {
+  const trend = {
+    current_hours: 0.63,
+    previous_hours: 0.76,
+    current_count: 183,
+    previous_count: 110,
+    sampled: false,
+  };
+
+  // Lower is better here, unlike every other card on the page.
+  it("paints a FALLING cycle time green", () => {
+    const { container } = render(<InsightCards detail={detail} trend={trend} />);
+    expect(screen.getByText("-17%")).toBeTruthy();
+    expect(container.innerHTML).toContain("#3fb950");
+  });
+
+  it("paints a rising cycle time red", () => {
+    const { container } = render(
+      <InsightCards
+        detail={detail}
+        trend={{ ...trend, current_hours: 2.0, previous_hours: 1.0 }}
+      />,
+    );
+    expect(screen.getByText("+100%")).toBeTruthy();
+    expect(container.innerHTML).toContain("#f85149");
+  });
+
+  // A week above 100 merges is a sample, and saying so is the difference
+  // between an honest figure and a plausible-but-wrong one.
+  it("says when the medians are over a sample", () => {
+    render(<InsightCards detail={detail} trend={{ ...trend, sampled: true }} />);
+    expect(screen.getByText(/sampled/)).toBeTruthy();
+  });
+
+  it("shows no trend when there is no prior week", () => {
+    render(<InsightCards detail={detail} trend={{ ...trend, previous_hours: 0 }} />);
+    expect(screen.queryByText(/vs last week/)).toBeNull();
+  });
+});

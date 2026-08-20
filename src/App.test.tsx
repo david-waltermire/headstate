@@ -15,6 +15,7 @@ vi.mock("./api/hooks", () => ({
   useRefreshRequested: () => undefined,
   useTruncation: () => null,
   useReviewing: () => ({ data: [], isLoading: false }),
+  useCycleTrend: () => ({ data: undefined }),
   // StatsPage owns these; this suite only asserts the shell's layout, so
   // they return a settled empty result rather than real figures.
   // Non-zero on purpose: an all-zero account now renders a single

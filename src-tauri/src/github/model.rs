@@ -240,3 +240,17 @@ mod attention_tests {
         );
     }
 }
+
+/// Median cycle time for the current week against the previous one.
+///
+/// `sampled` is true when either window exceeded the 100-node page size,
+/// meaning the medians are over a sample of that week rather than all of
+/// it. The UI says so rather than implying a census.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CycleTrend {
+    pub current_hours: f64,
+    pub previous_hours: f64,
+    pub current_count: u64,
+    pub previous_count: u64,
+    pub sampled: bool,
+}

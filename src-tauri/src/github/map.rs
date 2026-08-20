@@ -1,8 +1,8 @@
 //! Mapping from the raw GraphQL JSON to typed `PullRequest`s.
 
 use super::model::{
-    CiState, HistoryPoint, Label, MergeState, MergedDetail, MergedPr, PullRequest, RepoCount,
-    ReviewState,
+    CiState, CycleTrend, HistoryPoint, Label, MergeState, MergedDetail, MergedPr, PullRequest,
+    RepoCount, ReviewState,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
@@ -218,6 +218,53 @@ pub fn map_merged_detail(v: &Value) -> MergedDetail {
     d
 }
 
+/// Median cycle time in hours for one window's nodes.
+///
+/// Nearest rank, matching `percentile` on the frontend: `ceil(n*p) - 1`
+/// zero-indexed. Nodes missing either timestamp are skipped.
+fn median_hours(nodes: &Value) -> f64 {
+    let empty = vec![];
+    let mut hours: Vec<f64> = nodes
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .filter_map(|n| {
+            let c = DateTime::parse_from_rfc3339(n["createdAt"].as_str()?).ok()?;
+            let m = DateTime::parse_from_rfc3339(n["mergedAt"].as_str()?).ok()?;
+            let h = (m - c).num_seconds() as f64 / 3600.0;
+            (h >= 0.0).then_some(h)
+        })
+        .collect();
+    if hours.is_empty() {
+        return 0.0;
+    }
+    hours.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let idx = ((hours.len() as f64 * 0.5).ceil() as usize).saturating_sub(1);
+    hours[idx.min(hours.len() - 1)]
+}
+
+pub fn map_cycle_trend(v: &Value) -> CycleTrend {
+    let cur_n = v["current"]["issueCount"].as_u64().unwrap_or(0);
+    let prev_n = v["previous"]["issueCount"].as_u64().unwrap_or(0);
+    let cur_len = v["current"]["nodes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0) as u64;
+    let prev_len = v["previous"]["nodes"]
+        .as_array()
+        .map(|a| a.len())
+        .unwrap_or(0) as u64;
+    CycleTrend {
+        current_hours: median_hours(&v["current"]["nodes"]),
+        previous_hours: median_hours(&v["previous"]["nodes"]),
+        current_count: cur_n,
+        previous_count: prev_n,
+        // GitHub returns at most 100 nodes per window; above that the
+        // medians describe a sample of the week, not the week.
+        sampled: cur_n > cur_len || prev_n > prev_len,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +334,56 @@ mod tests {
     fn malformed_nodes_are_skipped_not_panicked_on() {
         let v = serde_json::json!({"search": {"nodes": [{"number": 1}, null]}});
         assert_eq!(map_search(&v).len(), 0);
+    }
+
+    #[test]
+    fn cycle_trend_takes_the_nearest_rank_median() {
+        // 4 samples: ceil(4*0.5)-1 = index 1.
+        let v = json!({
+            "current": {"issueCount": 4, "nodes": [
+                {"createdAt":"2026-08-19T00:00:00Z","mergedAt":"2026-08-19T01:00:00Z"},
+                {"createdAt":"2026-08-19T00:00:00Z","mergedAt":"2026-08-19T02:00:00Z"},
+                {"createdAt":"2026-08-19T00:00:00Z","mergedAt":"2026-08-19T03:00:00Z"},
+                {"createdAt":"2026-08-19T00:00:00Z","mergedAt":"2026-08-19T04:00:00Z"}
+            ]},
+            "previous": {"issueCount": 1, "nodes": [
+                {"createdAt":"2026-08-12T00:00:00Z","mergedAt":"2026-08-12T10:00:00Z"}
+            ]}
+        });
+        let t = map_cycle_trend(&v);
+        assert_eq!(t.current_hours, 2.0);
+        assert_eq!(t.previous_hours, 10.0);
+        assert_eq!(t.current_count, 4);
+        assert!(!t.sampled, "neither window hit the page cap");
+    }
+
+    /// Above 100 merges in a week, the nodes are a SAMPLE of that week --
+    /// presenting the median as the week's would be the same class of
+    /// plausible-but-wrong number this page exists to avoid.
+    #[test]
+    fn cycle_trend_flags_a_truncated_window() {
+        let v = json!({
+            "current": {"issueCount": 183, "nodes": [
+                {"createdAt":"2026-08-19T00:00:00Z","mergedAt":"2026-08-19T01:00:00Z"}
+            ]},
+            "previous": {"issueCount": 1, "nodes": [
+                {"createdAt":"2026-08-12T00:00:00Z","mergedAt":"2026-08-12T02:00:00Z"}
+            ]}
+        });
+        assert!(map_cycle_trend(&v).sampled);
+    }
+
+    #[test]
+    fn cycle_trend_survives_missing_timestamps() {
+        let v = json!({
+            "current": {"issueCount": 1, "nodes": [
+                {"createdAt":"2026-08-19T00:00:00Z","mergedAt": null}
+            ]},
+            "previous": {"issueCount": 0, "nodes": []}
+        });
+        let t = map_cycle_trend(&v);
+        assert_eq!(t.current_hours, 0.0);
+        assert_eq!(t.previous_hours, 0.0);
     }
 
     #[test]

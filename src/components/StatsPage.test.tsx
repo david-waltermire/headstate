@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { History, MergedDetail, Periods } from "@/types/pr";
 
 vi.mock("../api/hooks", () => ({
+  useCycleTrend: () => ({ data: undefined }),
   usePeriods: vi.fn(),
   useHistory: vi.fn(),
   useMergedDetail: vi.fn(),

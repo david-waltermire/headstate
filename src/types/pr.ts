@@ -113,3 +113,16 @@ export interface MergedDetail {
   slowest: MergedPr[];
   largest: MergedPr[];
 }
+
+/// Median cycle time this week against last.
+///
+/// `sampled` is true when either window held more merges than GitHub
+/// returns in one page (100), meaning the medians describe a sample of
+/// that week rather than all of it.
+export interface CycleTrend {
+  current_hours: number;
+  previous_hours: number;
+  current_count: number;
+  previous_count: number;
+  sampled: boolean;
+}

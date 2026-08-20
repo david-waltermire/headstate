@@ -3,7 +3,7 @@
 //! [`crate::poll`] emits in the background.
 
 use crate::github::client::GitHubClient;
-use crate::github::model::{History, MergedDetail, Periods, PullRequest, Stats};
+use crate::github::model::{CycleTrend, History, MergedDetail, Periods, PullRequest, Stats};
 use crate::store::{load_snapshot, open_db};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
@@ -77,6 +77,15 @@ pub async fn get_stats(client: State<'_, GhClient>) -> Result<Stats, String> {
 /// A separate command from `get_cached`/`refresh_now` so the snapshot
 /// cache keeps its shape; the underlying query returns both lists in one
 /// request, so this costs no extra rate limit.
+#[tauri::command]
+pub async fn get_cycle_trend(client: State<'_, GhClient>) -> Result<CycleTrend, String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    client
+        .fetch_cycle_trend(chrono::Utc::now())
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn get_reviewing(client: State<'_, GhClient>) -> Result<Vec<PullRequest>, String> {
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;

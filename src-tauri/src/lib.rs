@@ -61,6 +61,7 @@ pub fn run() {
             commands::get_history,
             commands::get_periods,
             commands::get_reviewing,
+            commands::get_cycle_trend,
             commands::get_merged_detail,
             commands::get_auth_state,
         ])

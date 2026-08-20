@@ -6,6 +6,7 @@ import {
   getCached,
   getHistory,
   getMergedDetail,
+  getCycleTrend,
   getPeriods,
   getReviewing,
   getStats,
@@ -194,6 +195,19 @@ export function usePollError(): string | null {
   }, []);
 
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/// Median cycle time this week against last.
+///
+/// The Stats page could prove throughput but not improvement: cycle time
+/// was a single window with no prior value, which is why its delta card
+/// was hardcoded to null. Same 5-minute staleness as the other stats.
+export function useCycleTrend() {
+  return useQuery({
+    queryKey: ["cycle-trend"],
+    queryFn: getCycleTrend,
+    staleTime: 5 * 60 * 1000,
+  });
 }
 
 /// PRs awaiting the user's review.
