@@ -88,3 +88,4 @@ describe("splash dismissal", () => {
     expect(document.getElementById("splash")).toBeNull();
   });
 });
+

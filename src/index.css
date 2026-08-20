@@ -119,6 +119,14 @@
        chart needs, matching the GitHub palette used elsewhere in the app. */
     --chart-merged: #3fb950;
     --chart-opened: #58a6ff;
+    /* The rest of the app hardcodes GitHub's palette (#0d1117 ground,
+       #161b22 raised, #30363d rules), so shadcn Cards rendered neutral
+       grey against a blue-tinted navy. Aligning the tokens lets new
+       components drop the hexes instead of adding more of them. */
+    --card: #161b22;
+    --popover: #161b22;
+    --border: #30363d;
+    --muted: #21262d;
     --sidebar: oklch(0.205 0 0);
     --sidebar-foreground: oklch(0.985 0 0);
     --sidebar-primary: oklch(0.488 0.243 264.376);

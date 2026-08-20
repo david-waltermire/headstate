@@ -40,7 +40,15 @@ export function ActivityChart({
       <div className="flex items-center justify-between">
         <div>
           <div className="text-sm font-semibold">Pull request activity</div>
-          <div className="text-xs text-[#8b949e]">Opened and merged per day</div>
+          {/* Buckets come from GitHub's bare date qualifiers, which it
+              evaluates in UTC, so a 6pm Pacific merge lands in the next
+              day's column. Aggregates are unaffected (the shift is
+              uniform); only the per-day shape moves. Disclosed rather than
+              silently wrong -- offset-qualifying the ranges is tracked
+              separately. */}
+          <div className="text-xs text-[#8b949e]">
+            Opened and merged per day (UTC)
+          </div>
         </div>
         <div className="flex gap-1">
           {RANGES.map((r) => (

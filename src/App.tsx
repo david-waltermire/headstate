@@ -17,6 +17,7 @@ import { RepoSidebar } from "./components/RepoSidebar";
 import { StatsPage } from "./components/StatsPage";
 import { applyFilters, hasActiveFilters, sortPrs } from "./lib/derive";
 import { shortcutFor } from "./lib/shortcuts";
+import { relativeTime } from "./lib/time";
 import { useFilters } from "./store/filters";
 
 /// The assembled app shell. `AuthGate` already wraps this component once in
@@ -24,7 +25,14 @@ import { useFilters } from "./store/filters";
 /// `get_auth_state` query and one `usePollError` subscription (and
 /// therefore one error banner) per window.
 export default function App() {
-  const { data: prs = [], isLoading, isError, error, refetch } = usePullRequests();
+  const {
+    data: prs = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+    dataUpdatedAt,
+  } = usePullRequests();
   const { filters, view } = useFilters();
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
@@ -99,6 +107,15 @@ export default function App() {
                 ? "Awaiting your review"
                 : "Pull requests"}
           </h1>
+          {/* Freshness. `dataUpdatedAt` rather than `isFetching`: the tray
+              path calls refreshNow + setQueryData outside the queryFn, so
+              isFetching never flips for it, but setQueryData does advance
+              this on both paths. */}
+          {dataUpdatedAt > 0 && view !== "dashboard" ? (
+            <span className="ml-3 text-xs text-[#8b949e]">
+              Updated {relativeTime(new Date(dataUpdatedAt).toISOString())}
+            </span>
+          ) : null}
           <div className="ml-auto">
             {/* scopedRepo skips the wizard's "which repositories?" step:
                 selecting a repo in the sidebar already answers it. */}

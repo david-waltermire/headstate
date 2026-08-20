@@ -51,6 +51,21 @@ pub fn open_db(path: &Path) -> Result<Connection, StoreError> {
         std::fs::create_dir_all(dir).ok();
     }
     let conn = Connection::open(path)?;
+    // WAL lets a reader proceed while a writer holds the file, and
+    // busy_timeout replaces rusqlite's effectively-zero default with a
+    // real wait. Contention is near-impossible today -- one autocommit
+    // UPSERT of one row, from a loop whose only other writer is offset by
+    // construction -- so this is cheap hardening against a future second
+    // writer, not a fix for an observed failure.
+    //
+    // Non-fatal: a read-only volume or an older SQLite should degrade to
+    // the previous behaviour rather than refuse to open the cache.
+    if let Err(e) = conn.pragma_update(None, "journal_mode", "WAL") {
+        log::warn!("could not enable WAL: {e}");
+    }
+    if let Err(e) = conn.busy_timeout(std::time::Duration::from_secs(5)) {
+        log::warn!("could not set busy_timeout: {e}");
+    }
     migrate(&conn)?;
     Ok(conn)
 }

@@ -44,6 +44,17 @@ export function AuthGate({ children }: { children: ReactNode }) {
             className="border-b border-[#f85149]/30 bg-[#f85149]/10 px-4 py-2 text-sm text-[#f85149]"
           >
             Background refresh failed: {pollError}
+            {/* The token is read once at startup and held for the process
+                lifetime, so a revoked or expired one 401s forever with the
+                list silently going stale. A relaunch is the actual fix;
+                saying so beats an opaque message the user cannot act on.
+                Refreshing the token in-process is tracked separately. */}
+            {/401|unauthorized|bad credentials/i.test(pollError) ? (
+              <span className="ml-1">
+                Your GitHub token may have expired — run <code>gh auth login</code> and
+                restart Headstate.
+              </span>
+            ) : null}
           </div>
         )}
         {children}

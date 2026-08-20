@@ -32,6 +32,14 @@ describe("ActivityChart", () => {
     expect(onDaysChange).toHaveBeenCalledWith(7);
   });
 
+  // The buckets are UTC and the label must say so: a Pacific user's
+  // evening merge lands in the next day's column, and an undisclosed
+  // off-by-one-day chart is worse than a labelled one.
+  it("discloses that days are UTC", () => {
+    render(<ActivityChart points={points} days={30} onDaysChange={() => {}} />);
+    expect(screen.getByText(/\(UTC\)/)).toBeTruthy();
+  });
+
   it("shows an empty state rather than a broken axis", () => {
     render(<ActivityChart points={[]} days={30} onDaysChange={() => {}} />);
     expect(screen.getByText(/no activity/i)).toBeTruthy();
