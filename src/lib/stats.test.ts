@@ -19,8 +19,19 @@ describe("pctChange", () => {
 
 describe("percentile", () => {
   const ten = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
-  it("takes p50", () => expect(percentile(ten, 0.5)).toBe(6));
-  it("takes p90", () => expect(percentile(ten, 0.9)).toBe(10));
+  // Nearest rank: ceil(10 * 0.5) = 5th value = 5, not the 6th.
+  it("takes p50", () => expect(percentile(ten, 0.5)).toBe(5));
+  it("takes p90", () => expect(percentile(ten, 0.9)).toBe(9));
+  // The case that made the old floor() implementation wrong in production:
+  // n*p is an integer at both call sites the Stats page uses.
+  it("does not overshoot by one rank on a round sample", () => {
+    const hundred = Array.from({ length: 100 }, (_, i) => i + 1);
+    expect(percentile(hundred, 0.5)).toBe(50);
+    expect(percentile(hundred, 0.9)).toBe(90);
+  });
+  it("clamps at p0 instead of indexing -1", () => {
+    expect(percentile(ten, 0)).toBe(1);
+  });
   // floor(n*p) can equal n; the index must be clamped.
   it("does not read past the end on a single sample", () => {
     expect(percentile([7], 0.9)).toBe(7);

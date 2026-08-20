@@ -93,15 +93,24 @@ function getSnapshot(): string | null {
   return lastPollError;
 }
 
+/// Clear the poll-error banner.
+///
+/// The banner used to clear ONLY on a `prs-updated` event, and
+/// `refresh_now` never emits one -- so a successful tray refresh left a red
+/// "Background refresh failed" banner over freshly-loaded PRs until the
+/// next background tick, up to 300s later.
+export function clearPollError(): void {
+  setLastPollError(null);
+}
+
 /// `src-tauri/src/tray.rs` emits `refresh-requested` when the user clicks
 /// "Refresh now" in the tray menu. That click has no other effect on its
 /// own -- it only fires the event -- so without a listener the menu item is
 /// silently dead: the click succeeds, the event fires, and nothing happens.
 ///
-/// Invalidating the `["prs"]` query (rather than calling `refreshNow`
-/// directly) reuses `usePullRequests`'s existing `queryFn`, so a
-/// tray-triggered refresh goes through the same cache-then-refresh_now path
-/// as the initial load instead of duplicating that logic here.
+/// It calls `refreshNow()` directly rather than invalidating the `["prs"]`
+/// query -- see the comment on the call itself for why. (This paragraph
+/// previously claimed the opposite of what the code does.)
 export function useRefreshRequested(): void {
   const qc = useQueryClient();
 
@@ -120,7 +129,22 @@ export function useRefreshRequested(): void {
       // already looking at. "Refresh now" has to mean "ask GitHub now", or
       // the user waits out the 60s/300s poll cadence while believing they
       // just refreshed.
-      void refreshNow().then((prs) => qc.setQueryData(["prs"], prs));
+      refreshNow().then(
+        (prs) => {
+          qc.setQueryData(["prs"], prs);
+          // A successful manual refresh is proof the failure is over.
+          clearPollError();
+        },
+        // Single-argument `.then` left this as an unhandled rejection in a
+        // console nobody watches: the tray menu closed and nothing changed.
+        // Routing it into the same store the poll loop uses means a failed
+        // tray refresh says so.
+        (err: unknown) => {
+          setLastPollError(
+            typeof err === "string" ? err : err instanceof Error ? err.message : "Refresh failed",
+          );
+        },
+      );
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;

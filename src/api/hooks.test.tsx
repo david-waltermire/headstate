@@ -5,7 +5,13 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { PR_FIXTURES } from "../fixtures/prs";
-import { usePollError, usePullRequests, useStats } from "./hooks";
+import {
+  clearPollError,
+  usePollError,
+  usePullRequests,
+  useRefreshRequested,
+  useStats,
+} from "./hooks";
 
 afterEach(() => {
   // Unmount every hook (which runs its `listen().then(unlisten)` cleanup)
@@ -132,6 +138,95 @@ describe("usePollError", () => {
     await waitFor(() => expect(result.current).toBe("network error"));
 
     await emit("prs-updated", PR_FIXTURES);
+    await waitFor(() => expect(result.current).toBeNull());
+  });
+});
+
+/// The tray's "Refresh now" wiring. Previously untested entirely, and it
+/// carried two bugs: a single-argument `.then` that swallowed rejections,
+/// and a banner that could only be cleared by an event `refresh_now` never
+/// emits.
+describe("useRefreshRequested", () => {
+  it("fetches from GitHub and publishes the result on refresh-requested", async () => {
+    const calls: string[] = [];
+    mockIPC((cmd) => {
+      calls.push(cmd);
+      if (cmd === "get_cached") return PR_FIXTURES;
+      if (cmd === "refresh_now") return [PR_FIXTURES[0]];
+      return undefined;
+    }, { shouldMockEvents: true });
+
+    const wrapper = makeWrapper();
+    const { result } = renderHook(
+      () => {
+        useRefreshRequested();
+        return usePullRequests();
+      },
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.data).toBeDefined());
+
+    await emit("refresh-requested", null);
+    // It must ask GitHub, not just re-read the snapshot -- the poll loop
+    // keeps that snapshot non-empty, so an invalidate would be a no-op.
+    await waitFor(() => expect(calls).toContain("refresh_now"));
+    await waitFor(() => expect(result.current.data).toHaveLength(1));
+  });
+
+  it("surfaces a failed tray refresh instead of swallowing it", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_cached") return PR_FIXTURES;
+      if (cmd === "refresh_now") throw new Error("rate limit exceeded");
+      return undefined;
+    }, { shouldMockEvents: true });
+
+    const wrapper = makeWrapper();
+    const { result } = renderHook(
+      () => {
+        useRefreshRequested();
+        return usePollError();
+      },
+      { wrapper },
+    );
+
+    await emit("refresh-requested", null);
+    await waitFor(() => expect(result.current).toMatch(/rate limit exceeded/));
+  });
+
+  it("clears a stale error banner once a refresh succeeds", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "get_cached") return PR_FIXTURES;
+      if (cmd === "refresh_now") return [PR_FIXTURES[0]];
+      return undefined;
+    }, { shouldMockEvents: true });
+
+    const wrapper = makeWrapper();
+    const { result } = renderHook(
+      () => {
+        useRefreshRequested();
+        return usePollError();
+      },
+      { wrapper },
+    );
+
+    // A background poll failed a moment ago.
+    await emit("poll-error", "network unreachable");
+    await waitFor(() => expect(result.current).toBe("network unreachable"));
+
+    // The user clicks "Refresh now" and it works. `refresh_now` never emits
+    // `prs-updated`, so before the fix the banner stayed up to 300s.
+    await emit("refresh-requested", null);
+    await waitFor(() => expect(result.current).toBeNull());
+  });
+});
+
+describe("clearPollError", () => {
+  it("resets the banner state", async () => {
+    mockIPC(() => undefined, { shouldMockEvents: true });
+    const { result } = renderHook(() => usePollError(), { wrapper: makeWrapper() });
+    await emit("poll-error", "boom");
+    await waitFor(() => expect(result.current).toBe("boom"));
+    clearPollError();
     await waitFor(() => expect(result.current).toBeNull());
   });
 });

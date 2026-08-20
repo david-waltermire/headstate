@@ -16,10 +16,11 @@ const detail: MergedDetail = {
 };
 
 describe("InsightCards", () => {
-  // Nearest-rank on 4 samples: p50 -> index 2 (2.0), p90 -> index 3 (4.0).
+  // True nearest-rank on 4 samples: p50 -> ceil(4*.5)-1 = index 1 (1.0),
+  // p90 -> ceil(4*.9)-1 = index 3 (4.0).
   it("shows median and p90 cycle time", () => {
     render(<InsightCards detail={detail} />);
-    expect(screen.getByText("2.0h")).toBeTruthy();
+    expect(screen.getByText("1.0h")).toBeTruthy();
     expect(screen.getByText(/p90 4\.0h/)).toBeTruthy();
   });
 
@@ -32,7 +33,7 @@ describe("InsightCards", () => {
   // PRs), so the third card reports size, which has real spread.
   it("shows median PR size with p90 and comments in the hint", () => {
     render(<InsightCards detail={detail} />);
-    expect(screen.getByText("324")).toBeTruthy(); // p50 of pr_sizes
+    expect(screen.getByText("120")).toBeTruthy(); // nearest-rank p50
     expect(screen.getByText(/p90 900/)).toBeTruthy();
     expect(screen.getByText(/1\.2 comments\/PR/)).toBeTruthy();
   });

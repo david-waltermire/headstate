@@ -27,6 +27,9 @@ pub enum ClientError {
     /// something generic the user cannot act on.
     #[error("GitHub request timed out after {0}s")]
     Timeout(u64),
+    /// The response carried GraphQL errors and no usable data.
+    #[error("GitHub GraphQL error: {0}")]
+    Graphql(String),
 }
 
 pub struct GitHubClient {
@@ -38,15 +41,36 @@ impl GitHubClient {
         Self { octocrab }
     }
 
+    /// Run a GraphQL document, keeping `data` on a PARTIAL success.
+    ///
+    /// `Octocrab::graphql` deserializes into `GraphqlResponse`, an untagged
+    /// enum whose `Err` variant is declared FIRST -- so a 200 carrying both
+    /// `data` and a non-empty `errors` array matches `Err` and the usable
+    /// `data` is dropped, even though octocrab's own field doc says
+    /// "GraphQL returns `data` even in the case of a partial success."
+    ///
+    /// GitHub returns exactly that when one repository's resolver fails:
+    /// every other PR node is present and good. Discarding them meant one
+    /// bad repo blanked the whole list and skipped the snapshot write --
+    /// defeating `map_search`'s own "one malformed PR should not blank the
+    /// list" rule one layer above where it was enforced.
+    ///
+    /// Errors are only fatal when NO data came back at all.
+    async fn graphql_partial_ok(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        graphql_partial_ok(&self.octocrab, body).await
+    }
+
     /// Every open PR authored by the viewer, with CI, mergeability, review
     /// decision, and merge-queue state.
     ///
     /// Octocrab unwraps the GraphQL `data` envelope, so the value returned
     /// here has `search` at its top level rather than under `data`.
     pub async fn fetch_prs(&self) -> Result<Vec<PullRequest>, ClientError> {
-        let v: serde_json::Value = self
-            .octocrab
-            .graphql(&json!({
+        let v = self
+            .graphql_partial_ok(&json!({
                 "query": PRS_QUERY,
                 "variables": { "q": "is:pr is:open author:@me" }
             }))
@@ -59,9 +83,8 @@ impl GitHubClient {
     pub async fn fetch_stats(&self, now: DateTime<Utc>) -> Result<Stats, ClientError> {
         let week = (now - Duration::days(7)).format("%Y-%m-%d").to_string();
         let month = (now - Duration::days(30)).format("%Y-%m-%d").to_string();
-        let v: serde_json::Value = self
-            .octocrab
-            .graphql(&json!({
+        let v = self
+            .graphql_partial_ok(&json!({
                 "query": STATS_QUERY,
                 "variables": {
                     "week": format!("is:pr author:@me is:merged merged:>={week}"),
@@ -101,10 +124,7 @@ impl GitHubClient {
                 history_query_range(now, start, len)
             };
             let oc = self.octocrab.clone();
-            set.spawn(async move {
-                oc.graphql::<serde_json::Value>(&json!({ "query": q }))
-                    .await
-            });
+            set.spawn(async move { graphql_partial_ok(&oc, &json!({ "query": q })).await });
             start += len;
         }
 
@@ -127,9 +147,8 @@ impl GitHubClient {
     /// Just the period comparisons -- one small request so the delta cards
     /// can render without waiting on the daily series.
     pub async fn fetch_periods(&self, now: DateTime<Utc>) -> Result<Periods, ClientError> {
-        let v: serde_json::Value = self
-            .octocrab
-            .graphql(&json!({ "query": periods_query(now) }))
+        let v = self
+            .graphql_partial_ok(&json!({ "query": periods_query(now) }))
             .await?;
         let count = |k: &str| v[k]["issueCount"].as_u64().unwrap_or(0);
         Ok(Periods {
@@ -166,11 +185,42 @@ impl GitHubClient {
 
     /// A sample of the most recent merged PRs, for the insight cards.
     pub async fn fetch_merged_detail(&self) -> Result<MergedDetail, ClientError> {
-        let v: serde_json::Value = self
-            .octocrab
-            .graphql(&json!({ "query": MERGED_DETAIL_QUERY }))
+        let v = self
+            .graphql_partial_ok(&json!({ "query": MERGED_DETAIL_QUERY }))
             .await?;
         Ok(map_merged_detail(&v))
+    }
+}
+
+/// See `GitHubClient::graphql_partial_ok`. A free function so the
+/// concurrent history chunks, which own a cloned `Octocrab` inside a
+/// spawned task, get the same partial-success handling.
+async fn graphql_partial_ok(
+    octocrab: &Octocrab,
+    body: &serde_json::Value,
+) -> Result<serde_json::Value, ClientError> {
+    let raw: serde_json::Value = octocrab.post("/graphql", Some(body)).await?;
+
+    let errors = raw.get("errors").and_then(|e| e.as_array());
+    let data = raw.get("data").filter(|d| !d.is_null());
+
+    match (data, errors) {
+        (Some(d), _) => Ok(d.clone()),
+        (None, Some(errs)) if !errs.is_empty() => {
+            let msg = errs
+                .iter()
+                .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                .collect::<Vec<_>>()
+                .join("; ");
+            Err(ClientError::Graphql(if msg.is_empty() {
+                "GraphQL request failed".to_string()
+            } else {
+                msg
+            }))
+        }
+        (None, _) => Err(ClientError::Graphql(
+            "GraphQL response contained no data".to_string(),
+        )),
     }
 }
 
@@ -258,6 +308,55 @@ mod tests {
             .fetch_stats(Utc::now())
             .await
             .is_err());
+    }
+
+    /// The bug this replaced: octocrab's `GraphqlResponse` is untagged
+    /// with `Err` first, so a 200 carrying BOTH `data` and `errors`
+    /// deserialized as an error and threw away every good node. GitHub
+    /// sends exactly that when one repo's resolver fails.
+    #[tokio::test]
+    async fn a_partial_success_keeps_the_good_nodes() {
+        let server = MockServer::start().await;
+        // The same three-PR fixture the clean-success test uses; the only
+        // difference is the `errors` array riding alongside it.
+        let body: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/search.json")).unwrap();
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": body,
+                "errors": [{
+                    "type": "SERVICE_UNAVAILABLE",
+                    "message": "Something went wrong while executing your query."
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let prs = client_for(&server).await.fetch_prs().await.unwrap();
+        assert_eq!(prs.len(), 3, "a partial success must not blank the list");
+        assert_eq!(prs[0].number, 42);
+    }
+
+    /// Errors are still fatal when nothing usable came back, and the
+    /// message reaches the banner rather than being swallowed.
+    #[tokio::test]
+    async fn errors_without_data_are_still_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": null,
+                "errors": [{ "message": "API rate limit exceeded" }]
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server).await.fetch_prs().await.unwrap_err();
+        assert!(
+            err.to_string().contains("API rate limit exceeded"),
+            "message must reach the user: {err}"
+        );
     }
 
     #[tokio::test]

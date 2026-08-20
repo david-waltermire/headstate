@@ -21,5 +21,10 @@ export const useFilters = create<FilterStore>((set) => ({
   // shows a count that doesn't match the list.
   applyPreset: (filters) => set({ filters, view: "list" }),
   setView: (view) => set({ view }),
-  reset: () => set({ filters: {} }),
+  // `repo` is sidebar NAVIGATION, not a filter chip -- it decides which
+  // page you are on, scopes the priorities strip, and pre-answers the
+  // wizard's repo step. Clearing it here navigated the user off the repo
+  // they were looking at, which is not what "Clear filters" says it does.
+  reset: () =>
+    set((s) => ({ filters: s.filters.repo ? { repo: s.filters.repo } : {} })),
 }));

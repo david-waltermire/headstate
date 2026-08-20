@@ -11,12 +11,18 @@ export function pctChange(current: number, previous: number): number | null {
 
 /// Nearest-rank percentile over an ALREADY SORTED ascending array.
 ///
-/// `Math.floor(n * p)` can equal `n` (n=10, p=1.0 -> 10 is out of bounds),
-/// so the index is clamped to the last element.
+/// Nearest rank is `ceil(n * p)` in 1-based terms, so `ceil(n*p) - 1`
+/// zero-indexed. `floor(n*p)` -- what this used to do -- agrees only when
+/// `n*p` is NOT an integer, and it is an integer at exactly the two call
+/// sites the UI exercises: p50 and p90 over a 100-PR sample. That returned
+/// the 51st and 91st values where the 50th and 90th are correct.
+///
+/// Both ends are clamped: `p = 1.0` would index `n`, and `p = 0` would
+/// index `-1`.
 export function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
-  const idx = Math.floor(sorted.length * p);
-  return sorted[Math.min(idx, sorted.length - 1)];
+  const idx = Math.ceil(sorted.length * p) - 1;
+  return sorted[Math.min(Math.max(idx, 0), sorted.length - 1)];
 }
 
 export function formatPct(v: number | null): string {
