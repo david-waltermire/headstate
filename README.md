@@ -55,6 +55,22 @@ download, so a copy you build yourself with `make build` never has it and
 runs without this step. Releases are universal binaries — one download
 works on both Apple Silicon and Intel.
 
+### If Headstate says it cannot find `gh`
+
+A GUI application does not inherit your shell's `PATH` — on a clean Mac it
+gets `/usr/bin:/bin:/usr/sbin:/sbin`, which excludes Homebrew. Headstate
+therefore also looks in `/opt/homebrew/bin`, `/usr/local/bin`, and
+`/opt/local/bin`, which covers Homebrew on Apple Silicon and Intel plus
+MacPorts.
+
+If `gh` lives somewhere else, point Headstate at it directly:
+
+```
+launchctl setenv HEADSTATE_GH /full/path/to/gh
+```
+
+then relaunch the app. `which gh` in your terminal prints the path to use.
+
 ## What it shows
 
 **Pull request list.** Every open PR you authored, across every repo you

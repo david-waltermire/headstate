@@ -24,10 +24,32 @@ const MIN_VISIBLE_MS = 3000;
 
 const loadedAt = Date.now();
 
+/// Hard ceiling on how long the splash may EVER stay up.
+///
+/// The v1.0.0 hang was not a slow launch: `AuthGate` renders its error
+/// screen without mounting `App`, so the dismissal effect never ran and a
+/// fixed, inset-0, z-index-9999 overlay hid a perfectly good error message
+/// forever. Callers are now correct, but a splash that can outlive every
+/// code path is a trap, so it also removes itself unconditionally.
+const MAX_VISIBLE_MS = 10_000;
+
 /// Milliseconds still owed to the floor, never negative.
 function remainingFloor(now: number, minVisibleMs: number): number {
   return Math.max(0, minVisibleMs - (now - loadedAt));
 }
+
+/// Arm the unconditional failsafe. Called once at module load, so it holds
+/// even if no caller ever reaches `dismissSplash`.
+function armFailsafe(): void {
+  if (typeof document === "undefined") return;
+  setTimeout(() => {
+    const el = document.getElementById(SPLASH_ID);
+    // Only acts if something else has not already dismissed it.
+    if (el) dismissSplash(document, FADE_MS, 0);
+  }, MAX_VISIBLE_MS);
+}
+
+armFailsafe();
 
 export function dismissSplash(
   doc: Document = document,

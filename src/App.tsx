@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { usePullRequests, useRefreshRequested } from "./api/hooks";
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
@@ -7,7 +6,6 @@ import { PrList } from "./components/PrList";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { StatsPage } from "./components/StatsPage";
 import { applyFilters, sortPrs } from "./lib/derive";
-import { dismissSplash } from "./splash";
 import { useFilters } from "./store/filters";
 
 /// The assembled app shell. `AuthGate` already wraps this component once in
@@ -15,21 +13,17 @@ import { useFilters } from "./store/filters";
 /// `get_auth_state` query and one `usePollError` subscription (and
 /// therefore one error banner) per window.
 export default function App() {
-  const { data: prs = [], isSuccess, isLoading } = usePullRequests();
+  const { data: prs = [], isLoading } = usePullRequests();
   const { filters, view } = useFilters();
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
   // is what actually makes it do anything (see the hook's own comment).
   useRefreshRequested();
 
-  // Splash dismissal is app-driven: it lifts on the first successful render
-  // of real data, not on a timer that would guess wrong on either a slow or
-  // a fast machine. `dismissSplash` additionally floors how long the splash
-  // stays up (see splash.ts) -- fire-and-forget, so nothing here waits on
-  // it and no query is delayed by it.
-  useEffect(() => {
-    if (isSuccess) dismissSplash();
-  }, [isSuccess]);
+  // Splash dismissal deliberately does NOT live here. `App` only mounts
+  // when auth succeeds, so dismissing on `isSuccess` left every
+  // unauthenticated machine showing the splash forever -- see AuthGate,
+  // which owns it now and lifts it on any settled auth result.
 
   // Sorting was moved out of PrList in M3 -- it renders exactly the order
   // it's handed, so the sort dropdown in FilterBar is inert unless this

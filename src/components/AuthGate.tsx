@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { usePollError } from "../api/hooks";
 import { getAuthState } from "../api/tauri";
+import { dismissSplash } from "../splash";
 
 /// Gates the whole app on `get_auth_state`. Rust computes auth once at
 /// startup from the `gh` CLI token, so this is a one-shot check, not a
@@ -19,6 +20,19 @@ export function AuthGate({ children }: { children: ReactNode }) {
     staleTime: Infinity,
   });
   const pollError = usePollError();
+
+  // Dismissal belongs HERE, not in `App`, and keys off the auth check
+  // having SETTLED rather than succeeded.
+  //
+  // `App` only mounts when auth is ok, so dismissing there left an
+  // unauthenticated machine showing the splash forever -- with the "needs
+  // the GitHub CLI" screen rendered correctly underneath a fixed,
+  // inset-0, z-index-9999 overlay that hides it. Anything that leaves the
+  // app on a non-App branch must still uncover the window; the only state
+  // that should hold the splash is "we do not know yet".
+  useEffect(() => {
+    if (!isLoading) dismissSplash();
+  }, [isLoading]);
 
   if (isLoading) return null;
   if (data?.ok) {
