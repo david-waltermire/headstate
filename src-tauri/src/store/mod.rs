@@ -45,6 +45,8 @@ mod tests {
             title: "Add retry to the fetch client".into(),
             url: "https://github.com/octocat/hello-world/pull/42".into(),
             repo: "octocat/hello-world".into(),
+            head_ref: "feature/x".into(),
+            base_ref: "main".into(),
             author: "octocat".into(),
             is_draft: false,
             created_at: Utc::now(),

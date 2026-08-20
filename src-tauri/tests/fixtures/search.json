@@ -37,7 +37,9 @@
               }
             }
           ]
-        }
+        },
+        "headRefName": "feature/retry-client",
+        "baseRefName": "main"
       },
       {
         "number": 43,
@@ -74,7 +76,9 @@
               }
             }
           ]
-        }
+        },
+        "headRefName": "fix/flaky-test",
+        "baseRefName": "main"
       },
       {
         "number": 7,
@@ -104,7 +108,9 @@
               }
             }
           ]
-        }
+        },
+        "headRefName": "stack/part-2",
+        "baseRefName": "stack/part-1"
       }
     ]
   },

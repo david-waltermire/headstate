@@ -87,6 +87,11 @@ approvals, and new reviews deliberately do not notify: an interruption
 should mean something needs your hands, and the tray badge already carries
 the rest passively.
 
+**Branch pairs.** Each row shows what merges into what
+(`ci_fix_2 → main`). A target that is not the default branch is tinted:
+that pull request is stacked on another one and cannot merge until its
+base does, which nothing else in the row would tell you.
+
 **Priorities strip.** Pinned above the list: PRs blocked on *you* and
 nobody else — real merge conflicts or failing CI — so the thing you need to
 fix first doesn't get lost in a longer list. Quiet when nothing is blocked.

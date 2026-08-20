@@ -69,3 +69,61 @@ describe("PrRow", () => {
     expect(screen.queryByText("0")).toBeNull();
   });
 });
+
+describe("PrRow branch pair", () => {
+  it("shows source and target for every PR", () => {
+    render(<PrRow pr={pr({ head_ref: "ci_fix_2", base_ref: "main" })} />);
+    expect(screen.getByText("ci_fix_2")).toBeTruthy();
+    expect(screen.getByText("main")).toBeTruthy();
+    expect(screen.getByText("→")).toBeTruthy();
+  });
+
+  // A stacked PR cannot merge until its base does, and nothing else in
+  // the row says so.
+  it("tints the target when it is not the default branch", () => {
+    const { container } = render(
+      <PrRow pr={pr({ head_ref: "ci_fix_2", base_ref: "ci_fix_1" })} />,
+    );
+    const target = Array.from(container.querySelectorAll("span")).find(
+      (s) => s.textContent === "ci_fix_1",
+    );
+    expect(target?.className).toContain("#a371f7");
+  });
+
+  it("does not tint a PR targeting main or master", () => {
+    for (const base of ["main", "master"]) {
+      const { container, unmount } = render(
+        <PrRow pr={pr({ head_ref: "feature/x", base_ref: base })} />,
+      );
+      const target = Array.from(container.querySelectorAll("span")).find(
+        (s) => s.textContent === base,
+      );
+      expect(target?.className).not.toContain("#a371f7");
+      unmount();
+    }
+  });
+
+  // The mapper defaults these to "" when GitHub omits them; a row must
+  // not render a bare arrow.
+  it("renders nothing when the refs are missing", () => {
+    render(<PrRow pr={pr({ head_ref: "", base_ref: "" })} />);
+    expect(screen.queryByText("→")).toBeNull();
+  });
+});
+
+describe("PrRow no-CI state", () => {
+  // Normal for a stacked PR: most repos only run CI against the default
+  // branch. Previously identical to "checks have not reported yet".
+  it("distinguishes 'no CI ran' from every other CI state", () => {
+    render(<PrRow pr={pr({ ci: "none" })} />);
+    expect(screen.getByLabelText("No CI ran")).toBeTruthy();
+  });
+
+  it("does not show the no-CI glyph when CI actually ran", () => {
+    for (const ci of ["success", "failure", "pending"] as const) {
+      const { unmount } = render(<PrRow pr={pr({ ci })} />);
+      expect(screen.queryByLabelText("No CI ran")).toBeNull();
+      unmount();
+    }
+  });
+});

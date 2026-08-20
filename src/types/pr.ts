@@ -21,6 +21,9 @@ export interface PullRequest {
   repo: string;
   author: string;
   is_draft: boolean;
+  /// The branch being merged, and the branch it merges into.
+  head_ref: string;
+  base_ref: string;
   created_at: string;
   updated_at: string;
   ci: CiState;

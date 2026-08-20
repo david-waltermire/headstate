@@ -69,6 +69,8 @@ fn map_node(node: &Value) -> Option<PullRequest> {
             .unwrap_or("unknown")
             .to_string(),
         is_draft: node["isDraft"].as_bool().unwrap_or(false),
+        head_ref: node["headRefName"].as_str().unwrap_or_default().to_string(),
+        base_ref: node["baseRefName"].as_str().unwrap_or_default().to_string(),
         created_at: ts(node, "createdAt")?,
         updated_at: ts(node, "updatedAt")?,
         ci: ci_state(node),
@@ -309,6 +311,38 @@ mod tests {
 
     /// GitHub computes mergeability lazily and returns UNKNOWN right after a
     /// push. Mapping that to Conflicted would show a false "needs rebase".
+    /// Branch refs ride along in the existing query at no extra cost, and
+    /// distinguish a stacked PR -- which cannot merge until its base does
+    /// -- from one targeting the default branch.
+    #[test]
+    fn maps_the_branch_pair() {
+        let prs = map_search(&fixture());
+        assert_eq!(prs[0].head_ref, "feature/retry-client");
+        assert_eq!(prs[0].base_ref, "main");
+        // The stacked one: base is another feature branch.
+        let stacked = prs.iter().find(|p| p.number == 7).unwrap();
+        assert_eq!(stacked.head_ref, "stack/part-2");
+        assert_eq!(stacked.base_ref, "stack/part-1");
+    }
+
+    /// A node missing the fields must not panic -- the mapper's rule is
+    /// that one malformed PR never blanks the list.
+    #[test]
+    fn missing_branch_refs_map_to_empty_strings() {
+        let v = json!({"authored": {"nodes": [{
+            "number": 1, "title": "t", "url": "u", "isDraft": false,
+            "createdAt": "2026-08-20T00:00:00Z", "updatedAt": "2026-08-20T00:00:00Z",
+            "author": {"login": "a"}, "repository": {"nameWithOwner": "acme/a"},
+            "mergeable": "MERGEABLE", "reviewDecision": null,
+            "isInMergeQueue": false, "totalCommentsCount": 0,
+            "labels": {"nodes": []}, "commits": {"nodes": []}
+        }]}});
+        let prs = map_search(&v);
+        assert_eq!(prs.len(), 1);
+        assert_eq!(prs[0].head_ref, "");
+        assert_eq!(prs[0].base_ref, "");
+    }
+
     #[test]
     fn unknown_mergeable_maps_to_checking_never_conflicted() {
         let pr = map_search(&fixture())

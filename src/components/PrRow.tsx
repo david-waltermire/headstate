@@ -1,4 +1,11 @@
-import { Check, CircleDot, GitPullRequest, MessageSquare, X } from "lucide-react";
+import {
+  Check,
+  CircleDot,
+  CircleSlash,
+  GitPullRequest,
+  MessageSquare,
+  X,
+} from "lucide-react";
 import type { PullRequest } from "@/types/pr";
 import { labelForeground } from "@/lib/labels";
 import { relativeTime } from "@/lib/time";
@@ -23,7 +30,36 @@ function CiGlyph({ pr }: { pr: PullRequest }) {
       <CircleDot className="h-4 w-4 shrink-0 text-[#d29922]" aria-label="CI running" />
     );
   }
-  return null;
+  // `none` means the rollup came back null: no checks ran for this PR at
+  // all. That is NORMAL for a PR stacked on another branch -- most repos
+  // only run CI against the default branch -- so it is drawn muted, not
+  // as a warning. Rendering nothing made "no CI configured" identical to
+  // "checks have not reported yet", which is the same ambiguity #93 fixed
+  // for `pending`.
+  return (
+    <CircleSlash className="h-4 w-4 shrink-0 text-[#6e7681]" aria-label="No CI ran" />
+  );
+}
+
+/// `head → base` for every PR.
+///
+/// Always the full pair, so the row reads the same way whatever it
+/// targets. A PR whose base is NOT the default branch is stacked on
+/// another PR -- it cannot merge until its base does -- so the target is
+/// tinted to make that visible without changing the layout.
+///
+/// GitHub itself puts this in the PR header rather than the list row, so
+/// it stays on the muted metadata line rather than becoming a chip.
+function BranchPair({ pr }: { pr: PullRequest }) {
+  if (!pr.head_ref || !pr.base_ref) return null;
+  const stacked = pr.base_ref !== "main" && pr.base_ref !== "master";
+  return (
+    <span className="ml-2" title={`Merges ${pr.head_ref} into ${pr.base_ref}`}>
+      • <span className="font-mono">{pr.head_ref}</span>
+      <span className="mx-1">→</span>
+      <span className={`font-mono ${stacked ? "text-[#a371f7]" : ""}`}>{pr.base_ref}</span>
+    </span>
+  );
 }
 
 /// Review outcome, when GitHub has one.
@@ -104,6 +140,7 @@ export function PrRow({ pr }: { pr: PullRequest }) {
             <span className="ml-2 text-[#f85149]">• Conflicts</span>
           )}
           {pr.merge === "checking" && <span className="ml-2">• Checking mergeability</span>}
+          <BranchPair pr={pr} />
           {pr.comment_count > 0 && (
             <span className="ml-2 inline-flex items-center gap-1">
               <MessageSquare className="h-3 w-3" aria-hidden="true" />

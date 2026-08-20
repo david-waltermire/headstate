@@ -599,6 +599,22 @@ mod tests {
         let t0 = std::time::Instant::now();
         let (authored, reviewing) = c.fetch_prs_and_reviewing().await.unwrap();
         println!("AUTHORED={} REVIEWING={}", authored.len(), reviewing.len());
+        let stacked: Vec<_> = authored
+            .iter()
+            .filter(|p| p.base_ref != "main" && p.base_ref != "master")
+            .collect();
+        let no_ci = authored
+            .iter()
+            .filter(|p| p.ci == crate::github::model::CiState::None)
+            .count();
+        println!("STACKED={} NO_CI={}", stacked.len(), no_ci);
+        if let Some(p) = stacked.first() {
+            println!("  e.g. {} -> {}", p.head_ref, p.base_ref);
+        }
+        assert!(
+            authored.iter().all(|p| !p.base_ref.is_empty()),
+            "base_ref must be populated"
+        );
         assert!(!authored.is_empty());
 
         let t = c.fetch_cycle_trend(Utc::now()).await.unwrap();

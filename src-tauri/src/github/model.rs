@@ -48,6 +48,13 @@ pub struct PullRequest {
     pub repo: String,
     pub author: String,
     pub is_draft: bool,
+    /// The branch being merged, and the branch it merges into.
+    ///
+    /// Carried for the list row: a PR stacked on another branch cannot
+    /// merge until its base does, and is otherwise indistinguishable from
+    /// one targeting the default branch.
+    pub head_ref: String,
+    pub base_ref: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub ci: CiState,
@@ -171,6 +178,8 @@ mod attention_tests {
             repo: "acme/repo".into(),
             author: "a".into(),
             is_draft: false,
+            head_ref: "feature/x".into(),
+            base_ref: "main".into(),
             created_at: t,
             updated_at: t,
             ci,
