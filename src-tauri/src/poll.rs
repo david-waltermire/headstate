@@ -335,13 +335,30 @@ mod tests {
         assert_eq!(interval_for(false), std::time::Duration::from_secs(300));
     }
 
-    /// 60s focused is 60 polls/hour at 2 points each, against a 5000/hour
-    /// budget. If this ever regresses to a few seconds, the app would start
-    /// competing with the user's own gh usage for rate limit.
+    /// Budget guard for BOTH cadences, with the per-poll cost derived from
+    /// the query rather than hardcoded.
+    ///
+    /// The previous version tested only the focused cadence and could not
+    /// fail unless `polls_faster_when_focused` already had -- both read the
+    /// same `interval_for(true)`, which that test pins exactly. Its `* 2`
+    /// was also a literal unconnected to what PRS_QUERY actually costs, so
+    /// adding a search alias would silently double the real spend while the
+    /// assertion kept passing.
     #[test]
-    fn focused_cadence_stays_well_inside_the_rate_limit() {
-        let per_hour = 3600 / interval_for(true).as_secs();
-        assert!(per_hour * 2 < 500, "polling budget too aggressive");
+    fn both_cadences_stay_well_inside_the_rate_limit() {
+        // GraphQL bills one point per `search` in the document.
+        let cost = crate::github::query::PRS_QUERY.matches("search(").count() as u64;
+        assert!(cost > 0, "PRS_QUERY must contain at least one search");
+
+        for focused in [true, false] {
+            let per_hour = 3600 / interval_for(focused).as_secs();
+            let points = per_hour * cost;
+            assert!(
+                points < 500,
+                "{} polling would spend {points}/hr of a 5000 budget",
+                if focused { "focused" } else { "background" }
+            );
+        }
     }
 
     /// #22's recheck delay is a single one-shot query, not a recurring

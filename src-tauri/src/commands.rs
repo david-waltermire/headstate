@@ -24,6 +24,22 @@ pub struct AuthState {
 /// would otherwise return if the client type were unmanaged entirely.
 pub struct GhClient(pub Option<Arc<GitHubClient>>);
 
+/// Shown verbatim when no client exists. Duplicated across five commands
+/// before this; a const means the five cannot drift apart.
+pub const AUTH_ERR: &str = "not authenticated: run `gh auth login`";
+
+/// Bound the history window.
+///
+/// The UI only offers 7/14/30, but a Tauri command is a public surface: an
+/// unbounded value builds an arbitrarily large query and, since the fetch
+/// chunks by day, spawns roughly `days / HISTORY_CHUNK_DAYS` concurrent
+/// requests. Extracted from `get_history` so it can be tested -- deleting
+/// the clamp there left all frontend and Rust tests passing while
+/// `get_history(10000)` spawned ~2000 chunks.
+pub fn clamp_days(days: i64) -> i64 {
+    days.clamp(1, 90)
+}
+
 fn db_path(app: &AppHandle) -> std::path::PathBuf {
     app.path()
         .app_data_dir()
@@ -43,19 +59,13 @@ pub fn get_cached(app: AppHandle) -> Result<Vec<PullRequest>, String> {
 /// Does not touch the poll loop's cadence or its cached snapshot on disk.
 #[tauri::command]
 pub async fn refresh_now(client: State<'_, GhClient>) -> Result<Vec<PullRequest>, String> {
-    let client = client
-        .0
-        .clone()
-        .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
     client.fetch_prs().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn get_stats(client: State<'_, GhClient>) -> Result<Stats, String> {
-    let client = client
-        .0
-        .clone()
-        .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
     client
         .fetch_stats(chrono::Utc::now())
         .await
@@ -64,10 +74,7 @@ pub async fn get_stats(client: State<'_, GhClient>) -> Result<Stats, String> {
 
 #[tauri::command]
 pub async fn get_periods(client: State<'_, GhClient>) -> Result<Periods, String> {
-    let client = client
-        .0
-        .clone()
-        .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
     client
         .fetch_periods(chrono::Utc::now())
         .await
@@ -76,13 +83,8 @@ pub async fn get_periods(client: State<'_, GhClient>) -> Result<Periods, String>
 
 #[tauri::command]
 pub async fn get_history(client: State<'_, GhClient>, days: i64) -> Result<History, String> {
-    let client = client
-        .0
-        .clone()
-        .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
-    // Clamp: the UI offers 7/14/30, but a command is a public surface and
-    // an unbounded value would build an arbitrarily large query.
-    let days = days.clamp(1, 90);
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    let days = clamp_days(days);
     client
         .fetch_history(chrono::Utc::now(), days)
         .await
@@ -91,10 +93,7 @@ pub async fn get_history(client: State<'_, GhClient>, days: i64) -> Result<Histo
 
 #[tauri::command]
 pub async fn get_merged_detail(client: State<'_, GhClient>) -> Result<MergedDetail, String> {
-    let client = client
-        .0
-        .clone()
-        .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
     client
         .fetch_merged_detail()
         .await
@@ -107,4 +106,34 @@ pub async fn get_merged_detail(client: State<'_, GhClient>) -> Result<MergedDeta
 #[tauri::command]
 pub fn get_auth_state(state: State<'_, AuthState>) -> AuthState {
     state.inner().clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard against an unbounded query. Its absence is invisible to
+    /// every other test in the project.
+    #[test]
+    fn clamp_days_bounds_the_window() {
+        assert_eq!(clamp_days(30), 30, "a normal request passes through");
+        assert_eq!(clamp_days(7), 7);
+        assert_eq!(clamp_days(90), 90, "the documented maximum is allowed");
+        assert_eq!(clamp_days(10_000), 90, "an absurd request is capped");
+        assert_eq!(clamp_days(0), 1, "zero would produce an empty query");
+        assert_eq!(clamp_days(-5), 1, "negative would loop backwards");
+    }
+
+    /// At the cap, the chunked fetch stays to a sane number of concurrent
+    /// requests -- the actual reason the clamp exists.
+    #[test]
+    fn the_cap_bounds_concurrent_chunks() {
+        let chunks = clamp_days(10_000) / crate::github::query::HISTORY_CHUNK_DAYS;
+        assert!(chunks <= 18, "at most 18 concurrent chunks, got {chunks}");
+    }
+
+    #[test]
+    fn auth_error_names_the_command_that_fixes_it() {
+        assert!(AUTH_ERR.contains("gh auth login"));
+    }
 }

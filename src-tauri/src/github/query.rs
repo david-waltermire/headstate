@@ -252,6 +252,26 @@ mod tests {
 
     // The combined query must stay valid GraphQL: exactly one top-level
     // brace pair, with the period aliases INSIDE it.
+    /// The README states the chunk size in prose. It drifted once already
+    /// -- it claimed 15 days and three points after HISTORY_CHUNK_DAYS
+    /// became 5 and the cost became 8 -- so the doc is pinned to the
+    /// constant rather than trusted to be updated by hand.
+    #[test]
+    fn the_readme_matches_the_chunk_constant() {
+        let readme = include_str!("../../../README.md");
+        let spelled = match HISTORY_CHUNK_DAYS {
+            5 => "five",
+            7 => "seven",
+            10 => "ten",
+            15 => "fifteen",
+            n => panic!("add a spelling for {n} days"),
+        };
+        assert!(
+            readme.contains(&format!("chunks of {spelled} days")),
+            "README does not describe {HISTORY_CHUNK_DAYS}-day chunks"
+        );
+    }
+
     // GitHub 502s on too many concurrent search aliases, intermittently
     // from ~44, and latency scales with alias count besides. A chunk must
     // stay well under that ceiling at whatever HISTORY_CHUNK_DAYS is set to.

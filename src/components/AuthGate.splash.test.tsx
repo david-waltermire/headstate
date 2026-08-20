@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /// Regression tests for the v1.0.0 launch hang: the app showed the splash
 /// forever on a machine where `gh` was not found.
@@ -28,6 +28,7 @@ vi.mock("../api/hooks", async (orig) => ({
 }));
 
 import { AuthGate } from "./AuthGate";
+import { initSplash } from "../splash";
 
 function renderGate() {
   const splash = document.createElement("div");
@@ -46,6 +47,15 @@ function renderGate() {
 describe("splash dismissal", () => {
   beforeEach(() => {
     document.getElementById("splash")?.remove();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    // Re-arm inside the fake clock. Previously both the load timestamp and
+    // the failsafe were captured at import time, so these tests had to
+    // wait out ~18s of REAL time.
+    initSplash(Date.now());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("lifts the splash when auth FAILS, so the error screen is visible", async () => {
@@ -56,25 +66,25 @@ describe("splash dismissal", () => {
       expect(document.body.textContent).toContain("Headstate needs the GitHub CLI"),
     );
     // Past the 3s floor plus the fade.
-    await new Promise((r) => setTimeout(r, 3600));
+    await vi.advanceTimersByTimeAsync(3600);
     expect(document.getElementById("splash")).toBeNull();
-  }, 15000);
+  });
 
   it("lifts the splash when auth succeeds", async () => {
     authState.current = Promise.resolve({ ok: true, message: "" });
     renderGate();
 
     await waitFor(() => expect(document.body.textContent).toContain("app content"));
-    await new Promise((r) => setTimeout(r, 3600));
+    await vi.advanceTimersByTimeAsync(3600);
     expect(document.getElementById("splash")).toBeNull();
-  }, 15000);
+  });
 
   // The failsafe: no code path may leave the overlay up forever.
   it("lifts the splash even if the auth check never settles", async () => {
     authState.current = new Promise(() => {});
     renderGate();
 
-    await new Promise((r) => setTimeout(r, 11000));
+    await vi.advanceTimersByTimeAsync(11000);
     expect(document.getElementById("splash")).toBeNull();
-  }, 20000);
+  });
 });

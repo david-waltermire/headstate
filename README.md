@@ -102,13 +102,14 @@ getting done, and whether that is improving.
 - **Merged by repository** — where the work actually landed, with each row
   a way back into that repo's filtered list.
 
-The view fetches only while it is open, and costs three GitHub rate-limit
-points at the 30-day range. The daily series uses aliased queries rather
+The view fetches only while it is open. At the 30-day range it costs eight
+GitHub rate-limit points out of 5,000 per hour: six day-bucket chunks, plus
+the period comparisons, plus the merged-PR sample. The daily series uses aliased queries rather
 than paginating merged PRs: an aliased search costs a single point no
 matter how many aliases it carries, so a month of history is cheaper than
 one page of paginated results.
 
-The series is fetched in chunks of 15 days. GitHub returns 502 Bad Gateway
+The series is fetched in chunks of five days, concurrently. GitHub returns 502 Bad Gateway
 on a query carrying too many concurrent search aliases — measured
 intermittently from around 44 — so requests stay well under that rather
 than retrying into a server-side timeout.

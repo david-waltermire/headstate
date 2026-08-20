@@ -87,6 +87,19 @@ jobs:
       - name: Build the app bundle
         run: yarn tauri build --bundles app
 
+      # The release ships a UNIVERSAL binary, but this job builds native
+      # arm64 only -- so an arch-gated link failure (plausible with bundled
+      # SQLite or octocrab's crypto backends) passed every PR and would
+      # first appear at tag time, after version stamping, during a release.
+      #
+      # `cargo check` rather than a second full build: it catches the
+      # compile and link-configuration failures that differ by target
+      # without doubling this job's runtime.
+      - name: Check the Intel target the release also builds
+        run: |
+          rustup target add x86_64-apple-darwin
+          cd src-tauri && cargo check --target x86_64-apple-darwin --all-targets
+
   supply-chain:
     runs-on: macos-latest
     steps:

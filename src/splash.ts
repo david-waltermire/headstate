@@ -22,7 +22,19 @@ const FADE_MS = 400;
 /// webview painting the splash).
 const MIN_VISIBLE_MS = 3000;
 
-const loadedAt = Date.now();
+/// When the splash became visible. Captured at module load in production,
+/// but SETTABLE so tests can control it: both this and `armFailsafe` used
+/// to run at import time, before fake timers could install, which forced
+/// the regression tests to burn ~18s of real wall-clock -- about 85% of
+/// the entire suite, and an 18-second suite is one people stop running.
+let loadedAt = Date.now();
+
+/// Re-arm the splash timing. Called from `main.tsx` in production and from
+/// tests after installing fake timers.
+export function initSplash(now: number = Date.now()): void {
+  loadedAt = now;
+  armFailsafe();
+}
 
 /// Hard ceiling on how long the splash may EVER stay up.
 ///
@@ -48,8 +60,6 @@ function armFailsafe(): void {
     if (el) dismissSplash(document, FADE_MS, 0);
   }, MAX_VISIBLE_MS);
 }
-
-armFailsafe();
 
 export function dismissSplash(
   doc: Document = document,

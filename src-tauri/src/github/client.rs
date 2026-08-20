@@ -187,7 +187,7 @@ impl GitHubClient {
     ) -> Result<History, ClientError> {
         // Chunked because GitHub 502s on a query with too many concurrent
         // `search` aliases -- see HISTORY_CHUNK_DAYS. The first chunk also
-        // carries the six period aliases, so a 30-day fetch is two requests
+        // carries the six period aliases, so a 30-day fetch is six requests
         // and two rate-limit points rather than one request that fails.
         let v = self.fetch_history_values(now, days, true).await?;
         let count = |k: &str| v[k]["issueCount"].as_u64().unwrap_or(0);
