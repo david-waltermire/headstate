@@ -1,11 +1,11 @@
 import { useEffect } from "react";
-import { usePullRequests, useRefreshRequested, useStats } from "./api/hooks";
-import { Dashboard } from "./components/Dashboard";
+import { usePullRequests, useRefreshRequested } from "./api/hooks";
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
 import { PrList } from "./components/PrList";
 import { RepoSidebar } from "./components/RepoSidebar";
+import { StatsPage } from "./components/StatsPage";
 import { applyFilters, sortPrs } from "./lib/derive";
 import { dismissSplash } from "./splash";
 import { useFilters } from "./store/filters";
@@ -16,7 +16,6 @@ import { useFilters } from "./store/filters";
 /// therefore one error banner) per window.
 export default function App() {
   const { data: prs = [], isSuccess, isLoading } = usePullRequests();
-  const { data: stats } = useStats();
   const { filters, view } = useFilters();
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
@@ -75,7 +74,7 @@ export default function App() {
                 whole account, and the strip is a triage surface that belongs
                 beside the list it acts on. Its cards already surface what
                 needs attention, and each one clicks through to the list. */}
-            <Dashboard prs={prs} stats={stats ?? { merged_week: 0, merged_month: 0 }} />
+            <StatsPage />
           </div>
         ) : (
           <div className="p-4">

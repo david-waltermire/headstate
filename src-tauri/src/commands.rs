@@ -3,7 +3,7 @@
 //! [`crate::poll`] emits in the background.
 
 use crate::github::client::GitHubClient;
-use crate::github::model::{PullRequest, Stats};
+use crate::github::model::{History, MergedDetail, PullRequest, Stats};
 use crate::store::{load_snapshot, open_db};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
@@ -58,6 +58,33 @@ pub async fn get_stats(client: State<'_, GhClient>) -> Result<Stats, String> {
         .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
     client
         .fetch_stats(chrono::Utc::now())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_history(client: State<'_, GhClient>, days: i64) -> Result<History, String> {
+    let client = client
+        .0
+        .clone()
+        .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
+    // Clamp: the UI offers 7/14/30, but a command is a public surface and
+    // an unbounded value would build an arbitrarily large query.
+    let days = days.clamp(1, 90);
+    client
+        .fetch_history(chrono::Utc::now(), days)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_merged_detail(client: State<'_, GhClient>) -> Result<MergedDetail, String> {
+    let client = client
+        .0
+        .clone()
+        .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
+    client
+        .fetch_merged_detail()
         .await
         .map_err(|e| e.to_string())
 }

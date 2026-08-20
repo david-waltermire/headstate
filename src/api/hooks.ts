@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect, useSyncExternalStore } from "react";
 import type { PullRequest } from "../types/pr";
-import { getCached, getStats, refreshNow } from "./tauri";
+import { getCached, getHistory, getMergedDetail, getStats, refreshNow } from "./tauri";
 
 /// The PR list. Seeded from the SQLite snapshot so the first paint shows
 /// real content, then reconciled by the Rust poll loop via `prs-updated`.
@@ -162,4 +162,29 @@ export function usePollError(): string | null {
   }, []);
 
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/// History drives the delta cards and the activity chart.
+///
+/// Held for five minutes rather than the list's live cadence: these counts
+/// move on the order of hours, and the query is only mounted while the
+/// Stats view is open, so a shorter window would spend rate limit for no
+/// visible change.
+export function useHistory(days: number) {
+  return useQuery({
+    queryKey: ["history", days],
+    queryFn: () => getHistory(days),
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/// The merged-PR sample behind the insight cards and repo table. Kept
+/// separate from `useHistory` so a slow or failed detail fetch leaves the
+/// chart and cards fully rendered.
+export function useMergedDetail() {
+  return useQuery({
+    queryKey: ["merged-detail"],
+    queryFn: getMergedDetail,
+    staleTime: 5 * 60 * 1000,
+  });
 }

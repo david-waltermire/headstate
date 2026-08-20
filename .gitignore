@@ -23,3 +23,6 @@ src-tauri/icons/icon.ico
 src-tauri/icons/StoreLogo.png
 src-tauri/icons/Square*.png
 src-tauri/icons/64x64.png
+
+# Scratch workspace for plan execution (briefs, reports, ledgers).
+.superpowers/

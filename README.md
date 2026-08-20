@@ -67,10 +67,35 @@ order.
 nobody else — real merge conflicts or failing CI — so the thing you need to
 fix first doesn't get lost in a longer list. Quiet when nothing is blocked.
 
-**Dashboard.** Seven stat cards — merged this week, merged this month, in
-the merge queue, needs rebase or red CI, green and awaiting review, approved
-and needs queueing, blocked by review comments. Every card is a triage
-entry point: click one and the list view opens already filtered to match.
+**Stats.** A history view behind the "Stats" button pinned to the bottom of
+the sidebar, answering what the open-PR list cannot: how much is actually
+getting done, and whether that is improving.
+
+- **Four headline figures** — merged and opened this week, merged this
+  month, and median cycle time — each with its change against the previous
+  period. Every window is stated in words, because the comparison
+  deliberately excludes the current (incomplete) day: counting a partial
+  day against complete ones drags every number down.
+- **Activity chart** — opened against merged per day over 7, 14, or 30
+  days. The two series are overlaid rather than stacked; they measure
+  overlapping populations, so a stacked total would be meaningless. The gap
+  between them reads as the backlog growing or draining.
+- **Insight cards** — cycle time (median and p90), total lines changed, and
+  median PR size, computed over a sample of your most recently merged PRs
+  and labelled with that sample size.
+- **Merged by repository** — where the work actually landed, with each row
+  a way back into that repo's filtered list.
+
+The view fetches only while it is open, and costs three GitHub rate-limit
+points at the 30-day range. The daily series uses aliased queries rather
+than paginating merged PRs: an aliased search costs a single point no
+matter how many aliases it carries, so a month of history is cheaper than
+one page of paginated results.
+
+The series is fetched in chunks of 15 days. GitHub returns 502 Bad Gateway
+on a query carrying too many concurrent search aliases — measured
+intermittently from around 44 — so requests stay well under that rather
+than retrying into a server-side timeout.
 
 **Filters and repo sidebar.** A sidebar of repos with open PR counts, plus a
 filter bar for labels, review state, and drafts.
@@ -128,11 +153,10 @@ or `(CI running)`.
 - **Unsigned build.** See the Gatekeeper step above. Signing and
   notarization are tracked in
   [#23](https://github.com/pktstorm/headstate/issues/23).
-- **Open PRs only.** Headstate's data comes entirely from your open pull
-  requests; it does not track merge history. The "Merged this week" and
-  "Merged this month" dashboard cards currently click through to the same
-  open-PR list as every other card rather than a merged-PR view — see
-  [#33](https://github.com/pktstorm/headstate/issues/33).
+- **Merged history is a sample.** The insight cards and the repository
+  breakdown are computed over your 100 most recently merged pull requests,
+  not your whole history. The figures are labelled with that sample size;
+  the daily chart and the headline counts are exact.
 - **Tray badge isn't live yet.** The menu bar icon can show a count badge,
   but nothing currently feeds it a real "needs attention" number — it's
   always unbadged today.

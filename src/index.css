@@ -21,6 +21,8 @@
     --color-chart-3: var(--chart-3);
     --color-chart-2: var(--chart-2);
     --color-chart-1: var(--chart-1);
+    --color-chart-merged: var(--chart-merged);
+    --color-chart-opened: var(--chart-opened);
     --color-ring: var(--ring);
     --color-input: var(--input);
     --color-border: var(--border);
@@ -72,6 +74,11 @@
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
+    /* The --chart-1..5 ramp above is zero-chroma greyscale, so two series
+       drawn from it are indistinguishable. These two carry the meaning the
+       chart needs, matching the GitHub palette used elsewhere in the app. */
+    --chart-merged: #3fb950;
+    --chart-opened: #58a6ff;
     --radius: 0.625rem;
     --sidebar: oklch(0.985 0 0);
     --sidebar-foreground: oklch(0.145 0 0);
@@ -107,6 +114,11 @@
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
+    /* The --chart-1..5 ramp above is zero-chroma greyscale, so two series
+       drawn from it are indistinguishable. These two carry the meaning the
+       chart needs, matching the GitHub palette used elsewhere in the app. */
+    --chart-merged: #3fb950;
+    --chart-opened: #58a6ff;
     --sidebar: oklch(0.205 0 0);
     --sidebar-foreground: oklch(0.985 0 0);
     --sidebar-primary: oklch(0.488 0.243 264.376);

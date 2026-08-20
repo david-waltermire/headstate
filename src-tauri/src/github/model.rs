@@ -68,3 +68,41 @@ pub struct Stats {
     pub ready_to_queue: u64,
     pub blocked_by_comments: u64,
 }
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct HistoryPoint {
+    pub date: String,
+    pub opened: u64,
+    pub merged: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RepoCount {
+    pub repo: String,
+    pub merged: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MergedDetail {
+    pub cycle_time_hours: Vec<f64>,
+    /// additions+deletions per PR, sorted ascending for percentile lookup.
+    pub pr_sizes: Vec<u64>,
+    pub additions: u64,
+    pub deletions: u64,
+    pub changed_files: u64,
+    pub review_count: u64,
+    pub comment_count: u64,
+    pub sample_size: u64,
+    pub repo_counts: Vec<RepoCount>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct History {
+    pub points: Vec<HistoryPoint>,
+    pub week_current: u64,
+    pub week_previous: u64,
+    pub opened_week_current: u64,
+    pub opened_week_previous: u64,
+    pub month_current: u64,
+    pub month_previous: u64,
+}

@@ -11,9 +11,23 @@ const mockPrs = vi.fn<() => PullRequest[]>(() => []);
 
 vi.mock("./api/hooks", () => ({
   usePullRequests: () => ({ data: mockPrs(), isSuccess: true, isLoading: false }),
-  useStats: () => ({ data: { merged_week: 0, merged_month: 0 } }),
   usePollError: () => null,
   useRefreshRequested: () => undefined,
+  // StatsPage owns these; this suite only asserts the shell's layout, so
+  // they return a settled empty result rather than real figures.
+  useHistory: () => ({
+    data: {
+      points: [],
+      week_current: 0,
+      week_previous: 0,
+      opened_week_current: 0,
+      opened_week_previous: 0,
+      month_current: 0,
+      month_previous: 0,
+    },
+    isLoading: false,
+  }),
+  useMergedDetail: () => ({ data: undefined, isLoading: false }),
 }));
 
 vi.mock("./components/AuthGate", () => ({
@@ -99,8 +113,9 @@ describe("App — priorities strip scoping", () => {
     renderApp();
 
     expect(screen.queryByText(/Needs your attention/)).toBeNull();
-    // The stats cards themselves still render.
-    expect(screen.getByText(/Needs rebase or red CI/)).toBeDefined();
+    // The stats content itself still renders, so this is proving the strip
+    // is absent from a populated page rather than from a blank one.
+    expect(screen.getByText(/Merged this week/)).toBeDefined();
   });
 
   /// A repo selection scopes the strip; a label filter must not. Something

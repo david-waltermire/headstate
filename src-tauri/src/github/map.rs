@@ -1,7 +1,9 @@
 //! Mapping from the raw GraphQL JSON to typed `PullRequest`s.
 
-use super::model::{CiState, Label, MergeState, PullRequest, ReviewState};
-use chrono::{DateTime, Utc};
+use super::model::{
+    CiState, HistoryPoint, Label, MergeState, MergedDetail, PullRequest, RepoCount, ReviewState,
+};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
 fn ts(v: &Value, key: &str) -> Option<DateTime<Utc>> {
@@ -88,10 +90,76 @@ pub fn map_search(v: &Value) -> Vec<PullRequest> {
         .unwrap_or_default()
 }
 
+/// Day-bucket aliases into an ascending-by-date series.
+///
+/// Aliases are emitted newest-first (`m0` is today); the chart plots time
+/// left to right, so the series is reversed here rather than in the view.
+/// A missing alias maps to 0: GitHub omits nothing today, but a partial
+/// response must not panic a dashboard.
+pub fn map_history(v: &Value, days: i64, now: DateTime<Utc>) -> Vec<HistoryPoint> {
+    let mut pts: Vec<HistoryPoint> = (0..days)
+        .map(|i| HistoryPoint {
+            date: (now - Duration::days(i)).format("%Y-%m-%d").to_string(),
+            merged: v[format!("m{i}")]["issueCount"].as_u64().unwrap_or(0),
+            opened: v[format!("o{i}")]["issueCount"].as_u64().unwrap_or(0),
+        })
+        .collect();
+    pts.reverse();
+    pts
+}
+
+/// Totals over the merged-PR sample.
+///
+/// Cycle times are collected only for nodes carrying both timestamps, but
+/// such nodes still count toward volume totals -- the PR did merge; only
+/// its duration is unknown. The vector is sorted so percentile() can index
+/// it without re-sorting per call.
+pub fn map_merged_detail(v: &Value) -> MergedDetail {
+    let mut d = MergedDetail::default();
+    let mut repos: std::collections::HashMap<String, u64> = Default::default();
+    let empty = vec![];
+    let nodes = v["merged"]["nodes"].as_array().unwrap_or(&empty);
+    for n in nodes {
+        d.sample_size += 1;
+        let size = n["additions"].as_u64().unwrap_or(0) + n["deletions"].as_u64().unwrap_or(0);
+        d.pr_sizes.push(size);
+        d.additions += n["additions"].as_u64().unwrap_or(0);
+        d.deletions += n["deletions"].as_u64().unwrap_or(0);
+        d.changed_files += n["changedFiles"].as_u64().unwrap_or(0);
+        d.review_count += n["reviews"]["totalCount"].as_u64().unwrap_or(0);
+        d.comment_count += n["comments"]["totalCount"].as_u64().unwrap_or(0);
+        if let Some(r) = n["repository"]["nameWithOwner"].as_str() {
+            *repos.entry(r.to_string()).or_insert(0) += 1;
+        }
+        if let (Some(c), Some(m)) = (n["createdAt"].as_str(), n["mergedAt"].as_str()) {
+            if let (Ok(c), Ok(m)) = (
+                DateTime::parse_from_rfc3339(c),
+                DateTime::parse_from_rfc3339(m),
+            ) {
+                let hours = (m - c).num_seconds() as f64 / 3600.0;
+                if hours >= 0.0 {
+                    d.cycle_time_hours.push(hours);
+                }
+            }
+        }
+    }
+    d.cycle_time_hours.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    d.pr_sizes.sort_unstable();
+    let mut rc: Vec<RepoCount> = repos
+        .into_iter()
+        .map(|(repo, merged)| RepoCount { repo, merged })
+        .collect();
+    // Ties broken by name so the table order is stable between refreshes.
+    rc.sort_by(|a, b| b.merged.cmp(&a.merged).then(a.repo.cmp(&b.repo)));
+    d.repo_counts = rc;
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::github::model::{CiState, MergeState, ReviewState};
+    use serde_json::json;
 
     fn fixture() -> serde_json::Value {
         serde_json::from_str(include_str!("../../tests/fixtures/search.json")).unwrap()
@@ -156,5 +224,79 @@ mod tests {
     fn malformed_nodes_are_skipped_not_panicked_on() {
         let v = serde_json::json!({"search": {"nodes": [{"number": 1}, null]}});
         assert_eq!(map_search(&v).len(), 0);
+    }
+
+    #[test]
+    fn maps_day_buckets_oldest_first() {
+        // NOTE: no "data" key -- octocrab strips the envelope before we see it.
+        let v = json!({
+            "m0": {"issueCount": 5}, "o0": {"issueCount": 7},
+            "m1": {"issueCount": 3}, "o1": {"issueCount": 4}
+        });
+        let now = DateTime::parse_from_rfc3339("2026-08-20T14:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let pts = map_history(&v, 2, now);
+        // Chart reads left-to-right as time moving forward, so oldest first.
+        assert_eq!(pts[0].date, "2026-08-19");
+        assert_eq!(pts[0].merged, 3);
+        assert_eq!(pts[1].date, "2026-08-20");
+        assert_eq!(pts[1].merged, 5);
+        assert_eq!(pts[1].opened, 7);
+    }
+
+    #[test]
+    fn missing_buckets_become_zero_not_panic() {
+        let v = json!({ "m0": {"issueCount": 2} });
+        let now = DateTime::parse_from_rfc3339("2026-08-20T14:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let pts = map_history(&v, 1, now);
+        assert_eq!(pts[0].merged, 2);
+        assert_eq!(pts[0].opened, 0);
+    }
+
+    #[test]
+    fn aggregates_merged_detail_and_cycle_times() {
+        let v = json!({"merged": {"nodes": [
+            {"createdAt":"2026-08-19T10:00:00Z","mergedAt":"2026-08-19T12:00:00Z",
+             "additions":100,"deletions":20,"changedFiles":3,
+             "reviews":{"totalCount":1},"comments":{"totalCount":2},
+             "repository":{"nameWithOwner":"acme/alpha"}},
+            {"createdAt":"2026-08-19T10:00:00Z","mergedAt":"2026-08-19T10:30:00Z",
+             "additions":10,"deletions":5,"changedFiles":1,
+             "reviews":{"totalCount":0},"comments":{"totalCount":0},
+             "repository":{"nameWithOwner":"acme/alpha"}}
+        ]}});
+        let d = map_merged_detail(&v);
+        assert_eq!(d.sample_size, 2);
+        assert_eq!(d.additions, 110);
+        assert_eq!(d.changed_files, 4);
+        // Sorted ascending so percentile() can index directly.
+        assert_eq!(d.cycle_time_hours, vec![0.5, 2.0]);
+        // additions+deletions per PR, ascending: 10+5=15 then 100+20=120.
+        assert_eq!(d.pr_sizes, vec![15, 120]);
+        assert_eq!(
+            d.repo_counts,
+            vec![RepoCount {
+                repo: "acme/alpha".into(),
+                merged: 2
+            }]
+        );
+    }
+
+    #[test]
+    fn skips_nodes_missing_timestamps() {
+        let v = json!({"merged": {"nodes": [
+            {"createdAt":"2026-08-19T10:00:00Z","mergedAt": null,
+             "additions":1,"deletions":0,"changedFiles":1,
+             "reviews":{"totalCount":0},"comments":{"totalCount":0},
+             "repository":{"nameWithOwner":"acme/alpha"}}
+        ]}});
+        let d = map_merged_detail(&v);
+        assert!(d.cycle_time_hours.is_empty());
+        // Still counted for volume: the PR merged, we just cannot time it.
+        assert_eq!(d.sample_size, 1);
+        assert_eq!(d.additions, 1);
     }
 }
