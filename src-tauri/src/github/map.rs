@@ -84,7 +84,12 @@ fn map_node(node: &Value) -> Option<PullRequest> {
 /// Nodes that fail to map are skipped rather than failing the whole poll:
 /// one malformed PR should not blank the list.
 pub fn map_search(v: &Value) -> Vec<PullRequest> {
-    v["search"]["nodes"]
+    map_list(v, "authored")
+}
+
+/// One named search alias from the response.
+pub fn map_list(v: &Value, alias: &str) -> Vec<PullRequest> {
+    v[alias]["nodes"]
         .as_array()
         .map(|a| a.iter().filter_map(map_node).collect())
         .unwrap_or_default()
@@ -99,7 +104,7 @@ pub fn map_search(v: &Value) -> Vec<PullRequest> {
 /// to have a false negative, renders "Nothing blocked on you" while a
 /// conflicted PR sits at rank 118.
 pub fn map_total(v: &Value) -> u64 {
-    v["search"]["issueCount"].as_u64().unwrap_or(0)
+    v["authored"]["issueCount"].as_u64().unwrap_or(0)
 }
 
 /// Day-bucket aliases into an ascending-by-date series.

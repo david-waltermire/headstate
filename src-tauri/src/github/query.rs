@@ -6,10 +6,30 @@ use chrono::{DateTime, Duration, Utc};
 /// One query returns every open PR with everything the UI needs: CI rollup,
 /// mergeability, review decision, merge-queue membership, and labels.
 /// Measured at 27 PRs in ~2.9s for 2 rate-limit points of 5000/hour.
+/// Two aliased searches: PRs the user authored, and PRs awaiting their
+/// review. Aliased searches cost ONE point in total regardless of count,
+/// so the second list is free -- verified against the live API.
+///
+/// `search` is aliased to `authored` rather than left bare, so the mapper
+/// has to name which list it is reading and cannot silently take the wrong
+/// one when a third is added.
 pub const PRS_QUERY: &str = r#"
-query($q: String!) {
+query($q: String!, $reviewing: String!) {
   rateLimit { cost remaining }
-  search(query: $q, type: ISSUE, first: 100) {
+  authored: search(query: $q, type: ISSUE, first: 100) {
+    issueCount
+    nodes {
+      ... on PullRequest {
+        number title url isDraft createdAt updatedAt
+        author { login }
+        repository { nameWithOwner }
+        mergeable reviewDecision isInMergeQueue totalCommentsCount
+        labels(first: 20) { nodes { name color } }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+      }
+    }
+  }
+  reviewing: search(query: $reviewing, type: ISSUE, first: 100) {
     issueCount
     nodes {
       ... on PullRequest {

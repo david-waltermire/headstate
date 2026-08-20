@@ -27,6 +27,10 @@ export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 /// always come back zero today. Does not persist to SQLite.
 export const getStats = () => invoke<Stats>("get_stats");
 
+/// PRs awaiting the user's review. Rides along in the same GraphQL
+/// document as the authored list, so it costs no extra rate limit.
+export const getReviewing = () => invoke<PullRequest[]>("get_reviewing");
+
 /// The period comparisons alone -- one small request (~1.6s) so the delta
 /// cards paint without waiting on the daily series.
 export const getPeriods = () => invoke<Periods>("get_periods");

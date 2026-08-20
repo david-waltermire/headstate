@@ -3,7 +3,7 @@
 //!
 //! Read-only: every query here is a `search`, never a mutation.
 
-use super::map::{map_history, map_merged_detail, map_search, map_total};
+use super::map::{map_history, map_list, map_merged_detail, map_search, map_total};
 use super::model::{History, MergedDetail, Periods, PullRequest, Stats};
 use super::query::{
     history_query_range, history_query_range_with_periods, periods_query, HISTORY_CHUNK_DAYS,
@@ -72,10 +72,40 @@ impl GitHubClient {
         let v = self
             .graphql_partial_ok(&json!({
                 "query": PRS_QUERY,
-                "variables": { "q": "is:pr is:open author:@me" }
+                "variables": {
+                    "q": "is:pr is:open author:@me",
+                    "reviewing": "is:pr is:open review-requested:@me"
+                }
             }))
             .await?;
         Ok(map_search(&v))
+    }
+
+    /// PRs awaiting the user's review.
+    ///
+    /// Rides along in PRS_QUERY at zero extra rate-limit cost. Kept a
+    /// separate call rather than folded into `fetch_prs`'s return type so
+    /// the snapshot cache, poll loop and existing commands keep their
+    /// shapes; the poll loop fetches both in one request via
+    /// `fetch_prs_and_reviewing`.
+    pub async fn fetch_reviewing(&self) -> Result<Vec<PullRequest>, ClientError> {
+        Ok(self.fetch_prs_and_reviewing().await?.1)
+    }
+
+    /// Both lists from ONE request.
+    pub async fn fetch_prs_and_reviewing(
+        &self,
+    ) -> Result<(Vec<PullRequest>, Vec<PullRequest>), ClientError> {
+        let v = self
+            .graphql_partial_ok(&json!({
+                "query": PRS_QUERY,
+                "variables": {
+                    "q": "is:pr is:open author:@me",
+                    "reviewing": "is:pr is:open review-requested:@me"
+                }
+            }))
+            .await?;
+        Ok((map_list(&v, "authored"), map_list(&v, "reviewing")))
     }
 
     /// The PR list together with GitHub's own match count.
@@ -91,7 +121,10 @@ impl GitHubClient {
         let v = self
             .graphql_partial_ok(&json!({
                 "query": PRS_QUERY,
-                "variables": { "q": "is:pr is:open author:@me" }
+                "variables": {
+                    "q": "is:pr is:open author:@me",
+                    "reviewing": "is:pr is:open review-requested:@me"
+                }
             }))
             .await?;
         Ok((map_search(&v), map_total(&v)))
@@ -338,7 +371,7 @@ mod tests {
             serde_json::from_str(include_str!("../../tests/fixtures/search.json")).unwrap();
         // The fixture has 3 nodes; claim GitHub matched 137.
         let mut truncated = body.clone();
-        truncated["search"]["issueCount"] = json!(137);
+        truncated["authored"]["issueCount"] = json!(137);
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": truncated })))
@@ -517,6 +550,10 @@ mod tests {
         );
 
         let t0 = std::time::Instant::now();
+        let (authored, reviewing) = c.fetch_prs_and_reviewing().await.unwrap();
+        println!("AUTHORED={} REVIEWING={}", authored.len(), reviewing.len());
+        assert!(!authored.is_empty());
+
         let h = c.fetch_history(Utc::now(), 30).await.unwrap();
         println!("TIMING fetch_history(30) = {:?}", t0.elapsed());
         println!(

@@ -1,4 +1,4 @@
-import { BarChart3 } from "lucide-react";
+import { BarChart3, Eye } from "lucide-react";
 import type { PullRequest } from "@/types/pr";
 import { useFilters } from "@/store/filters";
 import { repoCounts } from "@/lib/repos";
@@ -13,7 +13,13 @@ import { repoCounts } from "@/lib/repos";
 /// repo), and the repo list above it grows with the number of repos you
 /// have PRs in. A column layout with the list scrolling and Stats outside
 /// the scroll area keeps it reachable at any repo count.
-export function RepoSidebar({ prs }: { prs: PullRequest[] }) {
+export function RepoSidebar({
+  prs,
+  reviewingCount = 0,
+}: {
+  prs: PullRequest[];
+  reviewingCount?: number;
+}) {
   const { filters, setFilter, view, setView } = useFilters();
   const counts = repoCounts(prs);
 
@@ -57,6 +63,21 @@ export function RepoSidebar({ prs }: { prs: PullRequest[] }) {
       </div>
 
       <div className="mt-2 shrink-0 border-t border-[#30363d] pt-2">
+        {/* Incoming review requests: the queue the user is the bottleneck
+            for. Pinned beside Stats rather than in the repo list because
+            it spans repos, like Stats does. */}
+        <button
+          type="button"
+          onClick={() => setView("reviewing")}
+          aria-pressed={view === "reviewing"}
+          className={rowClass(view === "reviewing")}
+        >
+          <span className="flex items-center gap-2">
+            <Eye className="h-4 w-4 shrink-0" aria-hidden="true" />
+            Awaiting your review
+          </span>
+          {reviewingCount > 0 ? <span>{reviewingCount}</span> : null}
+        </button>
         <button
           type="button"
           onClick={() => setView("dashboard")}

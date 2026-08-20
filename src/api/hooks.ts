@@ -7,6 +7,7 @@ import {
   getHistory,
   getMergedDetail,
   getPeriods,
+  getReviewing,
   getStats,
   refreshNow,
 } from "./tauri";
@@ -193,6 +194,19 @@ export function usePollError(): string | null {
   }, []);
 
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/// PRs awaiting the user's review.
+///
+/// The app previously queried only `author:@me`, so it could say nothing
+/// about the queue the user is the bottleneck for -- the largest gap for a
+/// daily driver. Same 60s staleness as the authored list.
+export function useReviewing() {
+  return useQuery({
+    queryKey: ["reviewing"],
+    queryFn: getReviewing,
+    staleTime: 60_000,
+  });
 }
 
 /// GitHub's true open-PR count, when it exceeds what the query returned.

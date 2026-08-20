@@ -45,11 +45,13 @@ describe("RepoSidebar", () => {
     render(<RepoSidebar prs={PR_FIXTURES} />);
     const buttons = screen.getAllByRole("button");
     // All repositories, then octocat/hello-world (2), then
-    // octocat/spoon-knife (1), then Stats pinned last.
+    // octocat/spoon-knife (1), then the two cross-repo destinations
+    // pinned to the bottom.
     expect(buttons.map((b) => b.textContent)).toEqual([
       "All repositories3",
       "octocat/hello-world2",
       "octocat/spoon-knife1",
+      "Awaiting your review",
       "Stats",
     ]);
   });

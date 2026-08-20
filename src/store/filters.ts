@@ -5,10 +5,10 @@ import type { Filters } from "../lib/derive";
 /// never duplicated here.
 interface FilterStore {
   filters: Filters;
-  view: "list" | "dashboard";
+  view: "list" | "dashboard" | "reviewing";
   setFilter: <K extends keyof Filters>(key: K, value: Filters[K]) => void;
   applyPreset: (filters: Filters) => void;
-  setView: (view: "list" | "dashboard") => void;
+  setView: (view: "list" | "dashboard" | "reviewing") => void;
   reset: () => void;
 }
 

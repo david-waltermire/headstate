@@ -1,5 +1,5 @@
 {
-  "search": {
+  "authored": {
     "issueCount": 3,
     "nodes": [
       {
@@ -9,14 +9,35 @@
         "isDraft": false,
         "createdAt": "2026-08-18T10:00:00Z",
         "updatedAt": "2026-08-18T12:00:00Z",
-        "author": { "login": "octocat" },
-        "repository": { "nameWithOwner": "octocat/hello-world" },
+        "author": {
+          "login": "octocat"
+        },
+        "repository": {
+          "nameWithOwner": "octocat/hello-world"
+        },
         "mergeable": "MERGEABLE",
         "reviewDecision": "APPROVED",
         "isInMergeQueue": false,
         "totalCommentsCount": 2,
-        "labels": { "nodes": [{ "name": "enhancement", "color": "a2eeef" }] },
-        "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "SUCCESS" } } }] }
+        "labels": {
+          "nodes": [
+            {
+              "name": "enhancement",
+              "color": "a2eeef"
+            }
+          ]
+        },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "state": "SUCCESS"
+                }
+              }
+            }
+          ]
+        }
       },
       {
         "number": 43,
@@ -25,14 +46,35 @@
         "isDraft": true,
         "createdAt": "2026-08-17T10:00:00Z",
         "updatedAt": "2026-08-17T10:30:00Z",
-        "author": { "login": "octocat" },
-        "repository": { "nameWithOwner": "octocat/hello-world" },
+        "author": {
+          "login": "octocat"
+        },
+        "repository": {
+          "nameWithOwner": "octocat/hello-world"
+        },
         "mergeable": "CONFLICTING",
         "reviewDecision": "CHANGES_REQUESTED",
         "isInMergeQueue": false,
         "totalCommentsCount": 5,
-        "labels": { "nodes": [{ "name": "bug", "color": "d73a4a" }] },
-        "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "FAILURE" } } }] }
+        "labels": {
+          "nodes": [
+            {
+              "name": "bug",
+              "color": "d73a4a"
+            }
+          ]
+        },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": {
+                  "state": "FAILURE"
+                }
+              }
+            }
+          ]
+        }
       },
       {
         "number": 7,
@@ -41,15 +83,33 @@
         "isDraft": false,
         "createdAt": "2026-08-16T09:00:00Z",
         "updatedAt": "2026-08-16T09:00:00Z",
-        "author": { "login": "octocat" },
-        "repository": { "nameWithOwner": "octocat/spoon-knife" },
+        "author": {
+          "login": "octocat"
+        },
+        "repository": {
+          "nameWithOwner": "octocat/spoon-knife"
+        },
         "mergeable": "UNKNOWN",
         "reviewDecision": null,
         "isInMergeQueue": true,
         "totalCommentsCount": 0,
-        "labels": { "nodes": [] },
-        "commits": { "nodes": [{ "commit": { "statusCheckRollup": null } }] }
+        "labels": {
+          "nodes": []
+        },
+        "commits": {
+          "nodes": [
+            {
+              "commit": {
+                "statusCheckRollup": null
+              }
+            }
+          ]
+        }
       }
     ]
+  },
+  "reviewing": {
+    "issueCount": 0,
+    "nodes": []
   }
 }

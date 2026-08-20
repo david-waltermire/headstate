@@ -72,6 +72,17 @@ pub async fn get_stats(client: State<'_, GhClient>) -> Result<Stats, String> {
         .map_err(|e| e.to_string())
 }
 
+/// PRs awaiting the user's review.
+///
+/// A separate command from `get_cached`/`refresh_now` so the snapshot
+/// cache keeps its shape; the underlying query returns both lists in one
+/// request, so this costs no extra rate limit.
+#[tauri::command]
+pub async fn get_reviewing(client: State<'_, GhClient>) -> Result<Vec<PullRequest>, String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    client.fetch_reviewing().await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn get_periods(client: State<'_, GhClient>) -> Result<Periods, String> {
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;

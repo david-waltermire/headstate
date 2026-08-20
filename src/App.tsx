@@ -1,4 +1,9 @@
-import { usePullRequests, useRefreshRequested, useTruncation } from "./api/hooks";
+import {
+  usePullRequests,
+  useRefreshRequested,
+  useReviewing,
+  useTruncation,
+} from "./api/hooks";
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
@@ -22,6 +27,7 @@ export default function App() {
   // is what actually makes it do anything (see the hook's own comment).
   useRefreshRequested();
   const truncatedTotal = useTruncation();
+  const { data: reviewing = [] } = useReviewing();
 
   // Splash dismissal deliberately does NOT live here. `App` only mounts
   // when auth succeeds, so dismissing on `isSuccess` left every
@@ -53,7 +59,7 @@ export default function App() {
   // combinations unreachable.
   return (
     <div className="flex h-screen bg-[#0d1117] text-[#e6edf3]">
-      <RepoSidebar prs={prs} />
+      <RepoSidebar prs={prs} reviewingCount={reviewing.length} />
       <main className="flex-1 overflow-auto">
         <header className="flex items-center gap-2 border-b border-[#30363d] px-4 py-3">
           {/* View selection lives in the sidebar ("Stats", pinned to its
@@ -61,7 +67,11 @@ export default function App() {
               already where you choose what you are looking at, and a tab row
               repeated above every page competed with it. */}
           <h1 className="text-sm font-semibold">
-            {view === "dashboard" ? "Stats" : "Pull requests"}
+            {view === "dashboard"
+              ? "Stats"
+              : view === "reviewing"
+                ? "Awaiting your review"
+                : "Pull requests"}
           </h1>
           <div className="ml-auto">
             {/* scopedRepo skips the wizard's "which repositories?" step:
@@ -70,7 +80,14 @@ export default function App() {
           </div>
         </header>
 
-        {view === "dashboard" ? (
+        {view === "reviewing" ? (
+          <div className="p-4">
+            {/* Sorted newest-first like the main list. No filter bar: these
+                are other people's PRs, and the triage predicates here are
+                about the author's own work. */}
+            <PrList prs={sortPrs(reviewing, "newest")} hasFilters={false} />
+          </div>
+        ) : view === "dashboard" ? (
           <div className="p-4">
             {/* No priorities strip here: Stats is a read-only summary of the
                 whole account, and the strip is a triage surface that belongs
