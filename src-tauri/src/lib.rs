@@ -35,6 +35,25 @@ fn mark_focus(focused: &AtomicBool, is_focused: bool) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // A GUI-launched .app has no stderr, so every eprintln! in this
+        // codebase went nowhere a user could reach. "It stopped updating"
+        // was uninvestigable: no log file to ask for, and no way to know
+        // which of the failure paths fired.
+        //
+        // Writes to the OS log directory (Console.app on macOS) and a
+        // rotating file beside it. Never log the token, and never log a
+        // repository owner -- see CONTRIBUTING and check-privacy.sh.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("headstate".into()),
+                    }),
+                ])
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             commands::get_cached,
             commands::refresh_now,
@@ -105,6 +124,12 @@ pub fn run() {
             // to signal even when nothing is listening for it.
             let waker = Arc::new(tokio::sync::Notify::new());
             app.manage(poll::Waker(waker.clone()));
+
+            log::info!(
+                "headstate v{} starting (authenticated: {})",
+                env!("CARGO_PKG_VERSION"),
+                gh_client.is_some()
+            );
 
             if let Some(client) = gh_client {
                 let focused = Arc::new(AtomicBool::new(true));

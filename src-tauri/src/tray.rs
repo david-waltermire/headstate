@@ -81,7 +81,7 @@ pub fn set_badge(app: &AppHandle, needs_attention: u64) {
         return;
     };
     if let Err(e) = tray.set_title(badge_text(needs_attention).as_deref()) {
-        eprintln!("headstate: failed to set tray badge: {e}");
+        log::warn!("failed to set tray badge: {e}");
     }
 }
 

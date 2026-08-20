@@ -68,24 +68,39 @@ fn merge_by_identity(base: &[PullRequest], updates: &[PullRequest]) -> Vec<PullR
 /// step rather than unwrapping -- shared by both the regular poll tick and
 /// the #22 one-shot recheck so the "never panic, never blank the UI on
 /// failure" discipline lives in exactly one place.
+/// Tell the UI a local write failed.
+///
+/// Reuses the existing `poll-error` banner rather than adding a channel:
+/// the snapshot failing means offline readability and cold-start speed are
+/// gone, which the user should know about even though the live list is
+/// unaffected.
+fn emit_store_error(app: &AppHandle, msg: String) {
+    if let Err(e) = app.emit("poll-error", msg) {
+        log::warn!("failed to emit store error: {e}");
+    }
+}
+
 fn persist_and_emit(app: &AppHandle, prs: &[PullRequest]) {
     match app.path().app_data_dir() {
         Ok(dir) => match open_db(&dir.join("headstate.db")) {
             Ok(conn) => {
                 if let Err(e) = save_snapshot(&conn, prs) {
-                    eprintln!("headstate: failed to save snapshot: {e}");
+                    log::error!("failed to save snapshot: {e}");
+                    emit_store_error(app, format!("could not save local snapshot: {e}"));
                 }
             }
             Err(e) => {
-                eprintln!("headstate: failed to open db: {e}");
+                log::error!("failed to open db: {e}");
+                emit_store_error(app, format!("could not open the local database: {e}"));
             }
         },
         Err(e) => {
-            eprintln!("headstate: failed to resolve app data dir: {e}");
+            log::error!("failed to resolve app data dir: {e}");
+            emit_store_error(app, format!("could not find the app data directory: {e}"));
         }
     }
     if let Err(e) = app.emit("prs-updated", prs) {
-        eprintln!("headstate: failed to emit prs-updated: {e}");
+        log::warn!("failed to emit prs-updated: {e}");
     }
     // The badge is why polling lives in Rust at all: it has to stay correct
     // while the window is hidden, when no React component is mounted to
@@ -121,7 +136,7 @@ fn spawn_recheck(app: AppHandle, client: Arc<GitHubClient>, last_known: Vec<Pull
             Err(e) => {
                 // No retry: the regular 60s/300s cadence picks this back up
                 // on its own next tick. Logging only, snapshot untouched.
-                eprintln!("headstate: targeted recheck failed: {e}");
+                log::warn!("targeted recheck failed: {e}");
             }
         }
     });
@@ -180,6 +195,16 @@ pub fn spawn(
             };
             match fetched {
                 Ok(prs) => {
+                    // The heartbeat that makes "it stopped updating"
+                    // answerable: if the log ends here, the loop died or
+                    // the machine slept; if it keeps ticking, the problem
+                    // is downstream. Counts only -- never titles, never
+                    // repository names.
+                    log::info!(
+                        "poll ok: {} open, {} need attention",
+                        prs.len(),
+                        needs_attention_count(&prs)
+                    );
                     persist_and_emit(&app, &prs);
                     if has_checking(&prs) {
                         spawn_recheck(app.clone(), client.clone(), prs);
@@ -188,8 +213,9 @@ pub fn spawn(
                 // A failed poll leaves the last snapshot in place rather
                 // than blanking the UI; the next tick retries.
                 Err(e) => {
+                    log::warn!("poll failed: {e}");
                     if let Err(emit_err) = app.emit("poll-error", e.to_string()) {
-                        eprintln!("headstate: failed to emit poll-error: {emit_err}");
+                        log::warn!("failed to emit poll-error: {emit_err}");
                     }
                 }
             }

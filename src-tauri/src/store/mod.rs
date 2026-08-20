@@ -1,23 +1,27 @@
 //! SQLite persistence.
 //!
-//! Two distinct roles, kept in separate modules so they are not conflated:
+//! One role: [`cache`], the snapshot cache -- the last poll's PR list, so
+//! launch paints real content instead of a spinner and the app is readable
+//! offline.
 //!
-//! - [`cache`]: the snapshot cache -- the last poll's PR list, so launch
-//!   paints real content instead of a spinner, and the app is readable
-//!   offline.
-//! - [`history`]: a row per PR observed merged, so the dashboard's
-//!   week/month counters survive offline and can become trend charts later
-//!   without a schema rewrite.
+//! There was also a `history` module writing a row per merged PR. It was
+//! never called, so `merge_history` sat empty on every install while two
+//! module docs described week/month counters "surviving offline" that in
+//! fact came from live network calls and errored without a client.
 //!
-//! GitHub search stays authoritative for the displayed numbers; where local
-//! history and GitHub disagree, GitHub wins.
+//! It is gone rather than wired up, because the shape was wrong: a PR
+//! leaving the open set is NOT necessarily a merge -- it may be closed
+//! unmerged -- so a disappearance diff would have recorded abandoned PRs
+//! as merges, contradicting the `is:merged` search that must stay
+//! authoritative. `MERGED_DETAIL_QUERY` already returns the real merged
+//! set inside a search the app already pays for. Local accumulation past
+//! the 90-day live window needs a per-DAY counts table and a way to mark
+//! unobserved days, which is tracked separately.
 
 mod cache;
-mod history;
 mod schema;
 
 pub use cache::{load_snapshot, save_snapshot};
-pub use history::record_merges;
 pub use schema::{open_db, StoreError};
 
 #[cfg(test)]
