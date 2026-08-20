@@ -40,6 +40,7 @@ pub fn run() {
             commands::refresh_now,
             commands::get_stats,
             commands::get_history,
+            commands::get_periods,
             commands::get_merged_detail,
             commands::get_auth_state,
         ])

@@ -24,7 +24,9 @@ export default function App() {
 
   // Splash dismissal is app-driven: it lifts on the first successful render
   // of real data, not on a timer that would guess wrong on either a slow or
-  // a fast machine.
+  // a fast machine. `dismissSplash` additionally floors how long the splash
+  // stays up (see splash.ts) -- fire-and-forget, so nothing here waits on
+  // it and no query is delayed by it.
   useEffect(() => {
     if (isSuccess) dismissSplash();
   }, [isSuccess]);

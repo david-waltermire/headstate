@@ -1,10 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import type { History, MergedDetail } from "@/types/pr";
+import type { MergedDetail, Periods } from "@/types/pr";
 import { DeltaCards } from "./DeltaCards";
 
-const history: History = {
-  points: [],
+const periods: Periods = {
   week_current: 183,
   week_previous: 110,
   opened_week_current: 190,
@@ -27,24 +26,24 @@ const detail: MergedDetail = {
 
 describe("DeltaCards", () => {
   it("shows the merged count and its week-over-week change", () => {
-    render(<DeltaCards history={history} detail={undefined} />);
+    render(<DeltaCards periods={periods} detail={undefined} />);
     expect(screen.getByText("183")).toBeTruthy();
     expect(screen.getByText("+66%")).toBeTruthy();
   });
 
   it("names the comparison window so the number is interpretable", () => {
-    render(<DeltaCards history={history} detail={undefined} />);
+    render(<DeltaCards periods={periods} detail={undefined} />);
     expect(screen.getAllByText(/vs previous 7 days/i).length).toBeGreaterThan(0);
   });
 
   it("renders without a detail payload", () => {
-    render(<DeltaCards history={history} detail={undefined} />);
+    render(<DeltaCards periods={periods} detail={undefined} />);
     expect(screen.getByText(/median cycle time/i)).toBeTruthy();
   });
 
   // Nearest-rank median of [0.5, 1.0, 2.0] is index floor(3*0.5)=1 -> 1.0h.
   it("shows median cycle time when detail is present", () => {
-    render(<DeltaCards history={history} detail={detail} />);
+    render(<DeltaCards periods={periods} detail={detail} />);
     expect(screen.getByText("1.0h")).toBeTruthy();
   });
 
@@ -52,7 +51,7 @@ describe("DeltaCards", () => {
   it("marks a decline with a negative percentage", () => {
     render(
       <DeltaCards
-        history={{ ...history, week_current: 110, week_previous: 183 }}
+        periods={{ ...periods, week_current: 110, week_previous: 183 }}
         detail={undefined}
       />,
     );
@@ -63,7 +62,7 @@ describe("DeltaCards", () => {
   it("renders a dash when both periods are empty", () => {
     render(
       <DeltaCards
-        history={{ ...history, week_current: 0, week_previous: 0 }}
+        periods={{ ...periods, week_current: 0, week_previous: 0 }}
         detail={undefined}
       />,
     );
@@ -73,7 +72,7 @@ describe("DeltaCards", () => {
   // An empty cycle-time array must not render "0.0h" as if it were measured.
   it("does not report a cycle time when the sample has no timings", () => {
     render(
-      <DeltaCards history={history} detail={{ ...detail, cycle_time_hours: [] }} />,
+      <DeltaCards periods={periods} detail={{ ...detail, cycle_time_hours: [] }} />,
     );
     expect(screen.queryByText("0.0h")).toBeNull();
   });

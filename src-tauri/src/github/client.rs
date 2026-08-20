@@ -4,10 +4,10 @@
 //! Read-only: every query here is a `search`, never a mutation.
 
 use super::map::{map_history, map_merged_detail, map_search};
-use super::model::{History, MergedDetail, PullRequest, Stats};
+use super::model::{History, MergedDetail, Periods, PullRequest, Stats};
 use super::query::{
-    history_query_range, history_query_range_with_periods, HISTORY_CHUNK_DAYS, MERGED_DETAIL_QUERY,
-    PRS_QUERY, STATS_QUERY,
+    history_query_range, history_query_range_with_periods, periods_query, HISTORY_CHUNK_DAYS,
+    MERGED_DETAIL_QUERY, PRS_QUERY, STATS_QUERY,
 };
 use chrono::{DateTime, Duration, Utc};
 use octocrab::Octocrab;
@@ -17,6 +17,11 @@ use serde_json::json;
 pub enum ClientError {
     #[error("GitHub request failed: {0}")]
     Api(#[from] octocrab::Error),
+    /// A concurrent chunk task panicked or was cancelled. Surfaced rather
+    /// than ignored: silently dropping a chunk would render a short series
+    /// that looks like real data.
+    #[error("history fetch task failed: {0}")]
+    Join(String),
 }
 
 pub struct GitHubClient {
@@ -68,6 +73,70 @@ impl GitHubClient {
 
     /// The chart's daily merged/opened series plus all four period-delta
     /// cards, in one request built by `history_query_with_periods`.
+    /// Day-bucket chunks, fetched CONCURRENTLY and merged.
+    ///
+    /// GitHub evaluates search aliases serially, so one large query is slow
+    /// (measured: 30 aliases = 7.8s). Small chunks in parallel finish in
+    /// roughly the time of the slowest one -- 30 days dropped from 17s to
+    /// ~3s. Chunk count is bounded by `days / HISTORY_CHUNK_DAYS`, so at the
+    /// 90-day clamp this is 18 concurrent requests at 1 point each.
+    async fn fetch_history_values(
+        &self,
+        now: DateTime<Utc>,
+        days: i64,
+        with_periods: bool,
+    ) -> Result<serde_json::Value, ClientError> {
+        let mut set = tokio::task::JoinSet::new();
+        let mut start = 0;
+        while start < days {
+            let len = (days - start).min(HISTORY_CHUNK_DAYS);
+            let q = if start == 0 && with_periods {
+                history_query_range_with_periods(now, start, len)
+            } else {
+                history_query_range(now, start, len)
+            };
+            let oc = self.octocrab.clone();
+            set.spawn(async move {
+                oc.graphql::<serde_json::Value>(&json!({ "query": q }))
+                    .await
+            });
+            start += len;
+        }
+
+        let mut merged = serde_json::Map::new();
+        while let Some(joined) = set.join_next().await {
+            // A panicked task would otherwise be swallowed and show up as a
+            // silently short series, so it is surfaced as an error.
+            let chunk = joined.map_err(|e| ClientError::Join(e.to_string()))??;
+            if let Some(obj) = chunk.as_object() {
+                // Alias indices are absolute, so chunks merge in any
+                // completion order without renumbering or clobbering.
+                for (k, val) in obj {
+                    merged.insert(k.clone(), val.clone());
+                }
+            }
+        }
+        Ok(serde_json::Value::Object(merged))
+    }
+
+    /// Just the period comparisons -- one small request so the delta cards
+    /// can render without waiting on the daily series.
+    pub async fn fetch_periods(&self, now: DateTime<Utc>) -> Result<Periods, ClientError> {
+        let v: serde_json::Value = self
+            .octocrab
+            .graphql(&json!({ "query": periods_query(now) }))
+            .await?;
+        let count = |k: &str| v[k]["issueCount"].as_u64().unwrap_or(0);
+        Ok(Periods {
+            week_current: count("week_current"),
+            week_previous: count("week_previous"),
+            opened_week_current: count("opened_week_current"),
+            opened_week_previous: count("opened_week_previous"),
+            month_current: count("month_current"),
+            month_previous: count("month_previous"),
+        })
+    }
+
     pub async fn fetch_history(
         &self,
         now: DateTime<Utc>,
@@ -77,26 +146,7 @@ impl GitHubClient {
         // `search` aliases -- see HISTORY_CHUNK_DAYS. The first chunk also
         // carries the six period aliases, so a 30-day fetch is two requests
         // and two rate-limit points rather than one request that fails.
-        let mut merged = serde_json::Map::new();
-        let mut start = 0;
-        while start < days {
-            let len = (days - start).min(HISTORY_CHUNK_DAYS);
-            let q = if start == 0 {
-                history_query_range_with_periods(now, start, len)
-            } else {
-                history_query_range(now, start, len)
-            };
-            let chunk: serde_json::Value = self.octocrab.graphql(&json!({ "query": q })).await?;
-            if let Some(obj) = chunk.as_object() {
-                // Alias indices are absolute, so chunks merge without
-                // renumbering and a later chunk cannot clobber an earlier.
-                for (k, val) in obj {
-                    merged.insert(k.clone(), val.clone());
-                }
-            }
-            start += len;
-        }
-        let v = serde_json::Value::Object(merged);
+        let v = self.fetch_history_values(now, days, true).await?;
         let count = |k: &str| v[k]["issueCount"].as_u64().unwrap_or(0);
         Ok(History {
             points: map_history(&v, days, now),
@@ -309,7 +359,18 @@ mod tests {
         let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let c = GitHubClient::new(crate::auth::build_client(&token).unwrap());
 
+        let tp = std::time::Instant::now();
+        let p = c.fetch_periods(Utc::now()).await.unwrap();
+        println!(
+            "TIMING fetch_periods = {:?} (week {}/{})",
+            tp.elapsed(),
+            p.week_current,
+            p.week_previous
+        );
+
+        let t0 = std::time::Instant::now();
         let h = c.fetch_history(Utc::now(), 30).await.unwrap();
+        println!("TIMING fetch_history(30) = {:?}", t0.elapsed());
         println!(
             "POINTS={} WEEK={}/{} MONTH={}/{}",
             h.points.len(),

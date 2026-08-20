@@ -3,7 +3,7 @@
 //! [`crate::poll`] emits in the background.
 
 use crate::github::client::GitHubClient;
-use crate::github::model::{History, MergedDetail, PullRequest, Stats};
+use crate::github::model::{History, MergedDetail, Periods, PullRequest, Stats};
 use crate::store::{load_snapshot, open_db};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
@@ -58,6 +58,18 @@ pub async fn get_stats(client: State<'_, GhClient>) -> Result<Stats, String> {
         .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
     client
         .fetch_stats(chrono::Utc::now())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_periods(client: State<'_, GhClient>) -> Result<Periods, String> {
+    let client = client
+        .0
+        .clone()
+        .ok_or_else(|| "not authenticated: run `gh auth login`".to_string())?;
+    client
+        .fetch_periods(chrono::Utc::now())
         .await
         .map_err(|e| e.to_string())
 }

@@ -2,7 +2,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect, useSyncExternalStore } from "react";
 import type { PullRequest } from "../types/pr";
-import { getCached, getHistory, getMergedDetail, getStats, refreshNow } from "./tauri";
+import {
+  getCached,
+  getHistory,
+  getMergedDetail,
+  getPeriods,
+  getStats,
+  refreshNow,
+} from "./tauri";
 
 /// The PR list. Seeded from the SQLite snapshot so the first paint shows
 /// real content, then reconciled by the Rust poll loop via `prs-updated`.
@@ -164,7 +171,20 @@ export function usePollError(): string | null {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
-/// History drives the delta cards and the activity chart.
+/// The period comparisons behind the delta cards.
+///
+/// Separate from `useHistory` so the four headline numbers appear in about
+/// a second rather than waiting on the whole daily series. Same staleTime,
+/// so the two stay consistent within a session.
+export function usePeriods() {
+  return useQuery({
+    queryKey: ["periods"],
+    queryFn: getPeriods,
+    staleTime: 5 * 60 * 1000,
+  });
+}
+
+/// The daily series behind the activity chart.
 ///
 /// Held for five minutes rather than the list's live cadence: these counts
 /// move on the order of hours, and the query is only mounted while the

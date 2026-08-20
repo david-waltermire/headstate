@@ -69,6 +69,17 @@ export interface History {
   month_previous: number;
 }
 
+/// The period comparisons alone. Fetched separately from the daily series
+/// so the delta cards can render while the chart is still loading.
+export interface Periods {
+  week_current: number;
+  week_previous: number;
+  opened_week_current: number;
+  opened_week_previous: number;
+  month_current: number;
+  month_previous: number;
+}
+
 export interface RepoCount {
   repo: string;
   merged: number;

@@ -1,7 +1,7 @@
 import { ArrowDown, ArrowUp, Minus } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { formatPct, pctChange, percentile } from "@/lib/stats";
-import type { History, MergedDetail } from "@/types/pr";
+import type { MergedDetail, Periods } from "@/types/pr";
 
 /// A single headline number with its change against the prior period.
 ///
@@ -46,10 +46,10 @@ function DeltaCard({
 /// would be quietly comparing something different from what the reader
 /// assumes.
 export function DeltaCards({
-  history,
+  periods,
   detail,
 }: {
-  history: History;
+  periods: Periods;
   detail: MergedDetail | undefined;
 }) {
   const median = detail ? percentile(detail.cycle_time_hours, 0.5) : 0;
@@ -58,20 +58,20 @@ export function DeltaCards({
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <DeltaCard
         label="Merged this week"
-        value={String(history.week_current)}
-        delta={pctChange(history.week_current, history.week_previous)}
+        value={String(periods.week_current)}
+        delta={pctChange(periods.week_current, periods.week_previous)}
         window="vs previous 7 days"
       />
       <DeltaCard
         label="Opened this week"
-        value={String(history.opened_week_current)}
-        delta={pctChange(history.opened_week_current, history.opened_week_previous)}
+        value={String(periods.opened_week_current)}
+        delta={pctChange(periods.opened_week_current, periods.opened_week_previous)}
         window="vs previous 7 days"
       />
       <DeltaCard
         label="Merged this month"
-        value={String(history.month_current)}
-        delta={pctChange(history.month_current, history.month_previous)}
+        value={String(periods.month_current)}
+        delta={pctChange(periods.month_current, periods.month_previous)}
         window="vs previous 30 days"
       />
       <DeltaCard

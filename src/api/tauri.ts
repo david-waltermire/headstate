@@ -7,7 +7,7 @@
 /// render on `get_auth_state` before anything else calls in.
 
 import { invoke } from "@tauri-apps/api/core";
-import type { History, MergedDetail, PullRequest, Stats } from "../types/pr";
+import type { History, MergedDetail, Periods, PullRequest, Stats } from "../types/pr";
 
 export interface AuthState {
   ok: boolean;
@@ -27,8 +27,12 @@ export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 /// always come back zero today. Does not persist to SQLite.
 export const getStats = () => invoke<Stats>("get_stats");
 
-/// The daily opened/merged series plus period comparisons, in a single
-/// GraphQL request. `days` is clamped to 1..=90 on the Rust side.
+/// The period comparisons alone -- one small request (~1.6s) so the delta
+/// cards paint without waiting on the daily series.
+export const getPeriods = () => invoke<Periods>("get_periods");
+
+/// The daily opened/merged series plus period comparisons. Fetched as
+/// concurrent chunks on the Rust side. `days` is clamped to 1..=90.
 export const getHistory = (days: number) => invoke<History>("get_history", { days });
 
 /// Aggregates over the most recent 100 merged PRs. A separate command from

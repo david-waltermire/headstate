@@ -57,11 +57,15 @@ query {
 
 /// Days per request when fetching history.
 ///
-/// Each day costs two `search` aliases, and the first chunk carries six
-/// more for the period comparisons, so this caps a request at 36 aliases --
-/// measured reliable at 5/5, comfortably under the ~44 where GitHub starts
+/// Sized for LATENCY, not just the 502 ceiling. GitHub evaluates search
+/// aliases serially, so response time scales with alias count: measured
+/// 30 aliases = 7.8s but 10 aliases = 2.8s. Chunks are fetched
+/// concurrently, so total wall-clock is roughly one chunk rather than the
+/// sum -- 30 days went from 17s serial to ~3s.
+///
+/// 5 days = 10 aliases, far under the ~44 where GitHub starts
 /// intermittently returning 502 Bad Gateway.
-pub const HISTORY_CHUNK_DAYS: i64 = 15;
+pub const HISTORY_CHUNK_DAYS: i64 = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeriodRanges {
@@ -137,6 +141,29 @@ pub fn period_ranges(now: DateTime<Utc>) -> PeriodRanges {
 /// the two are never allowed to drift out of sync.
 pub fn history_query_with_periods(now: DateTime<Utc>, days: i64) -> String {
     history_query_range_with_periods(now, 0, days)
+}
+
+/// Just the six period-comparison aliases.
+///
+/// Split out so the delta cards can render from one small, fast request
+/// rather than waiting on the whole daily series.
+pub fn periods_query(now: DateTime<Utc>) -> String {
+    let r = period_ranges(now);
+    let mut q = String::from("query {\n");
+    let mut add = |alias: &str, filter: &str, range: &(String, String)| {
+        q.push_str(&format!(
+            "  {alias}: search(query: \"is:pr author:@me {filter}{}..{}\", type: ISSUE) {{ issueCount }}\n",
+            range.0, range.1
+        ));
+    };
+    add("week_current", "is:merged merged:", &r.week_current);
+    add("week_previous", "is:merged merged:", &r.week_previous);
+    add("opened_week_current", "created:", &r.week_current);
+    add("opened_week_previous", "created:", &r.week_previous);
+    add("month_current", "is:merged merged:", &r.month_current);
+    add("month_previous", "is:merged merged:", &r.month_previous);
+    q.push_str("}\n");
+    q
 }
 
 /// The first chunk of a chunked fetch: day buckets plus the six period
@@ -226,18 +253,22 @@ mod tests {
     // The combined query must stay valid GraphQL: exactly one top-level
     // brace pair, with the period aliases INSIDE it.
     // GitHub 502s on too many concurrent search aliases, intermittently
-    // from ~44. A chunk must stay well under that: 15 days x 2 aliases,
-    // plus 6 period aliases in the first chunk, is 36.
+    // from ~44, and latency scales with alias count besides. A chunk must
+    // stay well under that ceiling at whatever HISTORY_CHUNK_DAYS is set to.
     #[test]
     fn a_chunk_stays_under_the_alias_ceiling() {
         let now = at("2026-08-20T14:00:00Z");
         let first = history_query_range_with_periods(now, 0, HISTORY_CHUNK_DAYS);
         let rest = history_query_range(now, HISTORY_CHUNK_DAYS, HISTORY_CHUNK_DAYS);
-        assert_eq!(first.matches("search(").count(), 36);
-        assert_eq!(rest.matches("search(").count(), 30);
+        // Two aliases per day, plus six period aliases in the first chunk.
+        let per_chunk = (HISTORY_CHUNK_DAYS * 2) as usize;
+        assert_eq!(first.matches("search(").count(), per_chunk + 6);
+        assert_eq!(rest.matches("search(").count(), per_chunk);
+        // Derived from the constant, so changing the chunk size cannot
+        // silently drift past the ceiling.
         assert!(
             first.matches("search(").count() <= 40,
-            "too close to the 502 ceiling"
+            "chunk too close to the ~44-alias 502 ceiling"
         );
     }
 

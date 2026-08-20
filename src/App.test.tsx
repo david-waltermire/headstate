@@ -15,6 +15,17 @@ vi.mock("./api/hooks", () => ({
   useRefreshRequested: () => undefined,
   // StatsPage owns these; this suite only asserts the shell's layout, so
   // they return a settled empty result rather than real figures.
+  usePeriods: () => ({
+    data: {
+      week_current: 0,
+      week_previous: 0,
+      opened_week_current: 0,
+      opened_week_previous: 0,
+      month_current: 0,
+      month_previous: 0,
+    },
+    isLoading: false,
+  }),
   useHistory: () => ({
     data: {
       points: [],

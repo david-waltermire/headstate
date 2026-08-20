@@ -97,6 +97,16 @@ pub struct MergedDetail {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Periods {
+    pub week_current: u64,
+    pub week_previous: u64,
+    pub opened_week_current: u64,
+    pub opened_week_previous: u64,
+    pub month_current: u64,
+    pub month_previous: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct History {
     pub points: Vec<HistoryPoint>,
     pub week_current: u64,
