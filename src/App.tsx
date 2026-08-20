@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { usePullRequests, useRefreshRequested, useStats } from "./api/hooks";
 import { Dashboard } from "./components/Dashboard";
 import { FilterBar } from "./components/FilterBar";
+import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
 import { PrList } from "./components/PrList";
 import { RepoSidebar } from "./components/RepoSidebar";
@@ -35,16 +36,21 @@ export default function App() {
   // call site applies it.
   const visible = sortPrs(applyFilters(prs, filters), filters.sort);
 
-  // PrioritiesStrip and FilterBar deliberately see the *unfiltered* `prs`,
-  // while PrList sees `visible` (filtered + sorted):
-  //  - PrioritiesStrip: something blocked on you is blocked regardless of
-  //    what filters you currently have applied to the list below it.
-  //  - FilterBar: its label menu should offer every label present across
-  //    all open PRs, not shrink to only the labels that survive whatever
-  //    filter is already active.
-  // On real data this means the strip's count and the list's count can
-  // legitimately disagree (e.g. strip says 13 blocked, filtered list shows
-  // 3) -- that is intentional, not a bug.
+  // The priorities strip is scoped to the selected repo, matching the page
+  // it sits on: on `octocat/hello-world` you want that repo's blocked PRs,
+  // not a list dominated by nine other repos you are not looking at. The
+  // dashboard is the whole-account view, so its strip spans every repo.
+  //
+  // Note this scopes by REPO only, not by the rest of the filters. Something
+  // blocked on you stays blocked whether or not you happen to be filtering
+  // by label, so a label filter must not hide it -- but a repo selection is
+  // a change of page, and the strip should follow.
+  const scopedForStrip = filters.repo ? prs.filter((pr) => pr.repo === filters.repo) : prs;
+
+  // FilterBar still sees the *unfiltered* `prs`: its label menu should offer
+  // every label present across all open PRs, not shrink to only the labels
+  // that survive whatever filter is already active, which would make some
+  // combinations unreachable.
   return (
     <div className="flex h-screen bg-[#0d1117] text-[#e6edf3]">
       <RepoSidebar prs={prs} />
@@ -64,13 +70,21 @@ export default function App() {
           >
             Dashboard
           </Button>
+          <div className="ml-auto">
+            <NudgeWizard prs={prs} />
+          </div>
         </header>
 
         {view === "dashboard" ? (
-          <Dashboard prs={prs} stats={stats ?? { merged_week: 0, merged_month: 0 }} />
+          <div className="p-4">
+            {/* The dashboard is the whole-account view, so its strip spans
+                every repo regardless of any repo selection in the sidebar. */}
+            <PrioritiesStrip prs={prs} />
+            <Dashboard prs={prs} stats={stats ?? { merged_week: 0, merged_month: 0 }} />
+          </div>
         ) : (
           <div className="p-4">
-            <PrioritiesStrip prs={prs} />
+            <PrioritiesStrip prs={scopedForStrip} />
             <FilterBar prs={prs} />
             {isLoading ? (
               // `get_cached` returns `[]` both for "never polled" and for

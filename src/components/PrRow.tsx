@@ -2,7 +2,6 @@ import { Check, GitPullRequest, X } from "lucide-react";
 import type { PullRequest } from "@/types/pr";
 import { labelForeground } from "@/lib/labels";
 import { relativeTime } from "@/lib/time";
-import { Checkbox } from "@/components/ui/checkbox";
 
 /// GitHub shows a check for green CI, an X for red CI, and nothing for
 /// "pending"/"none" -- there is no neutral glyph on the real page, so we
@@ -20,7 +19,6 @@ function CiGlyph({ pr }: { pr: PullRequest }) {
 export function PrRow({ pr }: { pr: PullRequest }) {
   return (
     <div className="flex gap-3 border-b border-[#30363d] px-4 py-3 last:border-b-0 hover:bg-[#161b22]">
-      <Checkbox className="mt-1" aria-label={`Select PR ${pr.number}`} />
       <GitPullRequest
         className="mt-0.5 h-4 w-4 shrink-0 text-[#3fb950]"
         aria-hidden="true"

@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # CI actions are pinned to full commit SHAs (see ci.yml) with a trailing
+  # `# vX.Y.Z` comment for readability. Dependabot updates the SHA and
+  # rewrites that comment to match the new release -- that's the intended
+  # behaviour, not a diff to second-guess in review.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: cargo
+    directory: "/src-tauri"
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
