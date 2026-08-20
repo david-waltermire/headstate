@@ -3,6 +3,8 @@ import type { PullRequest, Stats } from "../types/pr";
 export const STALE_DAYS = 3;
 
 export interface Filters {
+  /// Free-text match over title, repo, and PR number. Case-insensitive.
+  query?: string;
   repo?: string;
   readyOnly?: boolean;
   draftsOnly?: boolean;
@@ -59,7 +61,8 @@ const hasLabel = (pr: PullRequest, names: string[]) =>
 /// blaming filters the user did not set.
 export function hasActiveFilters(f: Filters): boolean {
   return Boolean(
-    f.readyOnly ||
+    f.query ||
+      f.readyOnly ||
       f.draftsOnly ||
       f.ci ||
       f.review ||
@@ -73,6 +76,22 @@ export function hasActiveFilters(f: Filters): boolean {
   );
 }
 
+/// Does a PR match a free-text query?
+///
+/// Title, repository, and number, because those are what a person
+/// remembers about a PR they are looking for. A bare "#123" or "123" both
+/// match the number.
+function matchesQuery(pr: PullRequest, q: string): boolean {
+  const needle = q.trim().toLowerCase();
+  if (needle === "") return true;
+  const bare = needle.startsWith("#") ? needle.slice(1) : needle;
+  return (
+    pr.title.toLowerCase().includes(needle) ||
+    pr.repo.toLowerCase().includes(needle) ||
+    String(pr.number) === bare
+  );
+}
+
 export function applyFilters(
   prs: PullRequest[],
   f: Filters,
@@ -80,6 +99,7 @@ export function applyFilters(
 ): PullRequest[] {
   return prs.filter((pr) => {
     if (f.repo && pr.repo !== f.repo) return false;
+    if (f.query && !matchesQuery(pr, f.query)) return false;
     if (f.readyOnly && pr.is_draft) return false;
     if (f.draftsOnly && !pr.is_draft) return false;
     if (f.ci && pr.ci !== f.ci) return false;

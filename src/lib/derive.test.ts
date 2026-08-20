@@ -182,3 +182,34 @@ describe("deriveStats", () => {
     expect(s.ready_to_queue).toBe(1);
   });
 });
+
+describe("free-text search", () => {
+  const prs = PR_FIXTURES;
+
+  it("matches on title, case-insensitively", () => {
+    const hit = applyFilters(prs, { query: "RETRY" });
+    expect(hit.length).toBeGreaterThan(0);
+    expect(hit.every((p) => p.title.toLowerCase().includes("retry"))).toBe(true);
+  });
+
+  it("matches on repository", () => {
+    const hit = applyFilters(prs, { query: "spoon" });
+    expect(hit.every((p) => p.repo.includes("spoon"))).toBe(true);
+  });
+
+  // A person searching for a PR usually remembers its number.
+  it("matches an exact PR number, with or without the hash", () => {
+    expect(applyFilters(prs, { query: "42" }).map((p) => p.number)).toContain(42);
+    expect(applyFilters(prs, { query: "#42" }).map((p) => p.number)).toContain(42);
+  });
+
+  it("does not partial-match numbers", () => {
+    // "4" must not match #42 -- substring matching on numbers would make
+    // a number search useless on a long list.
+    expect(applyFilters(prs, { query: "4" }).map((p) => p.number)).not.toContain(42);
+  });
+
+  it("an empty or whitespace query filters nothing", () => {
+    expect(applyFilters(prs, { query: "   " }).length).toBe(prs.length);
+  });
+});

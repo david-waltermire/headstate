@@ -1,3 +1,6 @@
+import { emit } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect } from "react";
 import {
   usePullRequests,
   useRefreshRequested,
@@ -13,6 +16,7 @@ import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { StatsPage } from "./components/StatsPage";
 import { applyFilters, hasActiveFilters, sortPrs } from "./lib/derive";
+import { shortcutFor } from "./lib/shortcuts";
 import { useFilters } from "./store/filters";
 
 /// The assembled app shell. `AuthGate` already wraps this component once in
@@ -28,6 +32,28 @@ export default function App() {
   useRefreshRequested();
   const truncatedTotal = useTruncation();
   const { data: reviewing = [] } = useReviewing();
+
+  // The app had no keyboard affordances at all. These three need no
+  // backend change: `refresh-requested` already exists and the window
+  // already hides to the tray on close.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = shortcutFor(e);
+      if (!action) return;
+      e.preventDefault();
+      if (action === "onRefresh") {
+        void emit("refresh-requested", null);
+      } else if (action === "onHide") {
+        void getCurrentWindow().hide();
+      } else {
+        const el = document.querySelector<HTMLInputElement>('input[type="search"]');
+        el?.focus();
+        el?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Splash dismissal deliberately does NOT live here. `App` only mounts
   // when auth succeeds, so dismissing on `isSuccess` left every

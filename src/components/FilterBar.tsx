@@ -49,6 +49,17 @@ export function FilterBar({ prs }: { prs: PullRequest[] }) {
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-[#30363d] bg-[#161b22] px-4 py-2 text-sm">
+      {/* No search existed at all, and a Tauri webview has no Cmd+F
+          fallback. Filtering happens client-side over an already-fetched
+          list, so this costs no API call and needs no debounce. */}
+      <input
+        type="search"
+        value={filters.query ?? ""}
+        onChange={(e) => setFilter("query", e.target.value || undefined)}
+        placeholder="Search title, repo, or #number"
+        aria-label="Search pull requests"
+        className="w-64 rounded border border-[#30363d] bg-[#0d1117] px-2 py-1 text-sm text-[#e6edf3] placeholder:text-[#8b949e]"
+      />
       <DropdownMenu>
         <DropdownMenuTrigger
           render={
