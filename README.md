@@ -50,6 +50,11 @@ launch, clear the quarantine flag:
 xattr -dr com.apple.quarantine /Applications/Headstate.app
 ```
 
+Once per install, not once per launch. The flag is set by the browser on
+download, so a copy you build yourself with `make build` never has it and
+runs without this step. Releases are universal binaries — one download
+works on both Apple Silicon and Intel.
+
 ## What it shows
 
 **Pull request list.** Every open PR you authored, across every repo you

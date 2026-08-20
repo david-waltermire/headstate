@@ -147,6 +147,35 @@ describe("NudgeWizard", () => {
     expect(writeText).not.toHaveBeenCalled();
   });
 
+  /// #41: a repo selected in the sidebar already answers "which
+  /// repositories?", so the wizard must not ask again.
+  it("skips the repo step when a repo is already selected", () => {
+    render(<NudgeWizard prs={PR_FIXTURES} scopedRepo="octocat/hello-world" />);
+    fireEvent.click(screen.getByRole("button", { name: /request reviews/i }));
+
+    expect(screen.queryByText(/Which repositories/i)).toBeNull();
+    // Opens directly on the filter step, and Back cannot walk into the
+    // step that was skipped.
+    expect(screen.getByRole("button", { name: /back/i }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it("still asks which repositories when none is selected", () => {
+    render(<NudgeWizard prs={PR_FIXTURES} />);
+    fireEvent.click(screen.getByRole("button", { name: /request reviews/i }));
+    expect(screen.getByText(/Which repositories/i)).toBeDefined();
+  });
+
+  /// The generated text must contain only the scoped repo's PRs -- asserting
+  /// contents, not that a prop was passed.
+  it("scopes the generated output to the selected repo", () => {
+    render(<NudgeWizard prs={PR_FIXTURES} scopedRepo="octocat/spoon-knife" />);
+    fireEvent.click(screen.getByRole("button", { name: /request reviews/i }));
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+
+    const preview = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(preview.value).not.toContain("octocat/hello-world");
+  });
+
   it("resets to step 0 after closing", () => {
     render(<NudgeWizard prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByRole("button", { name: /request reviews/i }));

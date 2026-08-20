@@ -12,6 +12,12 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
+    # Hoisted to job level so the signing step's `if:` can test a plain env
+    # var. A step-level `if: secrets.X != ''` is not reliably evaluatable --
+    # the secrets context is not guaranteed available there, and the whole
+    # workflow fails to start rather than skipping the step.
+    env:
+      HAS_SIGNING_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
@@ -21,6 +27,45 @@ jobs:
       # its target added explicitly.
       - name: Add Intel target
         run: rustup target add x86_64-apple-darwin
+
+      # The tag is the single source of truth for the version. Without this,
+      # tagging v0.2.0 still produces Headstate_0.1.0_universal.dmg and an
+      # About box reading 0.1.0, because Tauri derives both from
+      # tauri.conf.json -- a mismatch a user downloading from the release
+      # page has no way to explain. Stamping here rather than committing a
+      # bump keeps the three version fields from drifting apart, and the
+      # edits are never committed: the tag already records the version.
+      - name: Stamp version from tag
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          case "$VERSION" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH" >&2; exit 1 ;;
+          esac
+          python3 - "$VERSION" <<'PY'
+          import re, sys
+          version = sys.argv[1]
+
+          # Targeted substitution rather than a JSON round-trip: json.dump
+          # reflows inline arrays, which would bury the one real change in
+          # cosmetic noise in the CI log. Each pattern is anchored to the
+          # top-level "version" key, and count=1 stops it reaching a
+          # dependency's version further down.
+          for path in ("package.json", "src-tauri/tauri.conf.json"):
+              text = open(path).read()
+              text, n = re.subn(r'("version"\s*:\s*)"[^"]+"', rf'\g<1>"{version}"', text, count=1)
+              assert n == 1, f"no version key found in {path}"
+              open(path, "w").write(text)
+
+          cargo = open("src-tauri/Cargo.toml").read()
+          cargo, n = re.subn(r'^version = "[^"]+"', f'version = "{version}"', cargo, count=1, flags=re.M)
+          assert n == 1, "no [package] version found in Cargo.toml"
+          open("src-tauri/Cargo.toml", "w").write(cargo)
+          print(f"stamped {version}")
+          PY
+          grep -m1 '"version"' src-tauri/tauri.conf.json
+          grep -m1 '^version' src-tauri/Cargo.toml
 
       # --- Code signing (currently inert; see #23) -----------------------
       #
@@ -40,7 +85,7 @@ jobs:
       # See CONTRIBUTING.md "Code signing" for the full checklist of what
       # to generate and where to add it.
       - name: Import Apple Developer Certificate
-        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        if: env.HAS_SIGNING_CERT == 'true'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

@@ -38,17 +38,33 @@ interface RepoSelection {
 /// network request. It only ever composes a string and hands it to
 /// `navigator.clipboard`. "Nudge" means "compose text to paste," never
 /// "post a comment" or "request a review via the API."
-export function NudgeWizard({ prs }: { prs: PullRequest[] }) {
+export function NudgeWizard({
+  prs,
+  scopedRepo,
+}: {
+  prs: PullRequest[];
+  /// The repo currently selected in the sidebar, if any. When set, the repo
+  /// step is skipped: the user answered "which repositories?" by navigating
+  /// to that page, and asking again is a question they have already
+  /// answered. `undefined` means "All repositories" and the step appears.
+  scopedRepo?: string;
+}) {
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState(0);
+  // Skipping the repo step means the wizard opens on step 1, and `Back`
+  // must not walk into a step that is not reachable in this mode.
+  const firstStep = scopedRepo ? 1 : 0;
+  const [step, setStep] = useState(firstStep);
   const [selection, setSelection] = useState<RepoSelection>({ repos: [] });
   const [filters, setFilters] = useState<Filters>({ readyOnly: true });
   const [opts, setOpts] = useState<NudgeOptions>({ annotate: true });
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
 
+  // A sidebar repo selection wins over the (skipped) checklist. Falling back
+  // to `selection.repos` keeps the unscoped path unchanged.
+  const activeRepos = scopedRepo ? [scopedRepo] : selection.repos;
   const scoped = prs.filter(
-    (pr) => selection.repos.length === 0 || selection.repos.includes(pr.repo),
+    (pr) => activeRepos.length === 0 || activeRepos.includes(pr.repo),
   );
   const matched = applyFilters(scoped, filters);
 
@@ -63,7 +79,10 @@ export function NudgeWizard({ prs }: { prs: PullRequest[] }) {
   const text = formatNudge(matched, opts);
 
   const reset = () => {
-    setStep(0);
+    // Back to the first REACHABLE step, not step 0 -- in scoped mode step 0
+    // does not exist, and resetting to it would strand the user on a blank
+    // panel with a disabled Back button.
+    setStep(firstStep);
     setSelection({ repos: [] });
     setFilters({ readyOnly: true });
     setOpts({ annotate: true });
@@ -73,7 +92,12 @@ export function NudgeWizard({ prs }: { prs: PullRequest[] }) {
 
   const handleOpenChange = (next: boolean) => {
     setOpen(next);
-    if (!next) reset();
+    // Reset on OPEN as well as close. Closing, changing the sidebar repo,
+    // and reopening changes `firstStep` while `step` still holds the old
+    // value -- in scoped mode that leaves the wizard sitting on a step that
+    // no longer exists. Resetting on open makes the scope current every
+    // time, which is also what a user expects after navigating.
+    reset();
   };
 
   const toggleRepo = (repo: string, checked: boolean) => {
@@ -211,7 +235,11 @@ export function NudgeWizard({ prs }: { prs: PullRequest[] }) {
         )}
 
         <div className="flex items-center justify-between">
-          <Button variant="ghost" disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
+          <Button
+            variant="ghost"
+            disabled={step === firstStep}
+            onClick={() => setStep((s) => Math.max(firstStep, s - 1))}
+          >
             Back
           </Button>
           {step < STEP_COUNT - 1 ? (

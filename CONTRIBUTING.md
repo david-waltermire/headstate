@@ -89,6 +89,47 @@ make build            # or: yarn tauri build
 — it's specifically *building the app bundle* that needs to go through
 `tauri build`, since only that path runs `beforeBuildCommand`.
 
+## Cutting a release
+
+Releases are driven entirely by tags. There is nothing to click and no
+version to bump by hand:
+
+```
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+That fires `.github/workflows/release.yml`, which:
+
+1. **Stamps the version from the tag** into `package.json`,
+   `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`. The tag is the
+   single source of truth — those three files stay at whatever they say in
+   `main` and are only rewritten inside the CI job, never committed. Without
+   this, tagging `v0.2.0` would ship `Headstate_0.1.0_universal.dmg` and an
+   About box reading `0.1.0`.
+2. Builds a **universal** binary (Apple Silicon + Intel), so one download
+   runs on both.
+3. Signs and notarizes it **if** the Apple secrets are present (see below).
+   They are not today, so this step is skipped.
+4. Creates the GitHub Release with the `.dmg` and a `.app.tar.gz`, and
+   generates release notes from the commits since the last tag.
+
+The tag must be `vMAJOR.MINOR.PATCH`. Anything else (`v1.2`, `latest`,
+`vfoo`) fails the job early with a clear message rather than publishing a
+mislabelled build.
+
+**The release notes adapt to the signing state on their own.** While
+releases are unsigned, every release gets the `xattr -dr
+com.apple.quarantine` instruction prepended automatically. Once the signing
+secrets exist, that text is replaced with a note that the build is signed
+and notarized — no edit to the workflow, and no stale instruction left
+behind for users to follow unnecessarily.
+
+To undo a bad tag before anyone downloads it, delete it locally and
+remotely (`git tag -d v0.2.0 && git push origin :v0.2.0`) and delete the
+GitHub Release. Re-tagging the same version works, but only if the release
+and tag are both gone first.
+
 ## Code signing (not active yet — #23 stays open)
 
 Releases ship **unsigned** today. `.github/workflows/release.yml` has the

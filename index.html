@@ -1,5 +1,10 @@
 <!doctype html>
-<html lang="en">
+<!-- `dark` is applied here, not toggled at runtime: the app is dark-only by
+     design (tauri.conf.json sets theme "Dark" and a #0d1117 window
+     background). Without it, index.css's :root light palette wins and every
+     shadcn component using theme tokens -- bg-popover, text-foreground --
+     renders white against the app's own hardcoded dark colours. -->
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />

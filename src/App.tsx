@@ -71,7 +71,9 @@ export default function App() {
             Dashboard
           </Button>
           <div className="ml-auto">
-            <NudgeWizard prs={prs} />
+            {/* scopedRepo skips the wizard's "which repositories?" step:
+                selecting a repo in the sidebar already answers it. */}
+            <NudgeWizard prs={prs} scopedRepo={filters.repo} />
           </div>
         </header>
 
