@@ -15,7 +15,10 @@ history, it's effectively permanent.
 
 CI enforces this on every push and PR via `scripts/check-privacy.sh`, which
 scans for `github.com/<owner>/<repo>` URLs, `git@github.com:<owner>/<repo>`
-SSH remotes, and `<owner>/<repo>#<number>` issue/PR shorthand.
+SSH remotes, `<owner>/<repo>#<number>` issue/PR shorthand, GitHub
+Enterprise Server URLs, `ssh://git@<host>/...git` clone URLs to any host,
+employer email addresses, Slack/Atlassian workspace URLs, and
+`PREFIX-NNNN`-shaped internal ticket IDs.
 
 This script is an **allow-list**, deliberately. A deny-list would have to
 spell out the very names it exists to keep out — putting them in the repo
@@ -34,6 +37,12 @@ Run the guard locally before you push:
 It should print `privacy check: clean`. If it doesn't, fix the reference
 (swap in synthetic data) rather than adding the real owner to the
 allow-list unless it's genuinely a public, legitimate dependency.
+
+The guard also refuses to run (exit 2) if you have **untracked files** in
+the working tree. `git grep`, which the guard uses, can only see tracked
+and staged content — an untracked file is invisible to it, so a "clean"
+result while one exists would be false. Run `git add` (or `git add -N` to
+stage without changing content) on any new files and re-run the guard.
 
 ## Workflow
 
@@ -80,7 +89,36 @@ make build            # or: yarn tauri build
 — it's specifically *building the app bundle* that needs to go through
 `tauri build`, since only that path runs `beforeBuildCommand`.
 
-## Scope
+## Code signing (not active yet — #23 stays open)
+
+Releases ship **unsigned** today. `.github/workflows/release.yml` has the
+signing and notarization steps wired in, guarded on the relevant secrets
+existing, but this repository has none of those secrets set, so every
+release build currently takes the unsigned path exactly as before —
+nothing changed for users. Signing switches on automatically, with no
+further workflow edits, the moment these repo secrets are added
+(Settings → Secrets and variables → Actions):
+
+| Secret | What it is |
+|---|---|
+| `APPLE_CERTIFICATE` | Base64-encoded `.p12` export of a **Developer ID Application** certificate (not Apple Distribution, not Apple Development — those don't work for distribution outside the App Store) |
+| `APPLE_CERTIFICATE_PASSWORD` | The password the `.p12` was exported with |
+| `KEYCHAIN_PASSWORD` | Any password; used only for the throwaway keychain CI creates to hold the imported cert |
+| `APPLE_ID` | The Apple ID email used for notarization |
+| `APPLE_PASSWORD` | An [app-specific password](https://support.apple.com/en-ca/HT204397) for that Apple ID — not the account password |
+| `APPLE_TEAM_ID` | The Apple Developer Team ID (found on the [membership page](https://developer.apple.com/account/#/membership)) |
+
+`APPLE_SIGNING_IDENTITY` is deliberately not listed as a secret to set —
+Tauri infers it from the imported `APPLE_CERTIFICATE` at build time, so
+there's nothing to hardcode ahead of having a real certificate.
+
+This project doesn't have a Developer ID cert yet: this machine only has
+Apple Distribution (App Store submission) and Apple Development (local
+testing) certificates, and the one Developer ID-equivalent certificate
+available belongs to an employer, not appropriate for a personal public
+repo. Getting a Developer ID Application certificate requires its own
+paid Apple Developer account. Until that exists, don't close #23 — the
+plumbing is ready, but nothing is actually signed.
 
 v1 is read-only by design — no PR mutation of any kind (no merge, comment,
 approve, close, or merge-queue action). If you're proposing a change that

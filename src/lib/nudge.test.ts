@@ -133,6 +133,26 @@ describe("formatNudge", () => {
     expect(formatNudge([running], { annotate: true })).toContain("(CI running)");
   });
 
+  /// #35: a green, approved PR already in the merge queue used to fall
+  /// through every branch and render with no annotation at all -- silence
+  /// indistinguishable from "nothing to report." It must say so instead.
+  it("annotates a PR already in the merge queue", () => {
+    const queued = prWithState("success", "mergeable", "approved", { in_merge_queue: true });
+    expect(formatNudge([queued], { annotate: true })).toContain("(in merge queue)");
+  });
+
+  /// #35 placement: a conflicted (or red) PR is still a problem worth
+  /// naming first, even if it's sitting in the merge queue -- the
+  /// needsAttention gate must win over the in_merge_queue check.
+  it("still annotates a queued PR that is also conflicted as needing a rebase", () => {
+    const queuedAndConflicted = prWithState("success", "conflicted", "approved", {
+      in_merge_queue: true,
+    });
+    const out = formatNudge([queuedAndConflicted], { annotate: true });
+    expect(out).toContain("(needs rebase)");
+    expect(out).not.toContain("(in merge queue)");
+  });
+
   it("omits annotations by default", () => {
     expect(formatNudge([approved], {})).not.toContain("(");
   });

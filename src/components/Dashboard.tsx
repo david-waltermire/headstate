@@ -21,11 +21,31 @@ import { StatCard } from "@/components/StatCard";
 /// is a triage view, and "what's newest in this bucket" is the useful
 /// starting order regardless of what the list was previously sorted by.
 ///
-/// The two historical cards ("merged this week/month") have no
+/// The two historical cards ("merged this week/month", #33) have no
 /// corresponding filter -- `usePullRequests()` only ever holds *open* PRs,
 /// and `Filters` has no merged/state predicate, so there is no preset that
-/// represents "PRs merged this week." Clicking them clears filters back to
-/// the full open list (`applyPreset({})`) rather than doing nothing.
+/// represents "PRs merged this week." The user decided the fix: instead of
+/// clearing filters back to the full open list (which used to disagree
+/// with the count shown), these two cards open the equivalent GitHub
+/// search in a browser via a plain `<a target="_blank" rel="noreferrer">`
+/// -- see `StatCard`'s `href` prop and `mergedSearchUrl` below. That makes
+/// these two cards structurally different from the other five (a link, not
+/// a filter-preset button), which is deliberate and confined to just these
+/// two.
+
+/// Builds the GitHub search URL for "PRs merged in the last N days," using
+/// the same query shape the Rust layer already uses for the count itself
+/// (`fetch_stats` in `src-tauri/src/github/client.rs`: `is:pr author:@me
+/// is:merged merged:>=<date>`), so the URL a card opens is guaranteed to
+/// return the same count that's on the card. `URLSearchParams` handles the
+/// percent-encoding, including turning the literal `@me` into `%40me` and
+/// `>=` into `%3E%3D`, so this never hand-encodes the query string.
+function mergedSearchUrl(days: number): string {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const q = `is:pr author:@me is:merged merged:>=${since}`;
+  return `https://github.com/pulls?${new URLSearchParams({ q }).toString()}`;
+}
+
 export function Dashboard({
   prs,
   stats,
@@ -41,12 +61,12 @@ export function Dashboard({
       <StatCard
         label="Merged this week"
         value={stats.merged_week}
-        onClick={() => applyPreset({})}
+        href={mergedSearchUrl(7)}
       />
       <StatCard
         label="Merged this month"
         value={stats.merged_month}
-        onClick={() => applyPreset({})}
+        href={mergedSearchUrl(30)}
       />
       <StatCard
         label="In merge queue"

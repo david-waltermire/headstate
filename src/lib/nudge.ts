@@ -22,14 +22,27 @@ export const GROUP_THRESHOLD = 3;
 /// message to show, it does not redefine *whether* the bucket applies. If
 /// `needsAttention`'s own logic changes, that flows through here for free.
 ///
-/// "(draft)" and "(CI running)" have no predicate to delegate to -- they
-/// are direct single-field reads (`is_draft`, `ci === "pending"`) with no
-/// compound condition to drift out of sync with.
+/// "(draft)", "(in merge queue)", and "(CI running)" have no predicate to
+/// delegate to -- they are direct single-field reads (`is_draft`,
+/// `in_merge_queue`, `ci === "pending"`) with no compound condition to
+/// drift out of sync with.
 function annotation(pr: PullRequest): string {
   if (needsAttention(pr)) {
     return pr.ci === "failure" ? " (CI failing)" : " (needs rebase)";
   }
   if (pr.is_draft) return " (draft)";
+  // #35: a green, approved PR already in the merge queue falls through
+  // every other branch -- readyToQueue requires !in_merge_queue and
+  // awaitingReview requires review to be none/review_required, neither of
+  // which holds once a PR is queued -- so without this branch it rendered
+  // identically to "nothing to report." This must come after the
+  // needsAttention gate (a conflicted or red PR that's still sitting in
+  // the queue is a problem worth naming first) and before
+  // readyToQueue/awaitingReview (which can't be true for a queued PR
+  // anyway, so ordering relative to them doesn't matter, but placing it
+  // here documents that this is the queue-specific case of "no action
+  // needed").
+  if (pr.in_merge_queue) return " (in merge queue)";
   if (readyToQueue(pr)) return " (green, approved)";
   if (awaitingReview(pr)) return " (green, awaiting review)";
   if (pr.ci === "pending") return " (CI running)";

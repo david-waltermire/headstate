@@ -22,9 +22,54 @@ describe("Dashboard", () => {
     expect(screen.getByText(/In merge queue/i)).toBeDefined();
   });
 
+  /// Five cards are filter-preset buttons; the two merged-history cards
+  /// (#33) are plain links to a GitHub search instead, since the app holds
+  /// no merged-PR list to filter to. `role="button"` + `role="link"` must
+  /// add up to all seven, or one of the two shapes silently dropped a card.
   it("renders all seven cards", () => {
     render(<Dashboard prs={PR_FIXTURES} stats={STATS} />);
-    expect(screen.getAllByRole("button").length).toBe(7);
+    expect(screen.getAllByRole("button").length).toBe(5);
+    expect(screen.getAllByRole("link").length).toBe(2);
+  });
+
+  /// #33: the two historical cards have no in-app list to filter to, so
+  /// they open the equivalent GitHub search in a browser -- a plain anchor
+  /// with `target="_blank" rel="noreferrer"`, exactly how `PrRow` already
+  /// opens PR links. The URL must use the same query shape as the Rust
+  /// `fetch_stats` count (`is:pr author:@me is:merged merged:>=<date>`) and
+  /// the correct 7-day/30-day window, encoded as a real GitHub search URL.
+  it("the merged-this-week card links to the matching GitHub search, opened in a new tab", () => {
+    render(<Dashboard prs={PR_FIXTURES} stats={STATS} />);
+    const link = screen.getByText(/Merged this week/i).closest("a")!;
+    const since = new Date(Date.now() - 7 * 86_400_000).toISOString().slice(0, 10);
+    expect(link.getAttribute("href")).toBe(
+      `https://github.com/pulls?q=is%3Apr+author%3A%40me+is%3Amerged+merged%3A%3E%3D${since}`,
+    );
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noreferrer");
+  });
+
+  it("the merged-this-month card links to the matching GitHub search with a 30-day window", () => {
+    render(<Dashboard prs={PR_FIXTURES} stats={STATS} />);
+    const link = screen.getByText(/Merged this month/i).closest("a")!;
+    const since = new Date(Date.now() - 30 * 86_400_000).toISOString().slice(0, 10);
+    expect(link.getAttribute("href")).toBe(
+      `https://github.com/pulls?q=is%3Apr+author%3A%40me+is%3Amerged+merged%3A%3E%3D${since}`,
+    );
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toBe("noreferrer");
+  });
+
+  /// The other five cards must keep working exactly as they do -- clicking
+  /// a merged-history link must never touch filter state, since it isn't a
+  /// preset click at all.
+  it("the merged cards do not affect filter state (they are links, not preset buttons)", () => {
+    useFilters.setState({ filters: { staleOnly: true }, view: "dashboard" });
+    render(<Dashboard prs={PR_FIXTURES} stats={STATS} />);
+    // jsdom anchors are inert (no real navigation), so this just confirms
+    // rendering a merged card never calls applyPreset as a side effect.
+    expect(useFilters.getState().filters).toEqual({ staleOnly: true });
+    expect(useFilters.getState().view).toBe("dashboard");
   });
 
   /// The one way this task most likely ships broken: rendering `get_stats`

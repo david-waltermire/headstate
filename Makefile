@@ -28,7 +28,21 @@ lint-ui:
 fmt:
 	cd src-tauri && cargo fmt
 
+# Requires Pillow: pip install -r scripts/requirements.txt
+#
+# `yarn tauri icon` also emits Windows/iOS/Android icon variants this
+# macOS-only app never uses, and its ICNS encoder is non-deterministic --
+# re-running against unchanged source art re-packs icon.icns with different
+# compressed-stream bytes even though every image inside is pixel-identical.
+# Restore the 1024 master over icon.png (as before), prune the unused
+# variants, and restore the committed icon.icns bytes when its *content*
+# (not raw bytes) matches what's already committed -- so a second run of
+# this target leaves `git status` clean.
 icons:
 	python3 scripts/make-icons.py
 	yarn tauri icon src-tauri/icons/icon.png
 	cp src-tauri/icons/icon-master.png src-tauri/icons/icon.png
+	rm -rf src-tauri/icons/android src-tauri/icons/ios
+	rm -f src-tauri/icons/icon.ico src-tauri/icons/StoreLogo.png
+	rm -f src-tauri/icons/Square*.png src-tauri/icons/64x64.png
+	python3 scripts/make-icons.py --restore-icns-if-unchanged

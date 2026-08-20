@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Generate macOS app and tray icons from the Headstate splash art.
 
+Requires Pillow (see scripts/requirements.txt): pip install -r scripts/requirements.txt
+
+Source art defaults to the committed `public/splash.png`, falling back to
+`~/Downloads/Headstate-Splash-1600x1000.png` if present (useful for
+regenerating icons from a freshly-exported splash before it's committed).
+
 Two very different targets:
 
 * App icon: 1024x1024 sRGB PNG with alpha. macOS does NOT mask app icons
@@ -21,14 +27,26 @@ requires `icon.png` itself to remain the 1024x1024 master, the `icons` Make
 target restores it from `icon-master.png` after `yarn tauri icon` runs.
 """
 
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-SPLASH = Path.home() / "Downloads" / "Headstate-Splash-1600x1000.png"
-ICONS = Path(__file__).resolve().parent.parent / "src-tauri" / "icons"
-PUBLIC = Path(__file__).resolve().parent.parent / "public"
+ROOT = Path(__file__).resolve().parent.parent
+ICONS = ROOT / "src-tauri" / "icons"
+PUBLIC = ROOT / "public"
+
+# The committed public/splash.png is a copy of the original source art (this
+# script writes it there itself, below), so it's the primary, portable
+# source -- any contributor who clones the repo already has it. The
+# ~/Downloads path is a fallback for the original workflow of dropping a
+# freshly-exported splash there to regenerate icons from a new source.
+SPLASH_CANDIDATES = [
+    PUBLIC / "splash.png",
+    Path.home() / "Downloads" / "Headstate-Splash-1600x1000.png",
+]
 
 CANVAS = 1024
 ART = 824
@@ -119,13 +137,69 @@ def make_tray_icons(glyph: Image.Image) -> None:
         print(f"wrote {ICONS / name} ({size}x{size})")
 
 
+def icns_unpack(path: Path, dest: Path) -> None:
+    subprocess.run(
+        ["iconutil", "-c", "iconset", "-o", str(dest), str(path)],
+        check=True, capture_output=True,
+    )
+
+
+def icns_content_unchanged(candidate: Path, committed_rev: str = "HEAD") -> bool:
+    """True if `candidate` decodes to the same images as the committed icns.
+
+    `yarn tauri icon`'s ICNS encoder is non-deterministic: re-running it on
+    unchanged source art re-packs icon.icns with different compressed-stream
+    bytes even though every embedded image is pixel-identical. Comparing
+    raw bytes would treat that as a real change and cause a spurious `git
+    status` diff on every `make icons` run. Comparing the unpacked PNGs
+    (via `iconutil -c iconset`) tells the two cases apart.
+    """
+    show = subprocess.run(
+        ["git", "show", f"{committed_rev}:src-tauri/icons/icon.icns"],
+        capture_output=True,
+    )
+    if show.returncode != 0:
+        return False  # no committed version to compare against
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        committed_icns = tmp_path / "committed.icns"
+        committed_icns.write_bytes(show.stdout)
+        try:
+            icns_unpack(candidate, tmp_path / "candidate.iconset")
+            icns_unpack(committed_icns, tmp_path / "committed.iconset")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return False  # iconutil unavailable or unpack failed; don't guess
+        candidate_files = sorted((tmp_path / "candidate.iconset").iterdir())
+        committed_files = sorted((tmp_path / "committed.iconset").iterdir())
+        if [p.name for p in candidate_files] != [p.name for p in committed_files]:
+            return False
+        return all(
+            a.read_bytes() == b.read_bytes()
+            for a, b in zip(candidate_files, committed_files)
+        )
+
+
 def main() -> int:
-    if not SPLASH.exists():
-        print(f"missing splash art: {SPLASH}", file=sys.stderr)
+    if len(sys.argv) > 1 and sys.argv[1] == "--restore-icns-if-unchanged":
+        icns = ICONS / "icon.icns"
+        if icns.exists() and icns_content_unchanged(icns):
+            subprocess.run(
+                ["git", "checkout", "--", "src-tauri/icons/icon.icns"], check=True
+            )
+            print("icon.icns content unchanged -- restored committed bytes")
+        else:
+            print("icon.icns content changed -- keeping newly generated file")
+        return 0
+
+    splash_path = next((p for p in SPLASH_CANDIDATES if p.exists()), None)
+    if splash_path is None:
+        candidates = "\n  ".join(str(p) for p in SPLASH_CANDIDATES)
+        print(f"missing splash art, looked in:\n  {candidates}", file=sys.stderr)
         return 1
-    splash = Image.open(SPLASH).convert("RGBA")
+    splash = Image.open(splash_path).convert("RGBA")
     PUBLIC.mkdir(parents=True, exist_ok=True)
-    splash.save(PUBLIC / "splash.png")
+    if splash_path != PUBLIC / "splash.png":
+        splash.save(PUBLIC / "splash.png")
     glyph = crop_glyph(splash)
     make_app_icon(glyph)
     make_tray_icons(glyph)

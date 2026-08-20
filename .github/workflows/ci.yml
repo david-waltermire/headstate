@@ -50,11 +50,18 @@ jobs:
         working-directory: src-tauri
         run: cargo test
       # Tests share a process, so state-touching changes can fail
-      # intermittently. One green run does not prove a race is absent.
+      # intermittently. One green run does not prove a race is absent, but
+      # ten full re-runs on every push stopped being free once real tests
+      # landed (26 Rust tests as of this writing). Three total re-runs is a
+      # deliberate trade: still catches the class of bug that failed about
+      # one run in seven in a sibling project, without paying for a fixed
+      # guess of "ten" on every push and PR forever. Bump this back up (or
+      # move it to a scheduled job) if flakiness shows up that three runs
+      # doesn't catch.
       - name: Race check
         working-directory: src-tauri
         run: |
-          for i in $(seq 1 10); do
+          for i in $(seq 1 3); do
             cargo test --lib -- --test-threads=8 || { echo "FAILED ON ITERATION $i"; exit 1; }
           done
 

@@ -8,17 +8,21 @@
 # text and defeating itself. An allow-list also catches owners nobody
 # thought to enumerate.
 #
-# Three patterns are scanned, all anchored so they cannot match ordinary
-# prose. An earlier unanchored `owner/repo` pattern matched things like
-# `api/hooks.ts`, `read/write`, and `5000/hour` -- a gate that cries wolf
-# gets disabled, so anchoring is load-bearing, not tidiness. The patterns
-# themselves live at the scan() calls below.
+# Patterns are anchored so they cannot match ordinary prose. An earlier
+# unanchored `owner/repo` pattern matched things like `api/hooks.ts`,
+# `read/write`, and `5000/hour` -- a gate that cries wolf gets disabled, so
+# anchoring is load-bearing, not tidiness. The patterns themselves live at
+# the scan() calls below.
 set -euo pipefail
 
 # The only repository owners this project legitimately references.
 # `org` and `owner` are the generic placeholders used in format examples
 # (`- [org/repo#123] Title`), not real accounts.
 ALLOWED='octocat|pktstorm|tauri-apps|shadcn-ui|rust-lang|actions|dtolnay|Swatinem|org|owner'
+
+# Ticket-ID-shaped tokens (PREFIX-NUMBER) that are legitimate public
+# identifiers, not internal tracker references.
+ALLOWED_TICKET_PREFIX='RUSTSEC|CVE|GHSA'
 
 # Lockfiles are machine-generated dependency graphs naming hundreds of
 # upstream repos; they are not a leak vector for private names.
@@ -35,6 +39,19 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 2
 fi
 
+# `git grep` only searches tracked (and staged) content -- untracked files
+# are invisible to it. Reporting "clean" while an untracked file sits right
+# there is the same failure mode as the work-tree check above: a scan that
+# never looked, dressed up as one that did. Abort instead of silently
+# skipping them.
+untracked=$(git ls-files --others --exclude-standard)
+if [ -n "$untracked" ]; then
+  echo "ERROR: untracked files present; git grep cannot see them:" >&2
+  echo "$untracked" | sed 's/^/  /' >&2
+  echo "Stage them (git add -N) and re-run." >&2
+  exit 2
+fi
+
 scan() {
   local out status
   set +e
@@ -48,15 +65,29 @@ scan() {
   printf '%s' "$out"
 }
 
-# Three anchored forms. Anchoring is load-bearing: an earlier unanchored
+# Anchored forms. Anchoring is load-bearing: an earlier unanchored
 # `owner/repo` pattern matched ordinary prose (api/hooks.ts, read/write,
 # 5000/hour) and produced ~40 false positives. A gate that cries wolf is a
-# gate someone disables.
+# gate someone disables. Every pattern below keys off a syntactic marker
+# (a URL scheme, an `@` host, a `#N` suffix, a known SaaS domain) that does
+# not occur in ordinary prose, rather than a bare `owner/repo` shape.
 #   1. https://github.com/<owner>/<repo>
-#   2. git@github.com:<owner>/<repo>   -- what `git remote -v` prints
-#   3. <owner>/<repo>#<number>         -- the PR/issue shorthand
+#   2. git@github.com:<owner>/<repo>          -- what `git remote -v` prints
+#   3. <owner>/<repo>#<number>                -- the PR/issue shorthand
+#   4. https://github.<host>/<owner>/<repo>   -- GitHub Enterprise Server
+#   5. ssh://git@<host>/<owner>/<repo>.git    -- SSH clone URL, any host
+#   6. <user>@<company-domain>                -- employer email addresses
+#   7. <WORKSPACE>.slack.com / *.atlassian.net -- SaaS workspace URLs
+#   8. <PREFIX>-<NNN>                          -- internal ticket IDs
 urls=$(scan 'github\.com/[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+' \
        | sed -E 's#.*github\.com/##')
+
+# scp-style SSH remote to ANY host, not just github.com -- `git@host:owner/repo`
+# is exactly what `git remote -v` prints, so it is the likeliest shape to get
+# pasted into a README. Anchored on `git@`, a dotted host, and the `:` that
+# separates host from path, which ordinary prose does not produce.
+ssh_scp=$(scan 'git@[A-Za-z0-9][-A-Za-z0-9.]*\.[a-z]{2,}:[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+' \
+          | sed -E 's/^git@[^:]+://; s/\.git$//' || true)
 
 ssh=$(scan 'git@github\.com:[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+' \
       | sed -E 's#.*github\.com:##')
@@ -64,17 +95,61 @@ ssh=$(scan 'git@github\.com:[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]
 refs=$(scan '[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+#[0-9]+' \
        | sed -E 's/#[0-9]+$//')
 
-found=$(printf '%s\n%s\n%s\n' "$urls" "$ssh" "$refs" \
+# GitHub Enterprise Server: same path shape as github.com, different host.
+# Anchored on the literal "github." host prefix so it can't match arbitrary
+# domains, then the github.com case is filtered back out below.
+ghes=$(scan 'github\.[A-Za-z0-9][-A-Za-z0-9.]*\.[a-z]{2,}/[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+' \
+       | sed -E 's#^github\.[^/]+/##' || true)
+
+# SSH clone URL to any host, GitHub or not (GHES, self-hosted GitLab/Gitea,
+# etc.). Anchored on the `ssh://git@...` scheme and the `.git` suffix, both
+# of which are specific enough that ordinary prose never produces them.
+ssh_any=$(scan 'ssh://git@[A-Za-z0-9][-A-Za-z0-9.]*[a-zA-Z]/[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]*\.git' \
+          | sed -E 's#^ssh://git@[^/]+/##; s/\.git$//' || true)
+
+# Employer email addresses. Anchored on a real TLD and excluding `git@`
+# (that's SSH remote syntax: `git@host:owner/repo`, not an email) and any
+# `@<digit>` (asset-scale filenames like `trayTemplate@2x.png`).
+emails=$(scan '[A-Za-z][A-Za-z0-9._%+-]*@[A-Za-z][-A-Za-z0-9.]*\.[A-Za-z]{2,6}' \
+         | grep -vE '^git@' \
+         | sed -E 's/^[^@]+@//' || true)
+
+# Slack/Atlassian workspace URLs. The workspace name is the owner-like
+# token; anchored on the literal SaaS domain suffix so it can't match
+# arbitrary `*.com` prose.
+saas=$(scan '[A-Za-z0-9][-A-Za-z0-9]*\.(slack\.com|atlassian\.net)' \
+       | sed -E 's/\.(slack\.com|atlassian\.net)$//' || true)
+
+# Internal ticket IDs (JIRA-shaped: LETTERS-NUMBER). Two-or-more digits
+# excludes license/spec tokens that share the shape (UTF-8, BSD-2, MPL-2).
+# A small allow-list covers legitimate public identifiers of the same shape
+# (RUSTSEC-2025-...).
+tickets=$(scan '[A-Z]{2,10}-[0-9]{2,}' \
+          | grep -vE "^($ALLOWED_TICKET_PREFIX)-" || true)
+
+owner_matches=$(printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$urls" "$ssh" "$refs" "$ghes" "$ssh_any" "$ssh_scp" \
         | grep -vE '^[[:space:]]*$' \
         | grep -vE "^($ALLOWED)/" \
         | sort -u || true)
 
-if [ -n "$found" ]; then
-  echo "ERROR: repository references with a non-allow-listed owner:"
-  echo "$found" | sed 's/^/  /'
+other_matches=$(printf '%s\n%s\n%s\n' "$emails" "$saas" "$tickets" \
+        | grep -vE '^[[:space:]]*$' \
+        | sort -u || true)
+
+if [ -n "$owner_matches" ] || [ -n "$other_matches" ]; then
+  echo "ERROR: possible private references found:"
+  if [ -n "$owner_matches" ]; then
+    echo "  repository owners not on the allow-list:"
+    echo "$owner_matches" | sed 's/^/    /'
+  fi
+  if [ -n "$other_matches" ]; then
+    echo "  emails / ticket IDs / SaaS workspaces:"
+    echo "$other_matches" | sed 's/^/    /'
+  fi
   echo
-  echo "Use synthetic fixtures (octocat/hello-world), or add the owner to"
-  echo "ALLOWED in this script if it is a legitimate public dependency."
+  echo "Use synthetic fixtures (octocat/hello-world, AcmeCorp, example.internal),"
+  echo "or add the owner to ALLOWED in this script if it is a legitimate public"
+  echo "dependency."
   exit 1
 fi
 

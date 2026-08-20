@@ -22,27 +22,91 @@ jobs:
       - name: Add Intel target
         run: rustup target add x86_64-apple-darwin
 
+      # --- Code signing (currently inert; see #23) -----------------------
+      #
+      # Headstate has no Developer ID Application certificate today (only
+      # Apple Distribution / App Store and Apple Development / local-only
+      # certs exist, neither usable for signing a binary distributed
+      # outside the App Store), so this step has nothing to import and
+      # is a no-op. It activates automatically, with no further workflow
+      # changes, the moment these repo secrets exist:
+      #
+      #   APPLE_CERTIFICATE          base64-encoded .p12 export of a
+      #                               Developer ID Application certificate
+      #   APPLE_CERTIFICATE_PASSWORD password the .p12 was exported with
+      #   KEYCHAIN_PASSWORD           any password; used only for the
+      #                               throwaway CI keychain created below
+      #
+      # See CONTRIBUTING.md "Code signing" for the full checklist of what
+      # to generate and where to add it.
+      - name: Import Apple Developer Certificate
+        if: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
+          security import "$RUNNER_TEMP/certificate.p12" -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" build.keychain
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
       - name: Build universal bundle
+        env:
+          # Tauri's build reads these directly (see
+          # https://tauri.app/reference/environment-variables/). Left unset,
+          # `tauri build` produces an unsigned bundle exactly as it does
+          # today -- this is not a fallback path, it's the same code path
+          # with optional env vars. `APPLE_SIGNING_IDENTITY` is left for
+          # Tauri to infer from the imported `APPLE_CERTIFICATE` rather than
+          # hardcoded, since the identity string is only known once a real
+          # cert exists.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Notarization: stapled onto the signed bundle by the same
+          # `tauri build` invocation when APPLE_ID is present. Requires
+          # APPLE_PASSWORD (an app-specific password, not the account
+          # password) and APPLE_TEAM_ID alongside it.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: yarn tauri build --target universal-apple-darwin --bundles app,dmg
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNED: ${{ secrets.APPLE_CERTIFICATE != '' && 'true' || 'false' }}
+          NOTARIZED: ${{ secrets.APPLE_ID != '' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
           tar -czf "Headstate-${GITHUB_REF_NAME}.app.tar.gz" -C "$BUNDLE/macos" Headstate.app
 
-          # v1 ships unsigned: Gatekeeper blocks it until the quarantine
-          # attribute is stripped. --generate-notes prepends --notes ahead
-          # of the auto-generated changelog, so this reaches every release.
-          NOTES="This build is unsigned. Before first launch, run:
+          # --generate-notes prepends --notes ahead of the auto-generated
+          # changelog, so this reaches every release. The unsigned-build
+          # instructions only apply when this run had no signing secrets;
+          # once #23 lands for real, SIGNED/NOTARIZED flip and this note
+          # changes with no other edits to this file.
+          if [ "$SIGNED" = "true" ] && [ "$NOTARIZED" = "true" ]; then
+            NOTES="This build is signed and notarized."
+          elif [ "$SIGNED" = "true" ]; then
+            NOTES="This build is signed but not notarized."
+          else
+            NOTES="This build is unsigned. Before first launch, run:
 
           \`\`\`
           xattr -dr com.apple.quarantine /Applications/Headstate.app
           \`\`\`
 
           Otherwise Gatekeeper will refuse to open it."
+          fi
 
           gh release create "$GITHUB_REF_NAME" \
             --title "Headstate ${GITHUB_REF_NAME}" \
