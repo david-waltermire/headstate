@@ -51,6 +51,28 @@ export function isStale(pr: PullRequest, now: Date, days = STALE_DAYS): boolean 
 const hasLabel = (pr: PullRequest, names: string[]) =>
   pr.labels.some((l) => names.includes(l.name));
 
+/// Whether any narrowing filter is active.
+///
+/// `repo` is excluded on purpose: it is sidebar navigation rather than a
+/// filter chip (the store's `reset` treats it the same way), so a repo page
+/// with no PRs should still explain what the app tracks rather than
+/// blaming filters the user did not set.
+export function hasActiveFilters(f: Filters): boolean {
+  return Boolean(
+    f.readyOnly ||
+      f.draftsOnly ||
+      f.ci ||
+      f.review ||
+      f.includeLabels?.length ||
+      f.excludeLabels?.length ||
+      f.needsAttentionOnly ||
+      f.staleOnly ||
+      f.inMergeQueueOnly ||
+      f.awaitingReviewOnly ||
+      f.readyToQueueOnly,
+  );
+}
+
 export function applyFilters(
   prs: PullRequest[],
   f: Filters,

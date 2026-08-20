@@ -6,7 +6,7 @@ import { PrList } from "./components/PrList";
 import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { StatsPage } from "./components/StatsPage";
-import { applyFilters, sortPrs } from "./lib/derive";
+import { applyFilters, hasActiveFilters, sortPrs } from "./lib/derive";
 import { useFilters } from "./store/filters";
 
 /// The assembled app shell. `AuthGate` already wraps this component once in
@@ -41,6 +41,9 @@ export default function App() {
   // by label, so a label filter must not hide it -- but a repo selection is
   // a change of page, and the strip should follow.
   const scopedForStrip = filters.repo ? prs.filter((pr) => pr.repo === filters.repo) : prs;
+
+  // `repo` is navigation, not a filter (see the store's `reset`), so it
+  // does not count -- an empty repo page should still explain itself.
 
   // FilterBar still sees the *unfiltered* `prs`: its label menu should offer
   // every label present across all open PRs, not shrink to only the labels
@@ -101,7 +104,7 @@ export default function App() {
                 onRetry={() => void refetch()}
               />
             ) : (
-              <PrList prs={visible} />
+              <PrList prs={visible} hasFilters={hasActiveFilters(filters)} />
             )}
           </div>
         )}

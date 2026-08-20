@@ -46,8 +46,9 @@ describe("App — failed PR query", () => {
     await waitFor(() =>
       expect(screen.getByText(/could not load your pull requests/i)).toBeTruthy(),
     );
-    // The false-empty copy must NOT appear.
-    expect(screen.queryByText(/no pull requests match these filters/i)).toBeNull();
+    // No empty-state copy at all -- an error is not an empty result.
+    expect(screen.queryByText(/no open pull requests/i)).toBeNull();
+    expect(screen.queryByText(/match these filters/i)).toBeNull();
   });
 
   it("surfaces the rejection message so the user can act on it", () => {
@@ -86,7 +87,8 @@ describe("App — failed PR query", () => {
       refetch: vi.fn(),
     });
     renderApp();
-    expect(screen.getByText(/no pull requests match these filters/i)).toBeTruthy();
+    // No filters active in this test, so the unfiltered copy applies.
+    expect(screen.getByText(/no open pull requests/i)).toBeTruthy();
     expect(screen.queryByText(/could not load/i)).toBeNull();
   });
 });

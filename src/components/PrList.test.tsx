@@ -27,9 +27,11 @@ describe("PrList", () => {
     expect(screen.getByText(/3 Open/)).toBeDefined();
   });
 
+  // The copy is now condition-aware and spans two elements, so match the
+  // headline rather than a substring that straddles both.
   it("renders an empty state rather than a bare list", () => {
     render(<PrList prs={[]} />);
-    expect(screen.getByText(/No pull requests/i)).toBeDefined();
+    expect(screen.getByText(/no open pull requests/i)).toBeDefined();
   });
 
   /// Sorting moved out of PrList and into `sortPrs` (src/lib/derive.ts) --
