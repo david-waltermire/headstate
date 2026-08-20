@@ -103,26 +103,46 @@ jobs:
             -s -k "$KEYCHAIN_PASSWORD" build.keychain
           rm -f "$RUNNER_TEMP/certificate.p12"
 
+      # Signing vars are set ONLY when a certificate exists. An absent
+      # secret expands to the EMPTY STRING, not to nothing, and Tauri
+      # treats a present-but-empty APPLE_CERTIFICATE as "sign this" -- it
+      # then runs `security import` on empty input and the whole build
+      # fails with "failed to import keychain certificate". Guarding the
+      # import step alone is not enough, because Tauri reads the
+      # environment itself.
+      #
+      # Two independent guards, because the failure mode is a silent one:
+      #   1. the `${{ x && y || '' }}` conditional keeps the secrets out of
+      #      the env when no certificate exists, and
+      #   2. the run script explicitly unsets the Apple vars in that case,
+      #      so it does not matter whether Actions omits an empty value or
+      #      exports it as an empty string.
       - name: Build universal bundle
         env:
-          # Tauri's build reads these directly (see
-          # https://tauri.app/reference/environment-variables/). Left unset,
-          # `tauri build` produces an unsigned bundle exactly as it does
-          # today -- this is not a fallback path, it's the same code path
-          # with optional env vars. `APPLE_SIGNING_IDENTITY` is left for
-          # Tauri to infer from the imported `APPLE_CERTIFICATE` rather than
-          # hardcoded, since the identity string is only known once a real
-          # cert exists.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # Tauri's build reads these directly, see
+          # https://tauri.app/reference/environment-variables/.
+          # APPLE_SIGNING_IDENTITY is left for Tauri to infer from the
+          # imported certificate rather than hardcoded, since the identity
+          # string is only known once a real cert exists.
+          APPLE_CERTIFICATE: ${{ env.HAS_SIGNING_CERT == 'true' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ env.HAS_SIGNING_CERT == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           # Notarization: stapled onto the signed bundle by the same
           # `tauri build` invocation when APPLE_ID is present. Requires
           # APPLE_PASSWORD (an app-specific password, not the account
           # password) and APPLE_TEAM_ID alongside it.
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: yarn tauri build --target universal-apple-darwin --bundles app,dmg
+          APPLE_ID: ${{ env.HAS_SIGNING_CERT == 'true' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ env.HAS_SIGNING_CERT == 'true' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ env.HAS_SIGNING_CERT == 'true' && secrets.APPLE_TEAM_ID || '' }}
+        run: |
+          set -euo pipefail
+          if [ "${HAS_SIGNING_CERT:-}" != "true" ]; then
+            # Belt and braces: Tauri signs when it sees APPLE_CERTIFICATE at
+            # all, so an empty value is worse than no value.
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
+            unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+            echo "No signing certificate: building an unsigned bundle."
+          fi
+          yarn tauri build --target universal-apple-darwin --bundles app,dmg
 
       - name: Publish release
         env:
