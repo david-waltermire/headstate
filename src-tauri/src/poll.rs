@@ -6,7 +6,7 @@
 //! disk and listens for the `prs-updated` event.
 
 use crate::github::client::{ClientError, GitHubClient};
-use crate::github::model::{needs_attention_count, MergeState, PullRequest};
+use crate::github::model::{needs_attention_count, CiState, MergeState, PullRequest};
 use crate::store::{open_db, save_snapshot};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -52,6 +52,73 @@ fn has_checking(prs: &[PullRequest]) -> bool {
 /// Pure and side-effect free so the merge semantics -- "only the polled
 /// identities move, everything else is preserved verbatim" -- are testable
 /// without a mock server or a running event loop.
+/// Send one desktop notification for a newly-broken PR.
+///
+/// Failure is logged and swallowed: a notification is an affordance, and
+/// losing one must never take down polling. Clicking is wired through the
+/// plugin's default behaviour rather than a custom handler, so there is no
+/// state to leak if the window is closed.
+fn notify_breakage(app: &AppHandle, b: &Breakage) {
+    use tauri_plugin_notification::NotificationExt;
+    let body = format!("{}#{} {}", b.repo, b.number, b.reason);
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title(b.title.clone())
+        .body(body)
+        .show()
+    {
+        log::warn!("failed to show notification: {e}");
+    }
+}
+
+/// A newly-broken PR worth interrupting the user for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Breakage {
+    pub title: String,
+    pub repo: String,
+    pub number: u64,
+    pub url: String,
+    pub reason: &'static str,
+}
+
+/// PRs that just BROKE, by comparing a tick against the one before it.
+///
+/// Deliberately failures only. A 60s loop across many repos is a firehose
+/// if it reports every state change, and "your PR was approved" is good
+/// news the badge and list already carry passively. An interruption should
+/// mean something needs your hands.
+///
+/// Only TRANSITIONS fire: a PR that was already red on the previous tick
+/// is not re-reported, or every tick would re-notify the same 13 PRs
+/// forever. A PR absent from `previous` -- first run, or newly opened --
+/// never fires, because its "before" state is unknown and assuming green
+/// would notify the whole list on first launch.
+pub fn newly_broken(previous: &[PullRequest], current: &[PullRequest]) -> Vec<Breakage> {
+    current
+        .iter()
+        .filter_map(|pr| {
+            let was = previous
+                .iter()
+                .find(|p| p.repo == pr.repo && p.number == pr.number)?;
+            let reason = if pr.ci == CiState::Failure && was.ci != CiState::Failure {
+                "CI is failing"
+            } else if pr.merge == MergeState::Conflicted && was.merge != MergeState::Conflicted {
+                "has merge conflicts"
+            } else {
+                return None;
+            };
+            Some(Breakage {
+                title: pr.title.clone(),
+                repo: pr.repo.clone(),
+                number: pr.number,
+                url: pr.url.clone(),
+                reason,
+            })
+        })
+        .collect()
+}
+
 fn merge_by_identity(base: &[PullRequest], updates: &[PullRequest]) -> Vec<PullRequest> {
     base.iter()
         .map(|pr| {
@@ -185,6 +252,7 @@ pub fn spawn(
     waker: Arc<Notify>,
 ) {
     tauri::async_runtime::spawn(async move {
+        let mut previous: Vec<PullRequest> = Vec::new();
         loop {
             // `timeout` collapses a hang into the Err arm the loop already
             // handles, so a wedged request costs one tick instead of the
@@ -196,6 +264,14 @@ pub fn spawn(
                 };
             match fetched {
                 Ok((prs, total)) => {
+                    // Compare against the tick before this one. `previous`
+                    // starts empty, so the first tick never notifies --
+                    // otherwise launching with 13 broken PRs would fire 13
+                    // notifications at once.
+                    for b in newly_broken(&previous, &prs) {
+                        notify_breakage(&app, &b);
+                    }
+                    previous = prs.clone();
                     // Only interesting when GitHub says there are more than
                     // it returned; the UI stays silent otherwise.
                     if total > prs.len() as u64 {
@@ -394,6 +470,158 @@ mod tests {
             pr("octocat/spoon-knife", 7, MergeState::Conflicted),
         ];
         assert!(!has_checking(&prs));
+    }
+
+    fn pr_full(repo: &str, number: u64, ci: CiState, merge: MergeState) -> PullRequest {
+        let t = chrono::DateTime::parse_from_rfc3339("2026-08-20T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        PullRequest {
+            number,
+            title: format!("PR {number}"),
+            url: format!("https://github.com/{repo}/pull/{number}"),
+            repo: repo.to_string(),
+            author: "someone".into(),
+            is_draft: false,
+            created_at: t,
+            updated_at: t,
+            ci,
+            merge,
+            review: crate::github::model::ReviewState::None,
+            in_merge_queue: false,
+            labels: vec![],
+            comment_count: 0,
+        }
+    }
+
+    #[test]
+    fn notifies_when_ci_turns_red() {
+        let before = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Success,
+            MergeState::Mergeable,
+        )];
+        let after = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Failure,
+            MergeState::Mergeable,
+        )];
+        let b = newly_broken(&before, &after);
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].reason, "CI is failing");
+        assert!(b[0].url.ends_with("/pull/1"), "must be clickable");
+    }
+
+    #[test]
+    fn notifies_when_a_conflict_appears() {
+        let before = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Success,
+            MergeState::Mergeable,
+        )];
+        let after = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Success,
+            MergeState::Conflicted,
+        )];
+        assert_eq!(
+            newly_broken(&before, &after)[0].reason,
+            "has merge conflicts"
+        );
+    }
+
+    /// The rule that stops it being a firehose: an ALREADY-red PR must not
+    /// re-notify every 60 seconds forever.
+    #[test]
+    fn does_not_renotify_a_pr_that_was_already_broken() {
+        let before = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Failure,
+            MergeState::Mergeable,
+        )];
+        let after = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Failure,
+            MergeState::Mergeable,
+        )];
+        assert!(newly_broken(&before, &after).is_empty());
+    }
+
+    /// First run has no "before", and assuming green would notify the
+    /// entire backlog at launch -- 13 notifications on this account today.
+    #[test]
+    fn never_notifies_for_a_pr_it_has_not_seen_before() {
+        let after = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Failure,
+            MergeState::Conflicted,
+        )];
+        assert!(newly_broken(&[], &after).is_empty());
+    }
+
+    #[test]
+    fn recovering_does_not_notify() {
+        let before = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Failure,
+            MergeState::Mergeable,
+        )];
+        let after = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Success,
+            MergeState::Mergeable,
+        )];
+        assert!(newly_broken(&before, &after).is_empty());
+    }
+
+    /// `Checking` is GitHub still computing mergeability, which happens on
+    /// every push -- treating it as a conflict would notify constantly.
+    #[test]
+    fn checking_mergeability_is_not_a_breakage() {
+        let before = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Success,
+            MergeState::Mergeable,
+        )];
+        let after = vec![pr_full("acme/a", 1, CiState::Success, MergeState::Checking)];
+        assert!(newly_broken(&before, &after).is_empty());
+        // ...and pending CI likewise.
+        let after2 = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Pending,
+            MergeState::Mergeable,
+        )];
+        assert!(newly_broken(&before, &after2).is_empty());
+    }
+
+    #[test]
+    fn matches_prs_by_repo_and_number_together() {
+        // Numbers repeat across repos; a number-only join would compare
+        // unrelated PRs and report phantom breakages.
+        let before = vec![pr_full(
+            "acme/a",
+            1,
+            CiState::Success,
+            MergeState::Mergeable,
+        )];
+        let after = vec![pr_full(
+            "acme/b",
+            1,
+            CiState::Failure,
+            MergeState::Mergeable,
+        )];
+        assert!(newly_broken(&before, &after).is_empty());
     }
 
     /// The core #22 invariant: a targeted recheck's results replace only

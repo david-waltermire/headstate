@@ -43,6 +43,7 @@ pub fn run() {
         // Writes to the OS log directory (Console.app on macOS) and a
         // rotating file beside it. Never log the token, and never log a
         // repository owner -- see CONTRIBUTING and check-privacy.sh.
+        .plugin(tauri_plugin_notification::init())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)

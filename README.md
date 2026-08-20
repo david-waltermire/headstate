@@ -79,6 +79,14 @@ have access to, in one list — the chrome mirrors GitHub's own
 GitHub's own UI only lets you include), review state, drafts, and sort
 order.
 
+**Notifications.** When a pull request you opened newly breaks — CI turns
+red, or a merge conflict appears — Headstate posts a desktop notification.
+Only transitions fire, so an already-broken PR is not reported again every
+minute, and the first poll after launch is always silent. Recoveries,
+approvals, and new reviews deliberately do not notify: an interruption
+should mean something needs your hands, and the tray badge already carries
+the rest passively.
+
 **Priorities strip.** Pinned above the list: PRs blocked on *you* and
 nobody else — real merge conflicts or failing CI — so the thing you need to
 fix first doesn't get lost in a longer list. Quiet when nothing is blocked.
