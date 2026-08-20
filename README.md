@@ -92,6 +92,13 @@ the rest passively.
 that pull request is stacked on another one and cannot merge until its
 base does, which nothing else in the row would tell you.
 
+**Unresolved conversations.** A row shows how many review conversations
+are still open on the current code, so a pull request waiting on replies
+is visible rather than merely stalled. Resolved and outdated threads are
+excluded. It reports the count rather than claiming the PR is blocked:
+whether a repository requires resolution before merging is only readable
+with admin access on that repository.
+
 **Priorities strip.** Pinned above the list: PRs blocked on *you* and
 nobody else — real merge conflicts or failing CI — so the thing you need to
 fix first doesn't get lost in a longer list. Quiet when nothing is blocked.

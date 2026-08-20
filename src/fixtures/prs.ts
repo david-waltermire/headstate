@@ -23,6 +23,7 @@ export const PR_FIXTURES: PullRequest[] = [
     in_merge_queue: false,
     labels: [{ name: "enhancement", color: "a2eeef" }],
     comment_count: 2,
+    unresolved_threads: 0,
   },
   {
     number: 43,
@@ -41,6 +42,7 @@ export const PR_FIXTURES: PullRequest[] = [
     in_merge_queue: false,
     labels: [{ name: "bug", color: "d73a4a" }],
     comment_count: 5,
+    unresolved_threads: 2,
   },
   {
     number: 7,
@@ -59,6 +61,7 @@ export const PR_FIXTURES: PullRequest[] = [
     in_merge_queue: true,
     labels: [{ name: "dependencies", color: "0366d6" }],
     comment_count: 0,
+    unresolved_threads: 0,
   },
 ];
 

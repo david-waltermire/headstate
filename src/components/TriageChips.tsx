@@ -1,6 +1,6 @@
 import type { PullRequest } from "@/types/pr";
 import type { Filters } from "@/lib/derive";
-import { deriveStats, isStale } from "@/lib/derive";
+import { deriveStats, hasUnresolvedThreads, isStale } from "@/lib/derive";
 import { useFilters } from "@/store/filters";
 
 /// Clickable counters above the list.
@@ -42,6 +42,13 @@ const CHIPS: {
     preset: { readyToQueueOnly: true },
     count: (prs) => deriveStats(prs).ready_to_queue,
     tone: "text-[#3fb950] border-[#3fb950]/40",
+  },
+  {
+    key: "unresolved",
+    label: "Unresolved comments",
+    preset: { unresolvedOnly: true },
+    count: (prs) => prs.filter(hasUnresolvedThreads).length,
+    tone: "text-[#d29922] border-[#d29922]/40",
   },
   {
     key: "stale",

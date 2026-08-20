@@ -60,6 +60,7 @@ mod tests {
                 color: "d73a4a".into(),
             }],
             comment_count: 2,
+            unresolved_threads: 0,
         }
     }
 

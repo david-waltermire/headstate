@@ -404,6 +404,7 @@ mod tests {
             in_merge_queue: false,
             labels: Vec::<Label>::new(),
             comment_count: 0,
+            unresolved_threads: 0,
         }
     }
 
@@ -424,7 +425,12 @@ mod tests {
     /// assertion kept passing.
     #[test]
     fn both_cadences_stay_well_inside_the_rate_limit() {
-        // GraphQL bills one point per `search` in the document.
+        // A LOWER BOUND, not the true cost: GitHub bills roughly one
+        // point per top-level `search`, but nested connections can push
+        // it higher (measured: PRS_QUERY costs 2, which happens to equal
+        // its search count). This guard catches a cadence or alias-count
+        // regression; it cannot catch a rise caused by nesting alone, so
+        // any new connection is worth measuring against the live API.
         let cost = crate::github::query::PRS_QUERY.matches("search(").count() as u64;
         assert!(cost > 0, "PRS_QUERY must contain at least one search");
 
@@ -495,6 +501,7 @@ mod tests {
             in_merge_queue: false,
             labels: vec![],
             comment_count: 0,
+            unresolved_threads: 0,
         }
     }
 

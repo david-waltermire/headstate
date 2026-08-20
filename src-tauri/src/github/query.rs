@@ -26,6 +26,7 @@ query($q: String!, $reviewing: String!) {
         repository { nameWithOwner }
         mergeable reviewDecision isInMergeQueue totalCommentsCount
         labels(first: 20) { nodes { name color } }
+        reviewThreads(first: 20) { nodes { isResolved isOutdated } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
@@ -40,6 +41,7 @@ query($q: String!, $reviewing: String!) {
         repository { nameWithOwner }
         mergeable reviewDecision isInMergeQueue totalCommentsCount
         labels(first: 20) { nodes { name color } }
+        reviewThreads(first: 20) { nodes { isResolved isOutdated } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }

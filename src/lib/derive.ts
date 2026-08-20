@@ -5,6 +5,8 @@ export const STALE_DAYS = 3;
 export interface Filters {
   /// Free-text match over title, repo, and PR number. Case-insensitive.
   query?: string;
+  /// Only PRs with review conversations still open.
+  unresolvedOnly?: boolean;
   repo?: string;
   readyOnly?: boolean;
   draftsOnly?: boolean;
@@ -38,8 +40,24 @@ export function readyToQueue(pr: PullRequest): boolean {
   return !pr.is_draft && pr.ci === "success" && pr.review === "approved" && !pr.in_merge_queue;
 }
 
-export function blockedByComments(pr: PullRequest): boolean {
+/// A reviewer formally asked for changes.
+///
+/// Renamed from `blockedByComments`, which was a misnomer: this is a
+/// review VERDICT, not comment resolution. The two are genuinely
+/// different -- a PR can have six open conversations and no verdict, or a
+/// changes-requested verdict with every thread resolved. Unresolved
+/// conversations are counted separately in `pr.unresolved_threads`.
+export function changesRequested(pr: PullRequest): boolean {
   return pr.review === "changes_requested";
+}
+
+/// Review conversations still open on the current code.
+///
+/// Not a claim that the PR is BLOCKED: whether a repo requires resolution
+/// before merging is only readable with admin access on that repository,
+/// so the UI reports the count and lets the reader draw the conclusion.
+export function hasUnresolvedThreads(pr: PullRequest): boolean {
+  return pr.unresolved_threads > 0;
 }
 
 /// Green, approved, and untouched for `days`+: the single most
@@ -62,6 +80,7 @@ const hasLabel = (pr: PullRequest, names: string[]) =>
 export function hasActiveFilters(f: Filters): boolean {
   return Boolean(
     f.query ||
+      f.unresolvedOnly ||
       f.readyOnly ||
       f.draftsOnly ||
       f.ci ||
@@ -100,6 +119,7 @@ export function applyFilters(
   return prs.filter((pr) => {
     if (f.repo && pr.repo !== f.repo) return false;
     if (f.query && !matchesQuery(pr, f.query)) return false;
+    if (f.unresolvedOnly && !hasUnresolvedThreads(pr)) return false;
     if (f.readyOnly && pr.is_draft) return false;
     if (f.draftsOnly && !pr.is_draft) return false;
     if (f.ci && pr.ci !== f.ci) return false;
@@ -159,6 +179,6 @@ export function deriveStats(
     needs_attention: prs.filter(needsAttention).length,
     awaiting_review: prs.filter(awaitingReview).length,
     ready_to_queue: prs.filter(readyToQueue).length,
-    blocked_by_comments: prs.filter(blockedByComments).length,
+    blocked_by_comments: prs.filter(changesRequested).length,
   };
 }

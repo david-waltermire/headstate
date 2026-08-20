@@ -3,6 +3,7 @@ import {
   CircleDot,
   CircleSlash,
   GitPullRequest,
+  MessageCircleWarning,
   MessageSquare,
   X,
 } from "lucide-react";
@@ -141,6 +142,23 @@ export function PrRow({ pr }: { pr: PullRequest }) {
           )}
           {pr.merge === "checking" && <span className="ml-2">• Checking mergeability</span>}
           <BranchPair pr={pr} />
+          {/* Open review conversations on the current code. Deliberately
+              worded as a count, not "blocked": whether a repo requires
+              resolution before merging needs admin access on that repo,
+              so the row reports what it knows and lets the reader draw
+              the conclusion. Amber, not red -- unanswered questions are
+              not a failure. */}
+          {pr.unresolved_threads > 0 && (
+            <span
+              className="ml-2 inline-flex items-center gap-1 text-[#d29922]"
+              title={`${pr.unresolved_threads} review conversation${
+                pr.unresolved_threads === 1 ? "" : "s"
+              } not yet resolved`}
+            >
+              <MessageCircleWarning className="h-3 w-3" aria-hidden="true" />
+              {pr.unresolved_threads} unresolved
+            </span>
+          )}
           {pr.comment_count > 0 && (
             <span className="ml-2 inline-flex items-center gap-1">
               <MessageSquare className="h-3 w-3" aria-hidden="true" />

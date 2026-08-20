@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { PR_FIXTURES, prWithState } from "../fixtures/prs";
 import {
-  applyFilters, awaitingReview, blockedByComments, deriveStats,
+  applyFilters, awaitingReview, changesRequested, deriveStats,
   isStale, needsAttention, readyToQueue, sortPrs, STALE_DAYS,
 } from "./derive";
 
@@ -46,7 +46,7 @@ describe("isStale", () => {
 describe("categories", () => {
   it("classifies awaiting review, ready to queue, and blocked", () => {
     expect(readyToQueue(approved)).toBe(true);
-    expect(blockedByComments(broken)).toBe(true);
+    expect(changesRequested(broken)).toBe(true);
     expect(awaitingReview(approved)).toBe(false);
   });
 });

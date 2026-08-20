@@ -32,6 +32,9 @@ export interface PullRequest {
   in_merge_queue: boolean;
   labels: Label[];
   comment_count: number;
+  /// Review conversations still open on the current code. Resolved and
+  /// outdated threads are excluded.
+  unresolved_threads: number;
 }
 
 /// `merged_week`/`merged_month` are real. The other five derived fields

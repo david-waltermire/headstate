@@ -22,6 +22,26 @@ fn ci_state(node: &Value) -> CiState {
     }
 }
 
+/// Open review conversations on the current code.
+///
+/// Both filters matter: a resolved thread needs no action, and an outdated
+/// one hangs off a line that has since changed, so counting either would
+/// nag the author about work already finished.
+fn unresolved_threads(node: &Value) -> u64 {
+    node["reviewThreads"]["nodes"]
+        .as_array()
+        .map(|threads| {
+            threads
+                .iter()
+                .filter(|t| {
+                    !t["isResolved"].as_bool().unwrap_or(false)
+                        && !t["isOutdated"].as_bool().unwrap_or(false)
+                })
+                .count() as u64
+        })
+        .unwrap_or(0)
+}
+
 fn merge_state(node: &Value) -> MergeState {
     match node["mergeable"].as_str() {
         Some("MERGEABLE") => MergeState::Mergeable,
@@ -79,6 +99,7 @@ fn map_node(node: &Value) -> Option<PullRequest> {
         in_merge_queue: node["isInMergeQueue"].as_bool().unwrap_or(false),
         labels: labels(node),
         comment_count: node["totalCommentsCount"].as_u64().unwrap_or(0),
+        unresolved_threads: unresolved_threads(node),
     })
 }
 
@@ -311,6 +332,61 @@ mod tests {
 
     /// GitHub computes mergeability lazily and returns UNKNOWN right after a
     /// push. Mapping that to Conflicted would show a false "needs rebase".
+    fn node_with_threads(threads: serde_json::Value) -> serde_json::Value {
+        json!({"authored": {"nodes": [{
+            "number": 1, "title": "t", "url": "u", "isDraft": false,
+            "headRefName": "f", "baseRefName": "main",
+            "createdAt": "2026-08-20T00:00:00Z", "updatedAt": "2026-08-20T00:00:00Z",
+            "author": {"login": "a"}, "repository": {"nameWithOwner": "acme/a"},
+            "mergeable": "MERGEABLE", "reviewDecision": null,
+            "isInMergeQueue": false, "totalCommentsCount": 0,
+            "labels": {"nodes": []}, "commits": {"nodes": []},
+            "reviewThreads": {"nodes": threads}
+        }]}})
+    }
+
+    #[test]
+    fn counts_only_open_conversations() {
+        let v = node_with_threads(json!([
+            {"isResolved": false, "isOutdated": false},
+            {"isResolved": false, "isOutdated": false},
+            {"isResolved": true, "isOutdated": false},
+        ]));
+        assert_eq!(map_search(&v)[0].unresolved_threads, 2);
+    }
+
+    /// An outdated thread hangs off a line that has since changed, so the
+    /// author has nothing left to answer. Counting it would nag about work
+    /// already done -- and unlike a resolved thread, nobody clicked
+    /// anything to dismiss it.
+    #[test]
+    fn outdated_threads_do_not_count() {
+        let v = node_with_threads(json!([
+            {"isResolved": false, "isOutdated": true},
+            {"isResolved": false, "isOutdated": false},
+        ]));
+        assert_eq!(map_search(&v)[0].unresolved_threads, 1);
+    }
+
+    #[test]
+    fn no_threads_means_zero_not_a_panic() {
+        assert_eq!(
+            map_search(&node_with_threads(json!([])))[0].unresolved_threads,
+            0
+        );
+        // And a PR from a query that never selected the field at all.
+        let v = json!({"authored": {"nodes": [{
+            "number": 1, "title": "t", "url": "u", "isDraft": false,
+            "headRefName": "f", "baseRefName": "main",
+            "createdAt": "2026-08-20T00:00:00Z", "updatedAt": "2026-08-20T00:00:00Z",
+            "author": {"login": "a"}, "repository": {"nameWithOwner": "acme/a"},
+            "mergeable": "MERGEABLE", "reviewDecision": null,
+            "isInMergeQueue": false, "totalCommentsCount": 0,
+            "labels": {"nodes": []}, "commits": {"nodes": []}
+        }]}});
+        assert_eq!(map_search(&v)[0].unresolved_threads, 0);
+    }
+
     /// Branch refs ride along in the existing query at no extra cost, and
     /// distinguish a stacked PR -- which cannot merge until its base does
     /// -- from one targeting the default branch.

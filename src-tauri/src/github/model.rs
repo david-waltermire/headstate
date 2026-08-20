@@ -63,6 +63,17 @@ pub struct PullRequest {
     pub in_merge_queue: bool,
     pub labels: Vec<Label>,
     pub comment_count: u64,
+    /// Review conversations still open on the current code.
+    ///
+    /// Resolved threads are excluded, and so are OUTDATED ones -- a thread
+    /// on a line that has since changed is not something the author still
+    /// has to answer, and counting it would nag about work already done.
+    ///
+    /// Deliberately a count of open conversations, not a claim that the PR
+    /// is blocked: whether a repo REQUIRES resolution before merging lives
+    /// in `requiresConversationResolution`, which needs admin access on
+    /// that repository and is unreadable for most of them.
+    pub unresolved_threads: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -188,6 +199,7 @@ mod attention_tests {
             in_merge_queue: false,
             labels: vec![],
             comment_count: 0,
+            unresolved_threads: 0,
         }
     }
 

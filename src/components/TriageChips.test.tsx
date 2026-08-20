@@ -13,6 +13,7 @@ function pr(over: Partial<PullRequest>): PullRequest {
 }
 
 const PRS: PullRequest[] = [
+  pr({ number: 5, ci: "success", merge: "mergeable", review: "none", unresolved_threads: 3 }),
   pr({ number: 1, ci: "failure", merge: "mergeable", review: "none" }),
   pr({ number: 2, ci: "success", merge: "conflicted", review: "none" }),
   pr({ number: 3, ci: "success", merge: "mergeable", review: "review_required", is_draft: false }),

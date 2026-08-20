@@ -127,3 +127,31 @@ describe("PrRow no-CI state", () => {
     }
   });
 });
+
+describe("PrRow unresolved conversations", () => {
+  it("shows the count when conversations are open", () => {
+    render(<PrRow pr={pr({ unresolved_threads: 3 })} />);
+    expect(screen.getByText(/3 unresolved/)).toBeTruthy();
+  });
+
+  it("says conversation, singular, for one", () => {
+    render(<PrRow pr={pr({ unresolved_threads: 1 })} />);
+    expect(screen.getByTitle(/1 review conversation not yet resolved/)).toBeTruthy();
+  });
+
+  it("stays silent when everything is resolved", () => {
+    render(<PrRow pr={pr({ unresolved_threads: 0 })} />);
+    expect(screen.queryByText(/unresolved/)).toBeNull();
+  });
+
+  // Amber, not red: an unanswered question is not a failure, and the app
+  // cannot know whether the repo actually requires resolution to merge.
+  it("does not present unresolved conversations as an error", () => {
+    const { container } = render(<PrRow pr={pr({ unresolved_threads: 2 })} />);
+    const chip = Array.from(container.querySelectorAll("span")).find((s) =>
+      s.textContent?.includes("unresolved"),
+    );
+    expect(chip?.className).toContain("#d29922");
+    expect(chip?.className).not.toContain("#f85149");
+  });
+});
