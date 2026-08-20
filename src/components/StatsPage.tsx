@@ -4,6 +4,7 @@ import { QueryError, errorMessage } from "./QueryError";
 import { ActivityChart } from "./stats/ActivityChart";
 import { DeltaCards } from "./stats/DeltaCards";
 import { InsightCards } from "./stats/InsightCards";
+import { Outliers } from "./stats/Outliers";
 import { RepoTable } from "./stats/RepoTable";
 import { SkeletonChart, SkeletonRow } from "./stats/Skeleton";
 
@@ -105,6 +106,7 @@ export function StatsPage() {
       {detail ? (
         <>
           <InsightCards detail={detail} />
+          <Outliers slowest={detail.slowest} largest={detail.largest} />
           <RepoTable repos={detail.repo_counts} sampleSize={detail.sample_size} />
         </>
       ) : detailQ.isError ? (

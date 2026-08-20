@@ -15,7 +15,7 @@ use chrono::{DateTime, Duration, Utc};
 /// one when a third is added.
 pub const PRS_QUERY: &str = r#"
 query($q: String!, $reviewing: String!) {
-  rateLimit { cost remaining }
+  rateLimit { cost remaining resetAt }
   authored: search(query: $q, type: ISSUE, first: 100) {
     issueCount
     nodes {
@@ -59,9 +59,13 @@ query($week: String!, $month: String!) {
 /// presented as lifetime figures.
 pub const MERGED_DETAIL_QUERY: &str = r#"
 query {
+  rateLimit { cost remaining resetAt }
   merged: search(query: "is:pr author:@me is:merged", type: ISSUE, first: 100) {
     nodes {
       ... on PullRequest {
+        number
+        title
+        url
         createdAt
         mergedAt
         additions

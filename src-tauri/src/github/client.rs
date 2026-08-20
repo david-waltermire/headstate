@@ -3,7 +3,7 @@
 //!
 //! Read-only: every query here is a `search`, never a mutation.
 
-use super::map::{map_history, map_list, map_merged_detail, map_search, map_total};
+use super::map::{map_history, map_list, map_merged_detail, map_rate_limit, map_search, map_total};
 use super::model::{History, MergedDetail, Periods, PullRequest, Stats};
 use super::query::{
     history_query_range, history_query_range_with_periods, periods_query, HISTORY_CHUNK_DAYS,
@@ -30,6 +30,10 @@ pub enum ClientError {
     /// The response carried GraphQL errors and no usable data.
     #[error("GitHub GraphQL error: {0}")]
     Graphql(String),
+    /// The hourly budget is exhausted. Distinct so the banner can say to
+    /// wait rather than implying a network fault the user might chase.
+    #[error("GitHub rate limit reached — polling will resume automatically ({0})")]
+    RateLimited(String),
 }
 
 pub struct GitHubClient {
@@ -127,6 +131,13 @@ impl GitHubClient {
                 }
             }))
             .await?;
+        // Warn before the budget is actually gone, so the user learns
+        // about it from a message rather than from a wall of failures.
+        if let Some((remaining, reset)) = map_rate_limit(&v) {
+            if remaining < 500 {
+                log::warn!("GitHub rate limit low: {remaining} remaining, resets at {reset}");
+            }
+        }
         Ok((map_search(&v), map_total(&v)))
     }
 
@@ -264,6 +275,11 @@ async fn graphql_partial_ok(
                 .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
                 .collect::<Vec<_>>()
                 .join("; ");
+            // Name the condition rather than leaving a generic failure the
+            // user cannot tell from a network problem or a bad token.
+            if msg.to_lowercase().contains("rate limit") {
+                return Err(ClientError::RateLimited(msg));
+            }
             Err(ClientError::Graphql(if msg.is_empty() {
                 "GraphQL request failed".to_string()
             } else {
@@ -362,6 +378,25 @@ mod tests {
             .is_err());
     }
 
+    /// Rate-limit exhaustion is named, not left as a generic failure the
+    /// user cannot tell from a network fault or a bad token.
+    #[tokio::test]
+    async fn rate_limit_errors_say_so() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": null,
+                "errors": [{ "message": "API rate limit exceeded for user ID 1." }]
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server).await.fetch_prs().await.unwrap_err();
+        assert!(matches!(err, ClientError::RateLimited(_)), "got {err:?}");
+        assert!(err.to_string().contains("resume automatically"));
+    }
+
     /// `issueCount` is what makes truncation visible; it was requested by
     /// the query and read by nothing, so >100 open PRs silently became 100.
     #[tokio::test]
@@ -424,14 +459,15 @@ mod tests {
             .and(path("/graphql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": null,
-                "errors": [{ "message": "API rate limit exceeded" }]
+                "errors": [{ "message": "Could not resolve to a Repository" }]
             })))
             .mount(&server)
             .await;
 
         let err = client_for(&server).await.fetch_prs().await.unwrap_err();
         assert!(
-            err.to_string().contains("API rate limit exceeded"),
+            err.to_string()
+                .contains("Could not resolve to a Repository"),
             "message must reach the user: {err}"
         );
     }
@@ -569,6 +605,18 @@ mod tests {
         assert!(h.points.windows(2).all(|w| w[0].date <= w[1].date));
 
         let d = c.fetch_merged_detail().await.unwrap();
+        println!(
+            "SLOWEST={} LARGEST={} top_slow={:.1}h top_big={} lines",
+            d.slowest.len(),
+            d.largest.len(),
+            d.slowest.first().map(|p| p.cycle_time_hours).unwrap_or(0.0),
+            d.largest.first().map(|p| p.size).unwrap_or(0)
+        );
+        assert!(!d.slowest.is_empty(), "outliers must be populated");
+        assert!(
+            d.slowest.iter().all(|p| !p.url.is_empty()),
+            "each needs a link"
+        );
         println!(
             "SAMPLE={} LINES={} SIZES={} REPOS={} CYCLES={}",
             d.sample_size,

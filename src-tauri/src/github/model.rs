@@ -82,6 +82,21 @@ pub struct RepoCount {
     pub merged: u64,
 }
 
+/// One merged PR, enough to name and open it.
+///
+/// The Stats page could show that something took four days or ran to ten
+/// thousand lines, and then not say WHICH pull request that was -- every
+/// figure was a scalar with no way back to the thing it described.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MergedPr {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub repo: String,
+    pub cycle_time_hours: f64,
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MergedDetail {
     pub cycle_time_hours: Vec<f64>,
@@ -94,6 +109,10 @@ pub struct MergedDetail {
     pub comment_count: u64,
     pub sample_size: u64,
     pub repo_counts: Vec<RepoCount>,
+    /// The slowest and largest merges in the sample, so the outlier a
+    /// figure describes is reachable rather than merely reported.
+    pub slowest: Vec<MergedPr>,
+    pub largest: Vec<MergedPr>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

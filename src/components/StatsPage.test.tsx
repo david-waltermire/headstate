@@ -35,6 +35,8 @@ const detail: MergedDetail = {
   comment_count: 3,
   sample_size: 3,
   repo_counts: [{ repo: "acme/alpha", merged: 3 }],
+  slowest: [],
+  largest: [],
 };
 
 const pending = { data: undefined, isLoading: true, isError: false, refetch: vi.fn() } as never;

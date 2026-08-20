@@ -1,7 +1,8 @@
 //! Mapping from the raw GraphQL JSON to typed `PullRequest`s.
 
 use super::model::{
-    CiState, HistoryPoint, Label, MergeState, MergedDetail, PullRequest, RepoCount, ReviewState,
+    CiState, HistoryPoint, Label, MergeState, MergedDetail, MergedPr, PullRequest, RepoCount,
+    ReviewState,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
@@ -103,6 +104,19 @@ pub fn map_list(v: &Value, alias: &str) -> Vec<PullRequest> {
 /// remaining 37 invisible. Worst case the strip, whose entire job is never
 /// to have a false negative, renders "Nothing blocked on you" while a
 /// conflicted PR sits at rank 118.
+/// The rate-limit budget the response already carried.
+///
+/// `PRS_QUERY` has always selected `rateLimit`, and nothing read it -- so
+/// when the budget did run out, the user got a generic failure and could
+/// not tell it from a network problem or an expired token, nor learn how
+/// long to wait, even though the reset time was in a response already
+/// received.
+pub fn map_rate_limit(v: &Value) -> Option<(u64, String)> {
+    let remaining = v["rateLimit"]["remaining"].as_u64()?;
+    let reset = v["rateLimit"]["resetAt"].as_str().unwrap_or("").to_string();
+    Some((remaining, reset))
+}
+
 pub fn map_total(v: &Value) -> u64 {
     v["authored"]["issueCount"].as_u64().unwrap_or(0)
 }
@@ -134,6 +148,7 @@ pub fn map_history(v: &Value, days: i64, now: DateTime<Utc>) -> Vec<HistoryPoint
 pub fn map_merged_detail(v: &Value) -> MergedDetail {
     let mut d = MergedDetail::default();
     let mut repos: std::collections::HashMap<String, u64> = Default::default();
+    let mut merged_prs: Vec<MergedPr> = Vec::new();
     let empty = vec![];
     let nodes = v["merged"]["nodes"].as_array().unwrap_or(&empty);
     for n in nodes {
@@ -148,6 +163,7 @@ pub fn map_merged_detail(v: &Value) -> MergedDetail {
         if let Some(r) = n["repository"]["nameWithOwner"].as_str() {
             *repos.entry(r.to_string()).or_insert(0) += 1;
         }
+        let mut hours_for_pr = 0.0;
         if let (Some(c), Some(m)) = (n["createdAt"].as_str(), n["mergedAt"].as_str()) {
             if let (Ok(c), Ok(m)) = (
                 DateTime::parse_from_rfc3339(c),
@@ -156,12 +172,42 @@ pub fn map_merged_detail(v: &Value) -> MergedDetail {
                 let hours = (m - c).num_seconds() as f64 / 3600.0;
                 if hours >= 0.0 {
                     d.cycle_time_hours.push(hours);
+                    hours_for_pr = hours;
                 }
             }
+        }
+        if let Some(num) = n["number"].as_u64() {
+            merged_prs.push(MergedPr {
+                number: num,
+                title: n["title"].as_str().unwrap_or_default().to_string(),
+                url: n["url"].as_str().unwrap_or_default().to_string(),
+                repo: n["repository"]["nameWithOwner"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                cycle_time_hours: hours_for_pr,
+                size,
+            });
         }
     }
     d.cycle_time_hours.sort_by(|a, b| a.partial_cmp(b).unwrap());
     d.pr_sizes.sort_unstable();
+
+    // The outliers the scalar figures describe, so a striking number is a
+    // link rather than a dead end. Ties broken by number for a stable
+    // order between refreshes.
+    let mut by_time = merged_prs.clone();
+    by_time.sort_by(|a, b| {
+        b.cycle_time_hours
+            .partial_cmp(&a.cycle_time_hours)
+            .unwrap()
+            .then(a.number.cmp(&b.number))
+    });
+    d.slowest = by_time.into_iter().take(5).collect();
+
+    let mut by_size = merged_prs;
+    by_size.sort_by(|a, b| b.size.cmp(&a.size).then(a.number.cmp(&b.number)));
+    d.largest = by_size.into_iter().take(5).collect();
     let mut rc: Vec<RepoCount> = repos
         .into_iter()
         .map(|(repo, merged)| RepoCount { repo, merged })

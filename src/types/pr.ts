@@ -89,6 +89,16 @@ export interface RepoCount {
 /// -- `sample_size` is how many were actually examined, and the UI labels
 /// the figures with it. `cycle_time_hours` is sorted ascending so
 /// `percentile()` can index it directly.
+/// One merged PR, enough to name and open it.
+export interface MergedPr {
+  number: number;
+  title: string;
+  url: string;
+  repo: string;
+  cycle_time_hours: number;
+  size: number;
+}
+
 export interface MergedDetail {
   cycle_time_hours: number[];
   /// additions+deletions per PR, sorted ascending for percentile lookup.
@@ -100,4 +110,6 @@ export interface MergedDetail {
   comment_count: number;
   sample_size: number;
   repo_counts: RepoCount[];
+  slowest: MergedPr[];
+  largest: MergedPr[];
 }

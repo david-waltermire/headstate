@@ -13,6 +13,8 @@ const detail: MergedDetail = {
   comment_count: 120,
   sample_size: 100,
   repo_counts: [],
+  slowest: [],
+  largest: [],
 };
 
 describe("InsightCards", () => {
