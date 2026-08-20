@@ -22,6 +22,11 @@ pub enum ClientError {
     /// that looks like real data.
     #[error("history fetch task failed: {0}")]
     Join(String),
+    /// The request exceeded its wall-clock ceiling. Distinct from a
+    /// transport error so the banner can say "timed out" rather than
+    /// something generic the user cannot act on.
+    #[error("GitHub request timed out after {0}s")]
+    Timeout(u64),
 }
 
 pub struct GitHubClient {

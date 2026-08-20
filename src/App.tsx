@@ -3,6 +3,7 @@ import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
 import { PrList } from "./components/PrList";
+import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { StatsPage } from "./components/StatsPage";
 import { applyFilters, sortPrs } from "./lib/derive";
@@ -13,7 +14,7 @@ import { useFilters } from "./store/filters";
 /// `get_auth_state` query and one `usePollError` subscription (and
 /// therefore one error banner) per window.
 export default function App() {
-  const { data: prs = [], isLoading } = usePullRequests();
+  const { data: prs = [], isLoading, isError, error, refetch } = usePullRequests();
   const { filters, view } = useFilters();
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
@@ -86,6 +87,19 @@ export default function App() {
               <div className="rounded-md border border-[#30363d] px-4 py-12 text-center text-sm text-[#8b949e]">
                 Loading pull requests…
               </div>
+            ) : isError ? (
+              // The same reasoning one step further. A REJECTED query also
+              // leaves `prs` at its `[]` default, so without this branch the
+              // list renders "0 Open -- no pull requests match these
+              // filters": a confident answer to a question the app could not
+              // answer. `poll-error` does not cover this -- that banner is
+              // emitted by the background loop, and a failure here means the
+              // foreground fetch itself never produced data.
+              <QueryError
+                title="Could not load your pull requests"
+                message={errorMessage(error)}
+                onRetry={() => void refetch()}
+              />
             ) : (
               <PrList prs={visible} />
             )}

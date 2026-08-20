@@ -10,7 +10,27 @@ permissions:
   contents: write
 
 jobs:
+  # CI runs independently on the tag (see ci.yml's `tags:` trigger). This
+  # job waits for it to go green before anything is built or published, so
+  # a tag on broken code fails here instead of shipping.
+  #
+  # Deliberately a wait rather than duplicating the test steps: one
+  # definition of "green" means the release cannot pass a gate that CI
+  # would have failed.
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for CI to pass on this commit
+        uses: lewagon/wait-on-check-action@ccfb013c15c8afb7bf2b7c028fb74dc5a068cccc # v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          repo-token: ${{ github.token }}
+          running-workflow-name: gate
+          wait-interval: 15
+          allowed-conclusions: success
+
   release:
+    needs: gate
     runs-on: macos-latest
     # Hoisted to job level so the signing step's `if:` can test a plain env
     # var. A step-level `if: secrets.X != ''` is not reliably evaluatable --

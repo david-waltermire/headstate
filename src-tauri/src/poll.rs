@@ -5,8 +5,8 @@
 //! React never talks to GitHub directly: it renders whatever snapshot is on
 //! disk and listens for the `prs-updated` event.
 
-use crate::github::client::GitHubClient;
-use crate::github::model::{MergeState, PullRequest};
+use crate::github::client::{ClientError, GitHubClient};
+use crate::github::model::{needs_attention_count, MergeState, PullRequest};
 use crate::store::{open_db, save_snapshot};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -86,6 +86,11 @@ fn persist_and_emit(app: &AppHandle, prs: &[PullRequest]) {
     if let Err(e) = app.emit("prs-updated", prs) {
         eprintln!("headstate: failed to emit prs-updated: {e}");
     }
+    // The badge is why polling lives in Rust at all: it has to stay correct
+    // while the window is hidden, when no React component is mounted to
+    // compute it. Counted here from the same list just persisted, using the
+    // model's single owner of the rule.
+    crate::tray::set_badge(app, needs_attention_count(prs));
 }
 
 /// #22: schedules exactly one targeted re-poll ~`RECHECK_DELAY` after a
@@ -132,10 +137,28 @@ fn spawn_recheck(app: AppHandle, client: Arc<GitHubClient>, last_known: Vec<Pull
 /// in a spawned task would silently kill polling for the rest of the
 /// session, so every fallible step here is matched or logged, never
 /// unwrapped.
+/// Wall-clock ceiling on one poll's fetch.
+///
+/// The transport timeouts in `auth::build_client` bound individual socket
+/// operations; this bounds the whole request. A server that trickles bytes
+/// can keep a read alive indefinitely without ever tripping a read timeout,
+/// and the loop must reach its sleep either way.
+///
+/// Generous relative to the ~3s measured fetch, so it fires only on a
+/// genuine hang and never truncates a merely slow response.
+pub const FETCH_TIMEOUT: Duration = Duration::from_secs(90);
+
 pub fn spawn(app: AppHandle, client: Arc<GitHubClient>, focused: Arc<AtomicBool>) {
     tauri::async_runtime::spawn(async move {
         loop {
-            match client.fetch_prs().await {
+            // `timeout` collapses a hang into the Err arm the loop already
+            // handles, so a wedged request costs one tick instead of the
+            // rest of the session.
+            let fetched = match tokio::time::timeout(FETCH_TIMEOUT, client.fetch_prs()).await {
+                Ok(res) => res,
+                Err(_) => Err(ClientError::Timeout(FETCH_TIMEOUT.as_secs())),
+            };
+            match fetched {
                 Ok(prs) => {
                     persist_and_emit(&app, &prs);
                     if has_checking(&prs) {
@@ -158,6 +181,38 @@ pub fn spawn(app: AppHandle, client: Arc<GitHubClient>, focused: Arc<AtomicBool>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hung request must collapse into the error arm rather than
+    /// awaiting forever. Without the `timeout` wrapper the poll loop had
+    /// no ceiling at all: a blackholed TCP connection meant no error, no
+    /// next tick, and silent stale data for the rest of the session.
+    #[tokio::test]
+    async fn a_hung_fetch_times_out_instead_of_awaiting_forever() {
+        // A future that never resolves, standing in for a wedged socket.
+        // Uses a short ceiling so the test is instant; the mechanism is
+        // identical to the one FETCH_TIMEOUT drives in `spawn`.
+        let hung = std::future::pending::<Result<Vec<PullRequest>, ClientError>>();
+        let out = tokio::time::timeout(Duration::from_millis(20), hung).await;
+        assert!(out.is_err(), "a never-resolving fetch must time out");
+
+        // And the timeout maps into the error arm the loop already handles.
+        let mapped: Result<Vec<PullRequest>, ClientError> = match out {
+            Ok(res) => res,
+            Err(_) => Err(ClientError::Timeout(FETCH_TIMEOUT.as_secs())),
+        };
+        assert!(matches!(mapped, Err(ClientError::Timeout(90))));
+    }
+
+    /// The ceiling has to clear a normal fetch by a wide margin, or a
+    /// merely slow response would be reported as a failure.
+    #[test]
+    fn fetch_timeout_leaves_headroom_over_a_normal_fetch() {
+        // PRS_QUERY's own doc records ~2.9s for 27 PRs.
+        assert!(FETCH_TIMEOUT >= Duration::from_secs(30));
+        // And still well under the shortest poll interval, so a wedged
+        // tick cannot overlap the next one.
+        assert!(FETCH_TIMEOUT < FOCUSED + FOCUSED);
+    }
     use crate::github::model::{CiState, Label, ReviewState};
     use chrono::Utc;
 

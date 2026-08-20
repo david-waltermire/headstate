@@ -116,3 +116,108 @@ pub struct History {
     pub month_current: u64,
     pub month_previous: u64,
 }
+
+impl PullRequest {
+    /// Blocked on the author and nobody else: a real conflict, or failing
+    /// CI. `Checking` is deliberately excluded -- GitHub reports UNKNOWN
+    /// mergeability while it computes, and treating that as a conflict
+    /// would fire a false warning on every push.
+    ///
+    /// This is the ONE Rust owner of the rule. The frontend has its own
+    /// copy in `src/lib/derive.ts`; `needs_attention_rule_matches_frontend`
+    /// pins them together so the tray badge can never disagree with the
+    /// priorities strip.
+    pub fn needs_attention(&self) -> bool {
+        self.merge == MergeState::Conflicted || self.ci == CiState::Failure
+    }
+}
+
+/// How many PRs are blocked on the author. Feeds the tray badge.
+pub fn needs_attention_count(prs: &[PullRequest]) -> u64 {
+    prs.iter().filter(|p| p.needs_attention()).count() as u64
+}
+
+#[cfg(test)]
+mod attention_tests {
+    use super::*;
+
+    fn pr(merge: MergeState, ci: CiState) -> PullRequest {
+        let t = DateTime::parse_from_rfc3339("2026-08-20T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        PullRequest {
+            number: 1,
+            title: "t".into(),
+            url: "u".into(),
+            repo: "acme/repo".into(),
+            author: "a".into(),
+            is_draft: false,
+            created_at: t,
+            updated_at: t,
+            ci,
+            merge,
+            review: ReviewState::None,
+            in_merge_queue: false,
+            labels: vec![],
+            comment_count: 0,
+        }
+    }
+
+    #[test]
+    fn conflicted_or_failing_needs_attention() {
+        assert!(pr(MergeState::Conflicted, CiState::Success).needs_attention());
+        assert!(pr(MergeState::Mergeable, CiState::Failure).needs_attention());
+        assert!(pr(MergeState::Conflicted, CiState::Failure).needs_attention());
+    }
+
+    /// The rule that keeps the badge honest. GitHub reports UNKNOWN
+    /// mergeability while it computes, so counting `Checking` would badge
+    /// the tray on every push and train the user to ignore it.
+    #[test]
+    fn checking_is_not_attention() {
+        assert!(!pr(MergeState::Checking, CiState::Success).needs_attention());
+        assert!(!pr(MergeState::Checking, CiState::Pending).needs_attention());
+    }
+
+    #[test]
+    fn pending_and_none_ci_are_not_attention() {
+        assert!(!pr(MergeState::Mergeable, CiState::Pending).needs_attention());
+        assert!(!pr(MergeState::Mergeable, CiState::None).needs_attention());
+    }
+
+    #[test]
+    fn counts_only_the_blocked_ones() {
+        let prs = vec![
+            pr(MergeState::Conflicted, CiState::Success),
+            pr(MergeState::Mergeable, CiState::Failure),
+            pr(MergeState::Mergeable, CiState::Success),
+            pr(MergeState::Checking, CiState::Pending),
+        ];
+        assert_eq!(needs_attention_count(&prs), 2);
+    }
+
+    /// Pins the Rust rule to the TypeScript one by reading the actual
+    /// source. The two implementations are unavoidably separate -- one
+    /// badges a hidden tray, the other renders a strip -- so a drift here
+    /// would silently make the badge disagree with the UI.
+    #[test]
+    fn needs_attention_rule_matches_frontend() {
+        let ts = include_str!("../../../src/lib/derive.ts");
+        let start = ts
+            .find("export function needsAttention")
+            .expect("needsAttention not found in derive.ts");
+        let body = &ts[start..start + 200];
+        assert!(
+            body.contains(r#"pr.merge === "conflicted""#),
+            "frontend rule changed: {body}"
+        );
+        assert!(
+            body.contains(r#"pr.ci === "failure""#),
+            "frontend rule changed: {body}"
+        );
+        assert!(
+            !body.contains("checking"),
+            "frontend now counts checking; Rust does not: {body}"
+        );
+    }
+}

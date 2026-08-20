@@ -119,6 +119,18 @@ pub fn read_token() -> Result<String, AuthError> {
 pub fn build_client(token: &str) -> Result<octocrab::Octocrab, AuthError> {
     octocrab::Octocrab::builder()
         .personal_token(token.to_string())
+        // Without these, octocrab's Config leaves every timeout as None. A
+        // hung TCP connection -- a closed laptop lid, a captive portal that
+        // blackholes rather than resets -- then never returns and never
+        // errors, and the poll loop awaits it forever: no error banner, no
+        // next tick, silent stale data for the rest of the session.
+        //
+        // These bound the transport. `poll::FETCH_TIMEOUT` bounds the whole
+        // request on top, because a server that trickles bytes can keep a
+        // read alive indefinitely without ever tripping a read timeout.
+        .set_connect_timeout(Some(std::time::Duration::from_secs(10)))
+        .set_read_timeout(Some(std::time::Duration::from_secs(30)))
+        .set_write_timeout(Some(std::time::Duration::from_secs(30)))
         // Octocrab's default is RetryConfig::Simple(3), which retries with
         // `future::ready(())` -- no delay at all. On a 429 that means three
         // more requests fired instantly at a server that just said "slow

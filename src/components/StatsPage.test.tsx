@@ -37,8 +37,11 @@ const detail: MergedDetail = {
   repo_counts: [{ repo: "acme/alpha", merged: 3 }],
 };
 
-const pending = { data: undefined, isLoading: true } as never;
-const settled = <T,>(data: T) => ({ data, isLoading: false }) as never;
+const pending = { data: undefined, isLoading: true, isError: false, refetch: vi.fn() } as never;
+const settled = <T,>(data: T) =>
+  ({ data, isLoading: false, isError: false, refetch: vi.fn() }) as never;
+const failed = (error: unknown = "boom") =>
+  ({ data: undefined, isLoading: false, isError: true, error, refetch: vi.fn() }) as never;
 
 function setup(p: unknown, h: unknown, d: unknown) {
   vi.mocked(usePeriods).mockReturnValue(p as never);
@@ -84,13 +87,36 @@ describe("StatsPage", () => {
 
   // A slow or failed sample must never blank the sections that did load.
   it("keeps the cards and chart when the sample query fails", () => {
-    setup(settled(periods), settled(history), {
-      data: undefined,
-      isLoading: false,
-      isError: true,
-    });
+    setup(settled(periods), settled(history), failed());
     const { container } = render(<StatsPage />);
     expect(screen.getByText("183")).toBeTruthy();
     expect(container.querySelector("svg")).toBeTruthy();
+  });
+
+  // Regression: a failed query is not a pending one. Before this, every
+  // gate was a bare truthiness check and an error pulsed skeletons forever.
+  it("shows an error instead of pulsing skeletons when a query fails", () => {
+    setup(failed("rate limit exceeded"), settled(history), settled(detail));
+    const { container } = render(<StatsPage />);
+    expect(screen.getByText(/could not load the headline figures/i)).toBeTruthy();
+    expect(screen.getByText(/rate limit exceeded/)).toBeTruthy();
+    // The failed section stops shimmering; the others still render.
+    expect(container.querySelectorAll(".animate-pulse").length).toBe(0);
+    expect(container.querySelector("svg")).toBeTruthy();
+  });
+
+  it("shows one error for the whole page when all three fail", () => {
+    setup(failed("network down"), failed("network down"), failed("network down"));
+    const { container } = render(<StatsPage />);
+    expect(screen.getByText(/could not load your statistics/i)).toBeTruthy();
+    expect(container.querySelectorAll(".animate-pulse").length).toBe(0);
+  });
+
+  it("retries the failed query", () => {
+    const q = failed("boom") as unknown as { refetch: ReturnType<typeof vi.fn> };
+    setup(q, settled(history), settled(detail));
+    render(<StatsPage />);
+    screen.getByRole("button", { name: /try again/i }).click();
+    expect(q.refetch).toHaveBeenCalled();
   });
 });

@@ -3,11 +3,17 @@ name: CI
 on:
   push:
     branches: [main]
+    # Tags too: `release.yml` runs no tests of its own, and a tag ref is
+    # neither a branch push nor a pull request -- so without this, tagging
+    # published a build that nothing had linted, type-checked, or tested.
+    tags: ["v*"]
   pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Never cancel a tag run: `release.yml` waits on it, and a cancelled
+  # check would either block the release forever or wave it through.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 # Least privilege by default; jobs needing more say so themselves.
 permissions:
