@@ -6,7 +6,6 @@ import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
 import { PrList } from "./components/PrList";
 import { RepoSidebar } from "./components/RepoSidebar";
-import { Button } from "./components/ui/button";
 import { applyFilters, sortPrs } from "./lib/derive";
 import { dismissSplash } from "./splash";
 import { useFilters } from "./store/filters";
@@ -18,7 +17,7 @@ import { useFilters } from "./store/filters";
 export default function App() {
   const { data: prs = [], isSuccess, isLoading } = usePullRequests();
   const { data: stats } = useStats();
-  const { filters, view, setView } = useFilters();
+  const { filters, view } = useFilters();
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
   // is what actually makes it do anything (see the hook's own comment).
@@ -56,20 +55,13 @@ export default function App() {
       <RepoSidebar prs={prs} />
       <main className="flex-1 overflow-auto">
         <header className="flex items-center gap-2 border-b border-[#30363d] px-4 py-3">
-          <Button
-            variant={view === "list" ? "default" : "ghost"}
-            size="sm"
-            onClick={() => setView("list")}
-          >
-            Pull requests
-          </Button>
-          <Button
-            variant={view === "dashboard" ? "default" : "ghost"}
-            size="sm"
-            onClick={() => setView("dashboard")}
-          >
-            Dashboard
-          </Button>
+          {/* View selection lives in the sidebar ("Stats", pinned to its
+              bottom) rather than as a per-page tab pair here: the sidebar is
+              already where you choose what you are looking at, and a tab row
+              repeated above every page competed with it. */}
+          <h1 className="text-sm font-semibold">
+            {view === "dashboard" ? "Stats" : "Pull requests"}
+          </h1>
           <div className="ml-auto">
             {/* scopedRepo skips the wizard's "which repositories?" step:
                 selecting a repo in the sidebar already answers it. */}
@@ -79,9 +71,10 @@ export default function App() {
 
         {view === "dashboard" ? (
           <div className="p-4">
-            {/* The dashboard is the whole-account view, so its strip spans
-                every repo regardless of any repo selection in the sidebar. */}
-            <PrioritiesStrip prs={prs} />
+            {/* No priorities strip here: Stats is a read-only summary of the
+                whole account, and the strip is a triage surface that belongs
+                beside the list it acts on. Its cards already surface what
+                needs attention, and each one clicks through to the list. */}
             <Dashboard prs={prs} stats={stats ?? { merged_week: 0, merged_month: 0 }} />
           </div>
         ) : (

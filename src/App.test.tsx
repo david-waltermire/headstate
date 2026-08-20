@@ -83,26 +83,24 @@ describe("App — priorities strip scoping", () => {
     expect(screen.getByText(/Needs your attention \(2\)/)).toBeDefined();
   });
 
-  /// The dashboard is the whole-account view, so its strip must span every
-  /// repo even while a repo is selected in the sidebar.
-  it("shows every repo in the dashboard strip despite a repo selection", () => {
-    const here = prWithState("failure", "mergeable", "none", {
+  /// Stats is a read-only summary, not a triage surface -- the strip
+  /// belongs beside the list it acts on. Asserting the strip is ABSENT
+  /// rather than just that cards render: an extra panel above the cards
+  /// would still pass a cards-are-present check.
+  it("shows no priorities strip on the stats view", () => {
+    const blocked = prWithState("failure", "mergeable", "none", {
       number: 101,
       repo: "octocat/hello-world",
-      title: "Blocked in the selected repo",
+      title: "Blocked in one repo",
     });
-    const elsewhere = prWithState("failure", "mergeable", "none", {
-      number: 202,
-      repo: "octocat/spoon-knife",
-      title: "Blocked in a different repo",
-    });
-    mockPrs.mockReturnValue([here, elsewhere]);
+    mockPrs.mockReturnValue([blocked]);
 
-    useFilters.setState({ filters: { repo: "octocat/hello-world" }, view: "dashboard" });
+    useFilters.setState({ filters: {}, view: "dashboard" });
     renderApp();
 
-    const strip = screen.getByText(/Needs your attention \(2\)/).closest("section");
-    expect(strip?.textContent).toContain("Blocked in a different repo");
+    expect(screen.queryByText(/Needs your attention/)).toBeNull();
+    // The stats cards themselves still render.
+    expect(screen.getByText(/Needs rebase or red CI/)).toBeDefined();
   });
 
   /// A repo selection scopes the strip; a label filter must not. Something

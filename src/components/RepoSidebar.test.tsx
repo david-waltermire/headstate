@@ -44,11 +44,49 @@ describe("RepoSidebar", () => {
   it("shows a count badge per repo, busiest first in DOM order", () => {
     render(<RepoSidebar prs={PR_FIXTURES} />);
     const buttons = screen.getAllByRole("button");
-    // All repositories, then octocat/hello-world (2), then octocat/spoon-knife (1).
+    // All repositories, then octocat/hello-world (2), then
+    // octocat/spoon-knife (1), then Stats pinned last.
     expect(buttons.map((b) => b.textContent)).toEqual([
       "All repositories3",
       "octocat/hello-world2",
       "octocat/spoon-knife1",
+      "Stats",
     ]);
+  });
+
+  /// Stats must be the LAST row, below every repo. Asserting the index
+  /// rather than mere presence is the point: the whole request was to pin it
+  /// to the bottom, and a Stats button that drifted into the repo list would
+  /// still pass a presence check.
+  it("pins Stats to the bottom, after every repo", () => {
+    render(<RepoSidebar prs={PR_FIXTURES} />);
+    const labels = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(labels[labels.length - 1]).toBe("Stats");
+  });
+
+  it("switches to the stats view and marks itself pressed", () => {
+    render(<RepoSidebar prs={PR_FIXTURES} />);
+    const stats = screen.getByRole("button", { name: /stats/i });
+    expect(stats.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(stats);
+
+    expect(useFilters.getState().view).toBe("dashboard");
+    expect(
+      screen.getByRole("button", { name: /stats/i }).getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  /// Picking a repo while on Stats has to return you to the list -- otherwise
+  /// the click appears to do nothing, because the stats view ignores the repo
+  /// filter entirely.
+  it("returns to the list when a repo is chosen from the stats view", () => {
+    useFilters.setState({ filters: {}, view: "dashboard" });
+    render(<RepoSidebar prs={PR_FIXTURES} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /octocat\/hello-world/ }));
+
+    expect(useFilters.getState().view).toBe("list");
+    expect(useFilters.getState().filters.repo).toBe("octocat/hello-world");
   });
 });
