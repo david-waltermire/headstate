@@ -86,6 +86,46 @@ function getSnapshot(): string | null {
   return lastPollError;
 }
 
+/// `src-tauri/src/tray.rs` emits `refresh-requested` when the user clicks
+/// "Refresh now" in the tray menu. That click has no other effect on its
+/// own -- it only fires the event -- so without a listener the menu item is
+/// silently dead: the click succeeds, the event fires, and nothing happens.
+///
+/// Invalidating the `["prs"]` query (rather than calling `refreshNow`
+/// directly) reuses `usePullRequests`'s existing `queryFn`, so a
+/// tray-triggered refresh goes through the same cache-then-refresh_now path
+/// as the initial load instead of duplicating that logic here.
+export function useRefreshRequested(): void {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    // Same guarded pattern as the two listeners above -- see their comments
+    // for why the `cancelled` flag is load-bearing under StrictMode.
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+
+    listen("refresh-requested", () => {
+      // `refreshNow()` directly, NOT `invalidateQueries`. Invalidating would
+      // re-run `usePullRequests`'s queryFn, which reads the SQLite snapshot
+      // first and only falls back to the network when that snapshot is
+      // empty. The poll loop writes a snapshot every tick, so it never is --
+      // meaning an invalidate would re-read the same rows the user is
+      // already looking at. "Refresh now" has to mean "ask GitHub now", or
+      // the user waits out the 60s/300s poll cadence while believing they
+      // just refreshed.
+      void refreshNow().then((prs) => qc.setQueryData(["prs"], prs));
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [qc]);
+}
+
 /// The most recent `poll-error` message, or `null` if no poll has failed
 /// since this window opened (or a later poll has since succeeded and
 /// re-emitted `prs-updated`, which clears it).

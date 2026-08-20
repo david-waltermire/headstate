@@ -13,6 +13,8 @@ export interface Filters {
   needsAttentionOnly?: boolean;
   staleOnly?: boolean;
   inMergeQueueOnly?: boolean;
+  awaitingReviewOnly?: boolean;
+  readyToQueueOnly?: boolean;
   sort?: "newest" | "oldest" | "recently-updated" | "least-recently-updated";
 }
 
@@ -64,6 +66,16 @@ export function applyFilters(
     if (f.excludeLabels?.length && hasLabel(pr, f.excludeLabels)) return false;
     if (f.needsAttentionOnly && !needsAttention(pr)) return false;
     if (f.inMergeQueueOnly && !pr.in_merge_queue) return false;
+    // Delegate to the same predicates deriveStats counts with, rather than
+    // re-expressing "review is none OR review_required" or "approved AND
+    // not already queued" as scalar equality filters -- a scalar `review`
+    // field can only match one value at a time and has no way to express
+    // "not in queue," so re-encoding these compound conditions as
+    // combinations of existing scalar fields silently drops or admits PRs
+    // the count did not (Task 17 fix round 1: cards 5 and 6 opened a list
+    // that disagreed with their own numbers).
+    if (f.awaitingReviewOnly && !awaitingReview(pr)) return false;
+    if (f.readyToQueueOnly && !readyToQueue(pr)) return false;
     if (f.staleOnly && !isStale(pr, now)) return false;
     return true;
   });
