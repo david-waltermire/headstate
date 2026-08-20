@@ -13,14 +13,23 @@ import { PrRow } from "@/components/PrRow";
 export function PrList({
   prs,
   hasFilters = false,
+  total,
 }: {
   prs: PullRequest[];
   hasFilters?: boolean;
+  /// GitHub's true match count when it exceeds the page size, else
+  /// undefined. Shown so a truncated list never passes for a complete one.
+  total?: number;
 }) {
   return (
     <div className="rounded-md border border-[#30363d]">
       <div className="flex items-center justify-between border-b border-[#30363d] bg-[#161b22] px-4 py-3 text-sm">
         <span className="font-semibold text-[#e6edf3]">{prs.length} Open</span>
+        {total !== undefined && total > prs.length ? (
+          <span className="text-xs text-[#d29922]">
+            showing {prs.length} of {total} — GitHub returns at most 100
+          </span>
+        ) : null}
       </div>
       {prs.length === 0 ? (
         <div className="px-4 py-12 text-center text-sm text-[#8b949e]">

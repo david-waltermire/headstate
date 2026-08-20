@@ -7,13 +7,26 @@ import type { RepoCount } from "@/types/pr";
 /// Clicking a row scopes the app to that repo and switches to the list.
 /// "Which of my many repos is this happening in" is the whole reason this
 /// table exists, so it has to be a way in, not just a readout.
-export function RepoTable({ repos }: { repos: RepoCount[] }) {
+export function RepoTable({
+  repos,
+  sampleSize,
+}: {
+  repos: RepoCount[];
+  sampleSize?: number;
+}) {
   const { setFilter, setView } = useFilters();
   const total = repos.reduce((sum, r) => sum + r.merged, 0);
 
   return (
     <Card className="px-4">
       <div className="text-sm font-semibold">Merged by repository</div>
+      {/* The bars are the most visually assertive element on the page and
+          had the weakest footing: they are shares of a SAMPLE of recent
+          merges, not of all time. The delta and insight cards already say
+          so; this was the holdout. */}
+      <div className="text-xs text-[#8b949e]">
+        {sampleSize ? `share of the last ${sampleSize} merged` : "share of recent merges"}
+      </div>
       {repos.length === 0 ? (
         <div className="py-8 text-center text-sm text-[#8b949e]">
           No merged pull requests in this sample.

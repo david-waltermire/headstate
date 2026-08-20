@@ -13,18 +13,24 @@ vi.mock("./api/hooks", () => ({
   usePullRequests: () => ({ data: mockPrs(), isSuccess: true, isLoading: false }),
   usePollError: () => null,
   useRefreshRequested: () => undefined,
+  useTruncation: () => null,
   // StatsPage owns these; this suite only asserts the shell's layout, so
   // they return a settled empty result rather than real figures.
+  // Non-zero on purpose: an all-zero account now renders a single
+  // "no merged pull requests yet" message instead of the card grid, and
+  // this suite asserts on a card being present.
   usePeriods: () => ({
     data: {
-      week_current: 0,
-      week_previous: 0,
-      opened_week_current: 0,
-      opened_week_previous: 0,
-      month_current: 0,
-      month_previous: 0,
+      week_current: 5,
+      week_previous: 3,
+      opened_week_current: 6,
+      opened_week_previous: 4,
+      month_current: 20,
+      month_previous: 18,
     },
     isLoading: false,
+    isError: false,
+    refetch: () => {},
   }),
   useHistory: () => ({
     data: {

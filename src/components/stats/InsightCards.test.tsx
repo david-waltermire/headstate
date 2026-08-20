@@ -18,10 +18,12 @@ const detail: MergedDetail = {
 describe("InsightCards", () => {
   // True nearest-rank on 4 samples: p50 -> ceil(4*.5)-1 = index 1 (1.0),
   // p90 -> ceil(4*.9)-1 = index 3 (4.0).
-  it("shows median and p90 cycle time", () => {
+  // n=4, so "p90" would be the largest value in the sample. The label
+  // says "slowest" below 20 samples rather than implying a distribution.
+  it("shows median and the slowest cycle time", () => {
     render(<InsightCards detail={detail} />);
     expect(screen.getByText("1.0h")).toBeTruthy();
-    expect(screen.getByText(/p90 4\.0h/)).toBeTruthy();
+    expect(screen.getByText(/slowest 4\.0h/)).toBeTruthy();
   });
 
   it("shows total lines changed", () => {
@@ -34,7 +36,7 @@ describe("InsightCards", () => {
   it("shows median PR size with p90 and comments in the hint", () => {
     render(<InsightCards detail={detail} />);
     expect(screen.getByText("120")).toBeTruthy(); // nearest-rank p50
-    expect(screen.getByText(/p90 900/)).toBeTruthy();
+    expect(screen.getByText(/slowest 900/)).toBeTruthy();
     expect(screen.getByText(/1\.2 comments\/PR/)).toBeTruthy();
   });
 

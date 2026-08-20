@@ -189,12 +189,21 @@ pub fn spawn(
             // `timeout` collapses a hang into the Err arm the loop already
             // handles, so a wedged request costs one tick instead of the
             // rest of the session.
-            let fetched = match tokio::time::timeout(FETCH_TIMEOUT, client.fetch_prs()).await {
-                Ok(res) => res,
-                Err(_) => Err(ClientError::Timeout(FETCH_TIMEOUT.as_secs())),
-            };
+            let fetched =
+                match tokio::time::timeout(FETCH_TIMEOUT, client.fetch_prs_with_total()).await {
+                    Ok(res) => res,
+                    Err(_) => Err(ClientError::Timeout(FETCH_TIMEOUT.as_secs())),
+                };
             match fetched {
-                Ok(prs) => {
+                Ok((prs, total)) => {
+                    // Only interesting when GitHub says there are more than
+                    // it returned; the UI stays silent otherwise.
+                    if total > prs.len() as u64 {
+                        log::warn!("truncated: showing {} of {total} open PRs", prs.len());
+                        if let Err(e) = app.emit("prs-truncated", total) {
+                            log::warn!("failed to emit prs-truncated: {e}");
+                        }
+                    }
                     // The heartbeat that makes "it stopped updating"
                     // answerable: if the log ends here, the loop died or
                     // the machine slept; if it keeps ticking, the problem

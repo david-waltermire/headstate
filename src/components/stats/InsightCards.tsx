@@ -41,6 +41,11 @@ export function InsightCards({ detail }: { detail: MergedDetail }) {
   const median = percentile(detail.cycle_time_hours, 0.5);
   const p90 = percentile(detail.cycle_time_hours, 0.9);
   const hasTimes = detail.cycle_time_hours.length > 0;
+  // For a small sample, "p90" resolves to the largest value in it -- a
+  // brand-new account's single weekend PR would be presented with the
+  // authority of a tail metric. Say "slowest" instead of implying a
+  // distribution that is not there.
+  const tailLabel = (n: number) => (n >= 20 ? "p90" : "slowest");
   const medianSize = percentile(detail.pr_sizes, 0.5);
   const p90Size = percentile(detail.pr_sizes, 0.9);
 
@@ -49,7 +54,11 @@ export function InsightCards({ detail }: { detail: MergedDetail }) {
       <Stat
         label="Cycle time"
         value={hasTimes ? `${median.toFixed(1)}h` : "--"}
-        hint={hasTimes ? `median · p90 ${p90.toFixed(1)}h` : "no timing data"}
+        hint={
+          hasTimes
+            ? `median · ${tailLabel(detail.cycle_time_hours.length)} ${p90.toFixed(1)}h`
+            : "no timing data"
+        }
       />
       <Stat
         label="Lines changed"
@@ -57,7 +66,7 @@ export function InsightCards({ detail }: { detail: MergedDetail }) {
         hint={
           n === 0
             ? "no sample"
-            : `${per(lines, 0)} per PR · ${per(detail.changed_files)} files`
+            : `over ${n} merged · ${per(lines, 0)} per PR · ${per(detail.changed_files)} files`
         }
       />
       <Stat
@@ -66,7 +75,7 @@ export function InsightCards({ detail }: { detail: MergedDetail }) {
         hint={
           n === 0
             ? "no sample"
-            : `lines · p90 ${p90Size.toLocaleString()} · ${per(detail.comment_count)} comments/PR`
+            : `lines · ${tailLabel(detail.pr_sizes.length)} ${p90Size.toLocaleString()} · ${per(detail.comment_count)} comments/PR`
         }
       />
     </div>

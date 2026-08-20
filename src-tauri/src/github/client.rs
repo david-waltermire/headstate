@@ -3,7 +3,7 @@
 //!
 //! Read-only: every query here is a `search`, never a mutation.
 
-use super::map::{map_history, map_merged_detail, map_search};
+use super::map::{map_history, map_merged_detail, map_search, map_total};
 use super::model::{History, MergedDetail, Periods, PullRequest, Stats};
 use super::query::{
     history_query_range, history_query_range_with_periods, periods_query, HISTORY_CHUNK_DAYS,
@@ -76,6 +76,25 @@ impl GitHubClient {
             }))
             .await?;
         Ok(map_search(&v))
+    }
+
+    /// The PR list together with GitHub's own match count.
+    ///
+    /// `PRS_QUERY` is `first: 100` with no pagination, and it already
+    /// selects `issueCount` -- nothing read it. Above 100 open PRs the
+    /// list, the sidebar, and the priorities strip all reported 100 with
+    /// the remainder invisible; the strip in particular is designed never
+    /// to have a false negative, and silently dropping PR 118 breaks that
+    /// promise. Returning the total lets the UI say "showing 100 of 137"
+    /// instead of quietly lying.
+    pub async fn fetch_prs_with_total(&self) -> Result<(Vec<PullRequest>, u64), ClientError> {
+        let v = self
+            .graphql_partial_ok(&json!({
+                "query": PRS_QUERY,
+                "variables": { "q": "is:pr is:open author:@me" }
+            }))
+            .await?;
+        Ok((map_search(&v), map_total(&v)))
     }
 
     /// The two historical counters. The other five dashboard numbers are
@@ -308,6 +327,31 @@ mod tests {
             .fetch_stats(Utc::now())
             .await
             .is_err());
+    }
+
+    /// `issueCount` is what makes truncation visible; it was requested by
+    /// the query and read by nothing, so >100 open PRs silently became 100.
+    #[tokio::test]
+    async fn reports_the_true_total_when_the_page_truncates() {
+        let server = MockServer::start().await;
+        let body: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/search.json")).unwrap();
+        // The fixture has 3 nodes; claim GitHub matched 137.
+        let mut truncated = body.clone();
+        truncated["search"]["issueCount"] = json!(137);
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": truncated })))
+            .mount(&server)
+            .await;
+
+        let (prs, total) = client_for(&server)
+            .await
+            .fetch_prs_with_total()
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), 3);
+        assert_eq!(total, 137, "the UI needs the real total to say so");
     }
 
     /// The bug this replaced: octocrab's `GraphqlResponse` is untagged

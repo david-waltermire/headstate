@@ -17,3 +17,22 @@ describe("PrList empty states", () => {
     expect(screen.queryByText(/pull requests you opened/i)).toBeNull();
   });
 });
+
+describe("PrList truncation notice", () => {
+  // Silent truncation made the priorities strip -- whose whole job is
+  // never to have a false negative -- filter a subset without saying so.
+  it("says so when GitHub has more PRs than it returned", () => {
+    render(<PrList prs={[]} hasFilters={false} total={137} />);
+    expect(screen.getByText(/showing 0 of 137/i)).toBeTruthy();
+  });
+
+  it("stays silent in the normal case", () => {
+    render(<PrList prs={[]} hasFilters={false} />);
+    expect(screen.queryByText(/showing/i)).toBeNull();
+  });
+
+  it("stays silent when the total equals what was returned", () => {
+    render(<PrList prs={[]} hasFilters={false} total={0} />);
+    expect(screen.queryByText(/showing/i)).toBeNull();
+  });
+});

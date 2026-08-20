@@ -1,4 +1,4 @@
-import { usePullRequests, useRefreshRequested } from "./api/hooks";
+import { usePullRequests, useRefreshRequested, useTruncation } from "./api/hooks";
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
@@ -21,6 +21,7 @@ export default function App() {
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
   // is what actually makes it do anything (see the hook's own comment).
   useRefreshRequested();
+  const truncatedTotal = useTruncation();
 
   // Splash dismissal deliberately does NOT live here. `App` only mounts
   // when auth succeeds, so dismissing on `isSuccess` left every
@@ -109,7 +110,11 @@ export default function App() {
                 onRetry={() => void refetch()}
               />
             ) : (
-              <PrList prs={visible} hasFilters={hasActiveFilters(filters)} />
+              <PrList
+                prs={visible}
+                hasFilters={hasActiveFilters(filters)}
+                total={truncatedTotal ?? undefined}
+              />
             )}
           </div>
         )}

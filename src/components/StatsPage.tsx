@@ -48,10 +48,35 @@ export function StatsPage() {
     );
   }
 
+  // A brand-new user, or one back from holiday, otherwise met four cards
+  // reading 0 and "--", plus "over 0 merged", plus "No activity in this
+  // period", plus "No merged pull requests in this sample" -- four
+  // uncoordinated fragments where one sentence is clearer. Tolerates
+  // `detail` being absent, since the two queries land independently and a
+  // flicker would be worse than the fragments.
+  const nothingYet =
+    periods !== undefined &&
+    periods.week_current === 0 &&
+    periods.month_current === 0 &&
+    periods.opened_week_current === 0 &&
+    (detail === undefined || detail.sample_size === 0);
+
+  if (nothingYet) {
+    return (
+      <div className="rounded-md border border-[#30363d] px-4 py-12 text-center">
+        <p className="text-sm font-semibold text-[#e6edf3]">No merged pull requests yet</p>
+        <p className="mx-auto mt-2 max-w-md text-sm text-[#8b949e]">
+          Statistics appear here once you have merged some pull requests. Headstate
+          counts only pull requests you opened.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3">
       {periods ? (
-        <DeltaCards periods={periods} detail={detail} />
+        <DeltaCards periods={periods} />
       ) : periodsQ.isError ? (
         <QueryError
           title="Could not load the headline figures"
@@ -80,7 +105,7 @@ export function StatsPage() {
       {detail ? (
         <>
           <InsightCards detail={detail} />
-          <RepoTable repos={detail.repo_counts} />
+          <RepoTable repos={detail.repo_counts} sampleSize={detail.sample_size} />
         </>
       ) : detailQ.isError ? (
         <QueryError

@@ -112,6 +112,29 @@ describe("StatsPage", () => {
     expect(container.querySelectorAll(".animate-pulse").length).toBe(0);
   });
 
+  // Four uncoordinated "nothing here" fragments became one sentence.
+  it("shows a single coordinated message when there is nothing yet", () => {
+    const empty = {
+      week_current: 0,
+      week_previous: 0,
+      opened_week_current: 0,
+      opened_week_previous: 0,
+      month_current: 0,
+      month_previous: 0,
+    };
+    setup(settled(empty), settled({ ...history, points: [] }), settled({ ...detail, sample_size: 0 }));
+    render(<StatsPage />);
+    expect(screen.getByText(/no merged pull requests yet/i)).toBeTruthy();
+    expect(screen.queryByText(/no activity in this period/i)).toBeNull();
+  });
+
+  // But a user with real activity must never see it.
+  it("does not show the empty message when there is activity", () => {
+    setup(settled(periods), settled(history), settled(detail));
+    render(<StatsPage />);
+    expect(screen.queryByText(/no merged pull requests yet/i)).toBeNull();
+  });
+
   it("retries the failed query", () => {
     const q = failed("boom") as unknown as { refetch: ReturnType<typeof vi.fn> };
     setup(q, settled(history), settled(detail));

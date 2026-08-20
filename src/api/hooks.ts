@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import type { PullRequest } from "../types/pr";
 import {
   getCached,
@@ -193,6 +193,36 @@ export function usePollError(): string | null {
   }, []);
 
   return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/// GitHub's true open-PR count, when it exceeds what the query returned.
+///
+/// `null` in the normal case. The Rust loop emits `prs-truncated` only
+/// above the 100-PR page size, so this stays quiet for almost everyone
+/// while making the cap visible to the accounts it actually affects.
+export function useTruncation(): number | null {
+  const [total, setTotal] = useState<number | null>(null);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    // Tolerate a host without Tauri's event bridge (tests that do not opt
+    // into mocked events, and any non-Tauri render). Truncation is an
+    // advisory notice; failing to subscribe must not break the page.
+    listen<number>("prs-truncated", (e) => setTotal(e.payload)).then(
+      (fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  return total;
 }
 
 /// The period comparisons behind the delta cards.

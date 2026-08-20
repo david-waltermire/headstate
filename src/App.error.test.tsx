@@ -13,6 +13,7 @@ vi.mock("./api/hooks", async (orig) => {
     usePullRequests: () => mockQuery(),
     usePollError: () => null,
     useRefreshRequested: () => undefined,
+  useTruncation: () => null,
     usePeriods: () => ({ data: undefined, isLoading: true }),
     useHistory: () => ({ data: undefined, isLoading: true }),
     useMergedDetail: () => ({ data: undefined, isLoading: true }),

@@ -90,6 +90,18 @@ pub fn map_search(v: &Value) -> Vec<PullRequest> {
         .unwrap_or_default()
 }
 
+/// How many PRs GitHub says match, which may exceed how many it returned.
+///
+/// `PRS_QUERY` asks for `first: 100` and already selects `issueCount`, but
+/// nothing read it -- so an account with 137 open PRs saw a list, a
+/// sidebar, and a priorities strip all confidently reporting 100, with the
+/// remaining 37 invisible. Worst case the strip, whose entire job is never
+/// to have a false negative, renders "Nothing blocked on you" while a
+/// conflicted PR sits at rank 118.
+pub fn map_total(v: &Value) -> u64 {
+    v["search"]["issueCount"].as_u64().unwrap_or(0)
+}
+
 /// Day-bucket aliases into an ascending-by-date series.
 ///
 /// Aliases are emitted newest-first (`m0` is today); the chart plots time
