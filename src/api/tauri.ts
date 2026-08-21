@@ -34,6 +34,14 @@ export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 /// always come back zero today. Does not persist to SQLite.
 export const getStats = () => invoke<Stats>("get_stats");
 
+/// The configured focused poll interval, in seconds.
+export const getPollInterval = () => invoke<number>("get_poll_interval");
+
+/// Set the poll interval. Returns the value actually applied, which may be
+/// clamped -- the UI shows what the backend accepted, not what was asked.
+export const setPollInterval = (secs: number) =>
+  invoke<number>("set_poll_interval", { secs });
+
 /// PRs awaiting the user's review. Rides along in the same GraphQL
 /// document as the authored list, so it costs no extra rate limit.
 export const getReviewing = () => invoke<PullRequest[]>("get_reviewing");

@@ -86,6 +86,32 @@ pub async fn get_cycle_trend(client: State<'_, GhClient>) -> Result<CycleTrend, 
         .map_err(|e| e.to_string())
 }
 
+/// The configured focused poll interval, in seconds.
+#[tauri::command]
+pub fn get_poll_interval(state: State<'_, crate::poll::PollInterval>) -> u64 {
+    state.0.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Set the focused poll interval, clamped to the allowed range.
+///
+/// Wakes the poll loop so a SHORTENED interval takes effect immediately
+/// rather than after the previous, longer sleep expires -- otherwise
+/// dropping from an hour to a minute would appear to do nothing for up to
+/// an hour. Returns the value actually applied, so the UI reflects the
+/// clamp rather than showing a number the backend rejected.
+#[tauri::command]
+pub fn set_poll_interval(
+    secs: u64,
+    state: State<'_, crate::poll::PollInterval>,
+    waker: State<'_, crate::poll::Waker>,
+) -> u64 {
+    let applied = crate::poll::clamp_interval(secs);
+    state.0.store(applied, std::sync::atomic::Ordering::Relaxed);
+    log::info!("poll interval set to {applied}s");
+    waker.0.notify_one();
+    applied
+}
+
 #[tauri::command]
 pub async fn get_reviewing(client: State<'_, GhClient>) -> Result<Vec<PullRequest>, String> {
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;

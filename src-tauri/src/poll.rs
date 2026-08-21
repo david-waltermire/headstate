@@ -8,14 +8,50 @@
 use crate::github::client::{ClientError, GitHubClient};
 use crate::github::model::{needs_attention_count, CiState, MergeState, PullRequest};
 use crate::store::{open_db, save_snapshot};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Notify;
 
-pub const FOCUSED: Duration = Duration::from_secs(60);
-pub const BACKGROUND: Duration = Duration::from_secs(300);
+/// Default focused cadence, in seconds.
+///
+/// Two minutes rather than one: PR state rarely changes minute-to-minute,
+/// and the shipped query costs 6 rate-limit points, so halving the rate
+/// halves the spend for no practical loss of freshness.
+pub const DEFAULT_FOCUSED_SECS: u64 = 120;
+
+/// Floor on the configured interval.
+///
+/// 60s, not 30: the shipped query costs 6 rate-limit points, so a 30s
+/// cadence would spend 720/hour and a 60s one spends 360. Both are
+/// survivable against a 5000/hour budget, but the app should not be able
+/// to consume a seventh of the user's own `gh` allowance on a setting they
+/// picked without knowing the cost.
+///
+/// The budget test asserts against THIS value rather than the default, so
+/// a user choosing the fastest allowed setting still cannot blow through
+/// the guard.
+pub const MIN_FOCUSED_SECS: u64 = 60;
+pub const MAX_FOCUSED_SECS: u64 = 3600;
+
+/// Backgrounded polling is 5x the focused interval: the window is hidden,
+/// so freshness matters less, but the tray badge must not go stale for
+/// long. Proportional rather than separately configurable -- one knob is
+/// enough, and two invites inconsistent pairs.
+pub const BACKGROUND_MULTIPLIER: u64 = 5;
+
+pub const FOCUSED: Duration = Duration::from_secs(DEFAULT_FOCUSED_SECS);
+pub const BACKGROUND: Duration = Duration::from_secs(DEFAULT_FOCUSED_SECS * BACKGROUND_MULTIPLIER);
+
+/// Clamp a user-supplied interval into the allowed range.
+///
+/// Extracted so it is testable: a Tauri command is a public surface, and
+/// an unbounded value here would either hammer GitHub or effectively stop
+/// polling.
+pub fn clamp_interval(secs: u64) -> u64 {
+    secs.clamp(MIN_FOCUSED_SECS, MAX_FOCUSED_SECS)
+}
 
 /// #22: how long after a poll to fire the one-shot targeted re-poll for
 /// PRs still stuck on `MergeState::Checking`. GitHub computes mergeability
@@ -24,16 +60,24 @@ pub const BACKGROUND: Duration = Duration::from_secs(300);
 /// waiting a full tick.
 pub const RECHECK_DELAY: Duration = Duration::from_secs(5);
 
-/// 60s focused / 300s backgrounded. At 2 rate-limit points per poll, focused
-/// cadence is ~120 points/hour against a 5000/hour budget -- see the cadence
-/// test below, which exists so a future change to "every 5 seconds" fails CI
-/// rather than silently competing with the user's own `gh` usage.
-pub fn interval_for(focused: bool) -> Duration {
-    if focused {
-        FOCUSED
+/// The cadence for the current window state, given a configured interval.
+///
+/// The shipped query costs 6 rate-limit points (see the budget test), so
+/// the default 120s focused cadence spends ~180 points/hour against a
+/// 5000/hour budget. The test asserts the FLOOR, not the default, so no
+/// reachable setting can blow the budget.
+pub fn interval_for_secs(focused: bool, configured_secs: u64) -> Duration {
+    let secs = clamp_interval(configured_secs);
+    Duration::from_secs(if focused {
+        secs
     } else {
-        BACKGROUND
-    }
+        secs * BACKGROUND_MULTIPLIER
+    })
+}
+
+/// The default cadence, for callers with no configured value.
+pub fn interval_for(focused: bool) -> Duration {
+    interval_for_secs(focused, DEFAULT_FOCUSED_SECS)
 }
 
 /// True if any PR is still waiting on GitHub's lazy mergeability
@@ -245,11 +289,20 @@ pub const FETCH_TIMEOUT: Duration = Duration::from_secs(90);
 ///    was delayed up to a full interval (300s when backgrounded).
 pub struct Waker(pub Arc<Notify>);
 
+/// The configured focused interval, in seconds.
+///
+/// Shared rather than passed once, so changing the setting takes effect on
+/// the NEXT tick instead of requiring a relaunch. Paired with the `Waker`:
+/// after a change the loop is woken so a shortened interval applies
+/// immediately rather than after the old, longer sleep expires.
+pub struct PollInterval(pub Arc<AtomicU64>);
+
 pub fn spawn(
     app: AppHandle,
     client: Arc<GitHubClient>,
     focused: Arc<AtomicBool>,
     waker: Arc<Notify>,
+    interval_secs: Arc<AtomicU64>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut previous: Vec<PullRequest> = Vec::new();
@@ -257,6 +310,7 @@ pub fn spawn(
             // `timeout` collapses a hang into the Err arm the loop already
             // handles, so a wedged request costs one tick instead of the
             // rest of the session.
+            let _ = app.emit("poll-state", "fetching");
             let fetched =
                 match tokio::time::timeout(FETCH_TIMEOUT, client.fetch_prs_with_total()).await {
                     Ok(res) => res,
@@ -304,13 +358,22 @@ pub fn spawn(
                     }
                 }
             }
+            // The bar shows FETCHING only while a request is genuinely in
+            // flight. Inferring it from `isFetching` would miss the tray
+            // path, which bypasses the queryFn -- so the loop that knows
+            // says so directly.
+            let _ = app.emit("poll-state", "idle");
+
             // Whichever comes first: the cadence elapsing, or someone
             // asking for a refresh. `Notify` stores one permit, so a
             // request that arrives mid-fetch is not lost -- the next
             // `notified()` returns immediately rather than waiting out a
             // full interval.
             tokio::select! {
-                _ = tokio::time::sleep(interval_for(focused.load(Ordering::Relaxed))) => {}
+                _ = tokio::time::sleep(interval_for_secs(
+                    focused.load(Ordering::Relaxed),
+                    interval_secs.load(Ordering::Relaxed),
+                )) => {}
                 _ = waker.notified() => {}
             }
         }
@@ -412,8 +475,45 @@ mod tests {
 
     #[test]
     fn polls_faster_when_focused() {
-        assert_eq!(interval_for(true), std::time::Duration::from_secs(60));
-        assert_eq!(interval_for(false), std::time::Duration::from_secs(300));
+        assert_eq!(
+            interval_for(true),
+            Duration::from_secs(DEFAULT_FOCUSED_SECS)
+        );
+        assert_eq!(
+            interval_for(false),
+            Duration::from_secs(DEFAULT_FOCUSED_SECS * BACKGROUND_MULTIPLIER)
+        );
+    }
+
+    #[test]
+    fn the_default_cadence_is_two_minutes() {
+        assert_eq!(DEFAULT_FOCUSED_SECS, 120);
+        assert_eq!(interval_for(true), Duration::from_secs(120));
+    }
+
+    #[test]
+    fn a_configured_interval_is_honoured() {
+        assert_eq!(interval_for_secs(true, 300), Duration::from_secs(300));
+        // Background stays proportional.
+        assert_eq!(
+            interval_for_secs(false, 300),
+            Duration::from_secs(300 * BACKGROUND_MULTIPLIER)
+        );
+    }
+
+    /// A Tauri command is a public surface. Without a floor, `0` would
+    /// busy-loop against GitHub; without a ceiling, a huge value would
+    /// effectively stop polling while the UI still claimed to be live.
+    #[test]
+    fn a_configured_interval_is_clamped() {
+        assert_eq!(clamp_interval(0), MIN_FOCUSED_SECS);
+        assert_eq!(clamp_interval(1), MIN_FOCUSED_SECS);
+        assert_eq!(clamp_interval(u64::MAX), MAX_FOCUSED_SECS);
+        assert_eq!(clamp_interval(120), 120, "a normal value passes through");
+        assert_eq!(
+            interval_for_secs(true, 0),
+            Duration::from_secs(MIN_FOCUSED_SECS)
+        );
     }
 
     /// Budget guard for BOTH cadences, with the per-poll cost derived from
@@ -450,8 +550,11 @@ mod tests {
             "PRS_QUERY cost changed; re-measure against the live API"
         );
 
+        // The FLOOR, not the default: a user picking the fastest allowed
+        // setting must still be inside budget, or this guard only protects
+        // people who never touch the setting.
         for focused in [true, false] {
-            let per_hour = 3600 / interval_for(focused).as_secs();
+            let per_hour = 3600 / interval_for_secs(focused, MIN_FOCUSED_SECS).as_secs();
             let points = per_hour * cost;
             assert!(
                 points < 500,

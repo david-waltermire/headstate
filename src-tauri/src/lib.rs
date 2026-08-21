@@ -62,6 +62,8 @@ pub fn run() {
             commands::get_history,
             commands::get_periods,
             commands::get_reviewing,
+            commands::get_poll_interval,
+            commands::set_poll_interval,
             commands::get_cycle_trend,
             commands::get_merged_detail,
             commands::get_auth_state,
@@ -128,6 +130,13 @@ pub fn run() {
             let waker = Arc::new(tokio::sync::Notify::new());
             app.manage(poll::Waker(waker.clone()));
 
+            // Managed unconditionally, like the Waker: the settings command
+            // must find it whether or not auth succeeded.
+            let interval = Arc::new(std::sync::atomic::AtomicU64::new(
+                poll::DEFAULT_FOCUSED_SECS,
+            ));
+            app.manage(poll::PollInterval(interval.clone()));
+
             log::info!(
                 "headstate v{} starting (authenticated: {})",
                 env!("CARGO_PKG_VERSION"),
@@ -137,7 +146,7 @@ pub fn run() {
             if let Some(client) = gh_client {
                 let focused = Arc::new(AtomicBool::new(true));
                 app.manage(Focused(focused.clone()));
-                poll::spawn(handle, client, focused, waker);
+                poll::spawn(handle, client, focused, waker, interval);
             }
 
             tray::setup_tray(&app.handle().clone())?;

@@ -14,10 +14,10 @@ import { PrList } from "./components/PrList";
 import { TriageChips } from "./components/TriageChips";
 import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
+import { StatusBar } from "./components/StatusBar";
 import { StatsPage } from "./components/StatsPage";
 import { applyFilters, hasActiveFilters, sortPrs } from "./lib/derive";
 import { shortcutFor } from "./lib/shortcuts";
-import { relativeTime } from "./lib/time";
 import { useFilters } from "./store/filters";
 
 /// The assembled app shell. `AuthGate` already wraps this component once in
@@ -92,7 +92,8 @@ export default function App() {
   // that survive whatever filter is already active, which would make some
   // combinations unreachable.
   return (
-    <div className="flex h-screen bg-[#0d1117] text-[#e6edf3]">
+    <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3]">
+      <div className="flex min-h-0 flex-1">
       <RepoSidebar prs={prs} reviewingCount={reviewing.length} />
       <main className="flex-1 overflow-auto">
         <header className="flex items-center gap-2 border-b border-[#30363d] px-4 py-3">
@@ -107,15 +108,6 @@ export default function App() {
                 ? "Awaiting your review"
                 : "Pull requests"}
           </h1>
-          {/* Freshness. `dataUpdatedAt` rather than `isFetching`: the tray
-              path calls refreshNow + setQueryData outside the queryFn, so
-              isFetching never flips for it, but setQueryData does advance
-              this on both paths. */}
-          {dataUpdatedAt > 0 && view !== "dashboard" ? (
-            <span className="ml-3 text-xs text-[#8b949e]">
-              Updated {relativeTime(new Date(dataUpdatedAt).toISOString())}
-            </span>
-          ) : null}
           <div className="ml-auto">
             {/* scopedRepo skips the wizard's "which repositories?" step:
                 selecting a repo in the sidebar already answers it. */}
@@ -179,6 +171,10 @@ export default function App() {
           </div>
         )}
       </main>
+      </div>
+      {/* Pinned below both the sidebar and the list, so it reads as the
+          window's status rather than the list's. */}
+      <StatusBar updatedAt={dataUpdatedAt} />
     </div>
   );
 }

@@ -8,9 +8,11 @@ import {
   getMergedDetail,
   getCycleTrend,
   getPeriods,
+  getPollInterval,
   getReviewing,
   getStats,
   refreshNow,
+  setPollInterval,
 } from "./tauri";
 
 /// The PR list. Seeded from the SQLite snapshot so the first paint shows
@@ -208,6 +210,55 @@ export function useCycleTrend() {
     queryFn: getCycleTrend,
     staleTime: 5 * 60 * 1000,
   });
+}
+
+/// Whether the poll loop is currently fetching.
+///
+/// Emitted by the Rust loop rather than inferred from `isFetching`: the
+/// tray refresh path calls `refreshNow` outside the queryFn, so the query
+/// flag never flips for it. The loop that knows is the one that says.
+export function usePollState(): "idle" | "fetching" {
+  const [state, setState] = useState<"idle" | "fetching">("idle");
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<string>("poll-state", (e) => {
+      setState(e.payload === "fetching" ? "fetching" : "idle");
+    }).then(
+      (fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  return state;
+}
+
+/// The poll interval setting, and a way to change it.
+///
+/// The value is authoritative on the Rust side, which owns the running
+/// loop -- the mutation returns what was actually applied after clamping,
+/// so the UI can never show a value the backend rejected.
+export function usePollInterval() {
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: ["poll-interval"],
+    queryFn: getPollInterval,
+    staleTime: Infinity,
+  });
+  const set = (secs: number) =>
+    setPollInterval(secs).then((applied) => {
+      qc.setQueryData(["poll-interval"], applied);
+      return applied;
+    });
+  return { seconds: query.data, set };
 }
 
 /// PRs awaiting the user's review.

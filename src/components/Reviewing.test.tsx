@@ -16,6 +16,8 @@ vi.mock("../api/hooks", async (orig) => {
     usePollError: () => null,
     useRefreshRequested: () => undefined,
     useTruncation: () => null,
+  usePollState: () => "idle",
+  usePollInterval: () => ({ seconds: 120, set: () => Promise.resolve(120) }),
     useReviewing: () => ({ data: reviewing, isLoading: false }),
     usePeriods: () => ({ data: undefined, isLoading: true, isError: false, refetch: () => {} }),
     useHistory: () => ({ data: undefined, isLoading: true, isError: false, refetch: () => {} }),
