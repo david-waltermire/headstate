@@ -11,6 +11,7 @@ import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
 import { PrList } from "./components/PrList";
+import { ReviewChips } from "./components/ReviewChips";
 import { TriageChips } from "./components/TriageChips";
 import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
@@ -72,7 +73,11 @@ export default function App() {
   // Sorting was moved out of PrList in M3 -- it renders exactly the order
   // it's handed, so the sort dropdown in FilterBar is inert unless this
   // call site applies it.
-  const visible = sortPrs(applyFilters(prs, filters), filters.sort);
+  // The list the active view operates on. Everything downstream --
+  // sidebar counts, filters, the strip -- reads this rather than `prs`,
+  // so the two views share every component instead of duplicating them.
+  const source = view === "to-review" ? reviewing : prs;
+  const visible = sortPrs(applyFilters(source, filters), filters.sort);
 
   // The priorities strip is scoped to the selected repo, matching the page
   // it sits on: on `octocat/hello-world` you want that repo's blocked PRs,
@@ -83,7 +88,9 @@ export default function App() {
   // blocked on you stays blocked whether or not you happen to be filtering
   // by label, so a label filter must not hide it -- but a repo selection is
   // a change of page, and the strip should follow.
-  const scopedForStrip = filters.repo ? prs.filter((pr) => pr.repo === filters.repo) : prs;
+  const scopedForStrip = filters.repo
+    ? source.filter((pr) => pr.repo === filters.repo)
+    : source;
 
   // `repo` is navigation, not a filter (see the store's `reset`), so it
   // does not count -- an empty repo page should still explain itself.
@@ -95,7 +102,7 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3]">
       <div className="flex min-h-0 flex-1">
-      <RepoSidebar prs={prs} viewCounts={{ "to-review": reviewing.length }} />
+      <RepoSidebar prs={source} viewCounts={{ "to-review": reviewing.length }} />
       <main className="flex-1 overflow-auto">
         <header className="flex items-center gap-2 border-b border-[#30363d] px-4 py-3">
           {/* View selection lives in the sidebar ("Stats", pinned to its
@@ -114,18 +121,11 @@ export default function App() {
           <div className="ml-auto">
             {/* scopedRepo skips the wizard's "which repositories?" step:
                 selecting a repo in the sidebar already answers it. */}
-            <NudgeWizard prs={prs} scopedRepo={filters.repo} />
+            <NudgeWizard prs={source} scopedRepo={filters.repo} />
           </div>
         </header>
 
-        {view === "to-review" ? (
-          <div className="p-4">
-            {/* Sorted newest-first like the main list. No filter bar: these
-                are other people's PRs, and the triage predicates here are
-                about the author's own work. */}
-            <PrList prs={sortPrs(reviewing, "newest")} hasFilters={false} />
-          </div>
-        ) : view === "worktrees" ? (
+        {view === "worktrees" ? (
           <div className="p-4">
             {/* Placeholder until #150. Says what it is rather than
                 rendering blank, which would read as a bug. */}
@@ -143,12 +143,16 @@ export default function App() {
           </div>
         ) : (
           <div className="p-4">
-            <PrioritiesStrip prs={scopedForStrip} />
+            {/* Only for My PRs: the strip means "blocked on YOU as
+                author", and someone else's red CI is not yours to fix. The
+                review view gets its own attention rule below. */}
+            {view === "my-prs" ? <PrioritiesStrip prs={scopedForStrip} /> : null}
             {/* Counts come from the same predicates the chips apply, so a
                 chip can never open a list that disagrees with its number.
                 Scoped to the sidebar selection like the strip above. */}
-            <TriageChips prs={scopedForStrip} />
-            <FilterBar prs={prs} />
+            {view === "my-prs" ? <TriageChips prs={scopedForStrip} /> : null}
+            {view === "to-review" ? <ReviewChips prs={scopedForStrip} /> : null}
+            <FilterBar prs={source} />
             {isLoading ? (
               // `get_cached` returns `[]` both for "never polled" and for
               // "authenticated, first poll (~3s) still in flight" -- an
@@ -176,7 +180,7 @@ export default function App() {
               <PrList
                 prs={visible}
                 hasFilters={hasActiveFilters(filters)}
-                total={truncatedTotal ?? undefined}
+                total={view === "my-prs" ? (truncatedTotal ?? undefined) : undefined}
               />
             )}
           </div>

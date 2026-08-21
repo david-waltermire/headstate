@@ -52,6 +52,30 @@ describe("PRs to review", () => {
     expect(screen.getByText("Someone else's PR")).toBeTruthy();
   });
 
+  // Full parity: the review view gets the same sidebar, filters and
+  // status rendering, driven by the reviewing list rather than my own.
+  it("scopes the repo sidebar to the reviewing list", () => {
+    useFilters.setState({
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} },
+      view: "to-review",
+      panel: "list",
+    } as never);
+    renderApp();
+    // The reviewing fixture is one PR in octocat/hello-world; the
+    // authored fixtures span two repos and must not appear here.
+    expect(screen.queryByText("octocat/spoon-knife")).toBeNull();
+  });
+
+  it("offers filters on the review view, not just a flat list", () => {
+    useFilters.setState({
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} },
+      view: "to-review",
+      panel: "list",
+    } as never);
+    renderApp();
+    expect(screen.getByLabelText(/search pull requests/i)).toBeTruthy();
+  });
+
   // The constraint that matters: `needsAttention` means "blocked on YOU as
   // author". A red-CI PR you were merely asked to review is not your
   // problem to fix, and must not inflate the strip, the chips, or the

@@ -7,6 +7,8 @@ export interface Filters {
   query?: string;
   /// Only PRs with review conversations still open.
   unresolvedOnly?: boolean;
+  /// Only PRs awaiting MY review verdict. Review-view only.
+  needsMyReviewOnly?: boolean;
   repo?: string;
   readyOnly?: boolean;
   draftsOnly?: boolean;
@@ -38,6 +40,21 @@ export function awaitingReview(pr: PullRequest): boolean {
 
 export function readyToQueue(pr: PullRequest): boolean {
   return !pr.is_draft && pr.ci === "success" && pr.review === "approved" && !pr.in_merge_queue;
+}
+
+/// Needs MY attention as a reviewer.
+///
+/// Deliberately NOT `needsAttention`, which means blocked on you as the
+/// AUTHOR: someone else's failing CI or merge conflict is not yours to
+/// fix, and treating it as attention-worthy would badge the tray with
+/// other people's broken builds.
+///
+/// What is actually yours: a review was requested, you have not given a
+/// verdict yet, and it is not a draft. A PR you have already reviewed
+/// stays in the list -- the author may still be responding -- but stops
+/// demanding anything.
+export function needsMyReview(pr: PullRequest): boolean {
+  return !pr.is_draft && pr.review !== "approved" && pr.review !== "changes_requested";
 }
 
 /// A reviewer formally asked for changes.
@@ -81,6 +98,7 @@ export function hasActiveFilters(f: Filters): boolean {
   return Boolean(
     f.query ||
       f.unresolvedOnly ||
+      f.needsMyReviewOnly ||
       f.readyOnly ||
       f.draftsOnly ||
       f.ci ||
@@ -120,6 +138,7 @@ export function applyFilters(
     if (f.repo && pr.repo !== f.repo) return false;
     if (f.query && !matchesQuery(pr, f.query)) return false;
     if (f.unresolvedOnly && !hasUnresolvedThreads(pr)) return false;
+    if (f.needsMyReviewOnly && !needsMyReview(pr)) return false;
     if (f.readyOnly && pr.is_draft) return false;
     if (f.draftsOnly && !pr.is_draft) return false;
     if (f.ci && pr.ci !== f.ci) return false;
