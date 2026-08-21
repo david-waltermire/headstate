@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Worktree, WorktreeRepo } from "@/types/pr";
 import { useFilters } from "@/store/filters";
@@ -20,7 +20,10 @@ vi.mock("../api/hooks", () => ({
     refetch: vi.fn(),
   }),
   useWorktreeSafety: () => ({ data: state.classified, isLoading: state.classifying }),
+  useRemoveWorktree: () => removeFn,
 }));
+
+const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 import { WorktreesPage } from "./WorktreesPage";
 
@@ -46,6 +49,9 @@ describe("WorktreesPage", () => {
       classifying: false,
     });
     useFilters.setState({ filtersByView: { ...EMPTY }, view: "worktrees", panel: "list" });
+    // Calls leak between tests otherwise, which makes "was not called"
+    // assertions pass or fail depending on ordering.
+    removeFn.mockClear();
   });
 
   it("says what it is doing while scanning", () => {
@@ -101,10 +107,61 @@ describe("WorktreesPage", () => {
     expect(screen.getByText(/checking what is safe/i)).toBeTruthy();
   });
 
-  // Nothing is deletable yet, and the button must not imply otherwise.
-  it("disables removal", () => {
-    state.classified = [wt({ safety: { kind: "safe" } })];
+  // Genuinely disabled, not a warning to click past: 52 of 296 worktrees
+  // here hold commits that exist nowhere else.
+  it("disables removal for anything not provably safe", () => {
+    state.classified = [wt({ safety: { kind: "never_pushed" } })];
     render(<WorktreesPage />);
     expect(screen.getByRole("button", { name: /remove/i })).toHaveProperty("disabled", true);
+  });
+
+  it("enables removal only when safe", () => {
+    state.classified = [wt({ safety: { kind: "safe" } })];
+    render(<WorktreesPage />);
+    expect(screen.getByRole("button", { name: /remove/i })).toHaveProperty("disabled", false);
+  });
+
+  // A count is not enough to act on: the user must see WHICH directory
+  // is about to disappear.
+  it("confirms with the path before removing anything", () => {
+    state.classified = [wt({ path: "/code/proj-gone", safety: { kind: "safe" } })];
+    render(<WorktreesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(screen.getByText("/code/proj-gone")).toBeTruthy();
+    expect(removeFn).not.toHaveBeenCalled();
+  });
+
+  it("removes only after confirmation", () => {
+    state.classified = [wt({ path: "/code/proj-gone", safety: { kind: "safe" } })];
+    render(<WorktreesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^remove$/i }));
+    expect(removeFn).toHaveBeenCalledWith("/code/proj", "/code/proj-gone");
+  });
+
+  it("cancelling removes nothing", () => {
+    state.classified = [wt({ safety: { kind: "safe" } })];
+    render(<WorktreesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(removeFn).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  // A refusal means the work is still there, which the user must see
+  // rather than have hidden behind an optimistic update.
+  it("surfaces a refusal from the backend", async () => {
+    removeFn.mockImplementationOnce(() => Promise.reject("not safe to remove: 3 uncommitted files"));
+    state.classified = [wt({ safety: { kind: "safe" } })];
+    render(<WorktreesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    const dialog = screen.getByRole("alertdialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: /^remove$/i }));
+    expect(await screen.findByRole("alert")).toHaveProperty(
+      "textContent",
+      "not safe to remove: 3 uncommitted files",
+    );
   });
 });

@@ -112,6 +112,29 @@ pub async fn classify_worktrees(
         .map_err(|e| e.to_string())
 }
 
+/// Remove a worktree, refusing anything not provably safe.
+///
+/// The safety gate is re-evaluated inside `remove_worktree` rather than
+/// trusted from whatever the UI last saw: a scan is a snapshot, and the
+/// user may have started editing since.
+///
+/// Logged with path and branch, so "where did that go?" has an answer.
+#[tauri::command]
+pub async fn remove_worktree(repo_path: String, worktree_path: String) -> Result<(), String> {
+    let wt = worktree_path.clone();
+    let repo = repo_path.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || crate::worktrees::remove_worktree(&repo, &wt))
+            .await
+            .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(()) => log::info!("removed worktree {worktree_path}"),
+        Err(e) => log::warn!("refused to remove worktree {worktree_path}: {e}"),
+    }
+    result
+}
+
 /// Directories scanned for git checkouts.
 ///
 /// Defaults to `~/code` when unset, so the app works with no

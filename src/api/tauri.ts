@@ -46,6 +46,11 @@ export const listWorktrees = () => invoke<WorktreeRepo[]>("list_worktrees");
 export const classifyWorktrees = (repoPath: string) =>
   invoke<Worktree[]>("classify_worktrees", { repoPath });
 
+/// Remove a worktree. Rejects anything not provably safe; the gate is
+/// re-evaluated on the Rust side rather than trusted from the last scan.
+export const removeWorktree = (repoPath: string, worktreePath: string) =>
+  invoke<void>("remove_worktree", { repoPath, worktreePath });
+
 /// Directories scanned for git checkouts. Defaults to `~/code`.
 export const getWorktreeDirs = () => invoke<string[]>("get_worktree_dirs");
 

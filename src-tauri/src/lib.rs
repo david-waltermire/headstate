@@ -69,6 +69,7 @@ pub fn run() {
             commands::set_worktree_dirs,
             commands::list_worktrees,
             commands::classify_worktrees,
+            commands::remove_worktree,
             commands::get_cycle_trend,
             commands::get_merged_detail,
             commands::get_auth_state,

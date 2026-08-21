@@ -365,6 +365,149 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
         );
     }
 
+    /// A real repo with one worktree, for the deletion tests.
+    ///
+    /// Real git throughout: a synthetic fixture would let the gate pass
+    /// for the wrong reason, and this is the one place where a vacuous
+    /// test could cost someone their work.
+    fn repo_with_worktree(
+        name: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let repo = tmp.path().join("proj");
+        std::fs::create_dir_all(&repo).unwrap();
+        let ident = [
+            ("GIT_AUTHOR_NAME", "octocat"),
+            ("GIT_COMMITTER_NAME", "octocat"),
+            ("GIT_AUTHOR_EMAIL", "octocat@invalid"),
+            ("GIT_COMMITTER_EMAIL", "octocat@invalid"),
+        ];
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .envs(ident)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
+            assert!(ok, "git {args:?} failed");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "init"]);
+        let wt = tmp.path().join(name);
+        run(&["worktree", "add", "-q", "-b", name, wt.to_str().unwrap()]);
+        (tmp, repo, wt)
+    }
+
+    /// A worktree with no upstream is NEVER safe, even when its branch
+    /// points at the same commit as the default branch. 52 of 296
+    /// worktrees on this machine are in exactly this state.
+    #[test]
+    fn refuses_a_worktree_that_was_never_pushed() {
+        let (_t, repo, wt) = repo_with_worktree("feature");
+        let err = remove_worktree(repo.to_str().unwrap(), wt.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("never pushed"), "{err}");
+        assert!(wt.is_dir(), "the worktree must still exist");
+    }
+
+    /// The other half of the gate: a genuinely safe worktree MUST be
+    /// removable, or the feature is a list of things you cannot act on.
+    ///
+    /// Builds a real remote so the branch has an upstream and is merged,
+    /// which is what "safe" actually requires.
+    #[test]
+    fn removes_a_worktree_that_is_merged_clean_and_pushed() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ident = [
+            ("GIT_AUTHOR_NAME", "octocat"),
+            ("GIT_COMMITTER_NAME", "octocat"),
+            ("GIT_AUTHOR_EMAIL", "octocat@invalid"),
+            ("GIT_COMMITTER_EMAIL", "octocat@invalid"),
+        ];
+        let run_in = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .envs(ident)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+
+        // A bare "remote" to push to.
+        let remote = tmp.path().join("remote.git");
+        std::fs::create_dir_all(&remote).unwrap();
+        run_in(&remote, &["init", "-q", "--bare", "-b", "main"]);
+
+        let repo = tmp.path().join("proj");
+        std::fs::create_dir_all(&repo).unwrap();
+        run_in(&repo, &["init", "-q", "-b", "main"]);
+        run_in(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        run_in(
+            &repo,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        run_in(&repo, &["push", "-q", "-u", "origin", "main"]);
+
+        // A worktree on a branch that IS main: merged by definition.
+        let wt = tmp.path().join("proj-done");
+        run_in(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--track",
+                "-b",
+                "done",
+                wt.to_str().unwrap(),
+                "main",
+            ],
+        );
+        run_in(&wt, &["push", "-q", "-u", "origin", "done"]);
+
+        assert!(wt.is_dir());
+        remove_worktree(repo.to_str().unwrap(), wt.to_str().unwrap())
+            .expect("a merged, clean, pushed worktree must be removable");
+        assert!(!wt.exists(), "the directory must be gone");
+
+        // And git's own bookkeeping must agree, which is why this uses
+        // `git worktree remove` rather than deleting the directory.
+        let list = git(&repo, &["worktree", "list", "--porcelain"]).unwrap();
+        assert!(!list.contains("proj-done"), "git still lists it: {list}");
+    }
+
+    #[test]
+    fn refuses_the_main_checkout() {
+        let (_t, repo, _wt) = repo_with_worktree("feature");
+        let err = remove_worktree(repo.to_str().unwrap(), repo.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("main checkout"), "{err}");
+        assert!(repo.is_dir());
+    }
+
+    #[test]
+    fn refuses_a_path_that_is_not_a_worktree_of_this_repo() {
+        let (_t, repo, _wt) = repo_with_worktree("feature");
+        let err = remove_worktree(repo.to_str().unwrap(), "/tmp/somewhere-else").unwrap_err();
+        assert!(err.contains("not a worktree"), "{err}");
+    }
+
+    /// Uncommitted work blocks removal even when everything else passes.
+    #[test]
+    fn refuses_a_dirty_worktree() {
+        let (_t, repo, wt) = repo_with_worktree("feature");
+        std::fs::write(wt.join("scratch.txt"), "unsaved work").unwrap();
+        let err = remove_worktree(repo.to_str().unwrap(), wt.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("uncommitted"), "{err}");
+        assert!(wt.join("scratch.txt").exists(), "the file must survive");
+    }
+
     #[test]
     fn reasons_are_display_ready_and_pluralised() {
         assert_eq!(Safety::Dirty(1).reason(), "1 uncommitted file");
@@ -445,4 +588,56 @@ mod live {
             );
         }
     }
+}
+
+/// Remove a worktree, refusing anything not provably safe.
+///
+/// **The only destructive operation Headstate performs on local disk.**
+/// It deletes files that may be the only copy of work, so the bar is
+/// higher than for the GitHub mutations: the safety gate is RE-EVALUATED
+/// here rather than trusted from the scan. A scan is a snapshot, and the
+/// user may have started editing in the seconds since -- 24 of 296
+/// worktrees on this machine are dirty at any moment.
+///
+/// Uses `git worktree remove`, never `rm -rf`: git updates its own
+/// administrative files, where a raw delete leaves a stale entry making
+/// the repo report a worktree that no longer exists.
+pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    let repo = Path::new(repo_path);
+    let target = Path::new(worktree_path);
+
+    let list = git(repo, &["worktree", "list", "--porcelain"])
+        .map_err(|e| format!("could not list worktrees: {e}"))?;
+    let known = parse_porcelain(&list);
+
+    // Compare CANONICAL paths. Git reports what it resolved, which may
+    // differ from what the caller holds when any component is a symlink
+    // -- on macOS /var is a link to /private/var, so a naive string
+    // compare fails for anything under a temp directory. Falling back to
+    // the raw path keeps a non-existent target comparable rather than
+    // erroring here.
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let target_canon = canon(target);
+    let wt = known
+        .iter()
+        .find(|w| canon(Path::new(&w.path)) == target_canon)
+        .ok_or_else(|| "not a worktree of this repository".to_string())?;
+
+    if wt.is_main {
+        return Err("refusing to remove the repository's main checkout".into());
+    }
+
+    // Re-check RIGHT NOW, not from the scan.
+    let branch = default_branch(repo);
+    let safety = worktree_safety(wt, &branch);
+    if !safety.is_safe() {
+        return Err(format!("not safe to remove: {}", safety.reason()));
+    }
+
+    // No `--force`. The gate above already established the tree is clean,
+    // so needing force here would mean the gate was wrong -- and forcing
+    // past it is precisely how unpushed work is lost.
+    git(repo, &["worktree", "remove", worktree_path])
+        .map(|_| ())
+        .map_err(|e| format!("git refused: {e}"))
 }

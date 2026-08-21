@@ -12,6 +12,7 @@ import {
   getWorktreeDirs,
   classifyWorktrees,
   listWorktrees,
+  removeWorktree,
   getReviewing,
   getStats,
   refreshNow,
@@ -267,6 +268,22 @@ export function useWorktreeSafety(repoPath: string | undefined) {
     enabled: Boolean(repoPath),
     staleTime: 30_000,
   });
+}
+
+/// Remove a worktree, then refresh both queries.
+///
+/// Deliberately NOT optimistic. Every other mutation in this app updates
+/// locally first, but this one deletes files: showing a row as gone
+/// before the deletion succeeded would be a lie about the filesystem, and
+/// the failure case here is "your work is still there", which the user
+/// needs to see rather than have hidden.
+export function useRemoveWorktree() {
+  const qc = useQueryClient();
+  return (repoPath: string, worktreePath: string) =>
+    removeWorktree(repoPath, worktreePath).then(() => {
+      void qc.invalidateQueries({ queryKey: ["worktrees"] });
+      void qc.invalidateQueries({ queryKey: ["worktree-safety", repoPath] });
+    });
 }
 
 /// Directories scanned for git checkouts, and a way to change them.

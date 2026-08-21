@@ -1,4 +1,5 @@
-import { useWorktreeSafety, useWorktrees } from "../api/hooks";
+import { useState } from "react";
+import { useRemoveWorktree, useWorktreeSafety, useWorktrees } from "../api/hooks";
 import { formatSize, isSafe, safetyReason, safetyTone } from "../lib/worktrees";
 import { useActiveFilters, useFilters } from "../store/filters";
 import type { Worktree } from "../types/pr";
@@ -10,7 +11,13 @@ import { QueryError, errorMessage } from "./QueryError";
 /// the biggest offenders are what you came for. But SAFETY is the primary
 /// axis: every row says whether it can be removed and why not, because
 /// 52 of 295 worktrees here hold commits that exist nowhere else.
-function Row({ wt }: { wt: Worktree }) {
+function Row({
+  wt,
+  onRemove,
+}: {
+  wt: Worktree;
+  onRemove: (wt: Worktree) => void;
+}) {
   const safe = isSafe(wt.safety);
   return (
     <div className="flex items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">
@@ -28,16 +35,67 @@ function Row({ wt }: { wt: Worktree }) {
       <span className="w-20 shrink-0 text-right tabular-nums text-xs text-[#8b949e]">
         {formatSize(wt.size_bytes)}
       </span>
-      {/* Deletion lands in #151. Disabled rather than absent, so the row
-          reads as "not yet" rather than "this cannot be done". */}
+      {/* Genuinely disabled when not safe, not a warning to click past:
+          52 of 296 worktrees here hold commits that exist nowhere else.
+          The title explains WHY, so the row teaches rather than blocks. */}
       <button
         type="button"
-        disabled
-        title={safe ? "Deletion arrives in a later change" : safetyReason(wt.safety)}
-        className="shrink-0 rounded border border-[#30363d] px-2 py-0.5 text-xs text-[#8b949e] opacity-50"
+        disabled={!safe}
+        onClick={() => onRemove(wt)}
+        title={safe ? "Remove this worktree" : safetyReason(wt.safety)}
+        className={`shrink-0 rounded border px-2 py-0.5 text-xs ${
+          safe
+            ? "border-[#f85149]/40 text-[#f85149] hover:bg-[#f85149]/10"
+            : "border-[#30363d] text-[#8b949e] opacity-50"
+        }`}
       >
         Remove
       </button>
+    </div>
+  );
+}
+
+/// Confirmation, naming the path and the branch.
+///
+/// A count is not enough to act on safely: the user needs to see WHICH
+/// directory is about to disappear.
+function ConfirmRemove({
+  wt,
+  onConfirm,
+  onCancel,
+}: {
+  wt: Worktree;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      role="alertdialog"
+      aria-label="Confirm removal"
+      className="rounded-md border border-[#f85149]/40 bg-[#161b22] px-4 py-3"
+    >
+      <p className="text-sm font-semibold text-[#e6edf3]">Remove this worktree?</p>
+      <p className="mt-1 font-mono text-xs text-[#8b949e]">{wt.path}</p>
+      <p className="mt-1 text-xs text-[#8b949e]">
+        Branch <span className="font-mono">{wt.branch || "detached"}</span> — merged and
+        pushed, so nothing is lost.
+      </p>
+      <div className="mt-3 flex gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded border border-[#30363d] px-3 py-1 text-sm hover:bg-[#21262d]"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={onConfirm}
+          className="rounded bg-[#da3633] px-3 py-1 text-sm font-medium text-white hover:bg-[#f85149]"
+        >
+          Remove
+        </button>
+      </div>
     </div>
   );
 }
@@ -49,6 +107,9 @@ export function WorktreesPage() {
 
   const selected = repos?.find((r) => r.path === filters.repo) ?? repos?.[0];
   const { data: classified, isLoading: classifying } = useWorktreeSafety(selected?.path);
+  const remove = useRemoveWorktree();
+  const [pending, setPending] = useState<Worktree | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -109,13 +170,40 @@ export function WorktreesPage() {
         </button>
       </div>
 
+      {failure ? (
+        <div
+          role="alert"
+          className="rounded-md border border-[#f85149]/40 bg-[#f85149]/5 px-4 py-2 text-sm text-[#f85149]"
+        >
+          {failure}
+        </div>
+      ) : null}
+
+      {/* Per worktree, not bulk. Bulk-deleting directories is where a
+          wrong predicate becomes unrecoverable at scale, and with 149
+          removable worktrees on one repo the temptation is real. */}
+      {pending ? (
+        <ConfirmRemove
+          wt={pending}
+          onCancel={() => setPending(null)}
+          onConfirm={() => {
+            const target = pending;
+            setPending(null);
+            setFailure(null);
+            remove(selected?.path ?? "", target.path).catch((e: unknown) =>
+              setFailure(typeof e === "string" ? e : "Could not remove the worktree"),
+            );
+          }}
+        />
+      ) : null}
+
       <div className="rounded-md border border-[#30363d]">
         {shown.length === 0 ? (
           <div className="px-4 py-12 text-center text-sm text-[#8b949e]">
             No worktrees in this repository.
           </div>
         ) : (
-          shown.map((wt) => <Row key={wt.path} wt={wt} />)
+          shown.map((wt) => <Row key={wt.path} wt={wt} onRemove={setPending} />)
         )}
       </div>
     </div>
