@@ -5,6 +5,7 @@ import type { PullRequest } from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
   getCached,
+  updatePrBranch,
   getHistory,
   getMergedDetail,
   getCycleTrend,
@@ -282,6 +283,22 @@ export function useActOnPr() {
     action: PrActionName,
   ) =>
     actOnPr(id, repo, number, action).then(() => {
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+      void qc.invalidateQueries({ queryKey: ["prs"] });
+      void qc.invalidateQueries({ queryKey: ["reviewing"] });
+    });
+}
+
+/// Merge the base branch into a pull request's head.
+///
+/// Invalidates the same keys as `useActOnPr`: the update changes CI
+/// state and mergeability, so a row left showing "behind" after a
+/// successful update would be stale in exactly the way the button was
+/// meant to fix.
+export function useUpdatePrBranch() {
+  const qc = useQueryClient();
+  return (id: string, repo: string, number: number, expectedHead: string) =>
+    updatePrBranch(id, repo, number, expectedHead).then(() => {
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
       void qc.invalidateQueries({ queryKey: ["prs"] });
       void qc.invalidateQueries({ queryKey: ["reviewing"] });

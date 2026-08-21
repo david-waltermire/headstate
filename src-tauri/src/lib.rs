@@ -65,6 +65,7 @@ pub fn run() {
             commands::get_reviewing,
             commands::get_pr_detail,
             commands::act_on_pr,
+            commands::update_pr_branch,
             commands::get_poll_interval,
             commands::set_poll_interval,
             commands::get_worktree_dirs,

@@ -142,6 +142,35 @@ pub async fn act_on_pr(
 /// Fetched on open rather than in the poll loop: it is per-PR and only
 /// needed while the view is on screen.
 #[tauri::command]
+/// Merge the base branch into a pull request's head.
+///
+/// Separate from `act_on_pr` because it needs the head OID: GitHub
+/// refuses if the branch moved since the caller last saw it, which turns
+/// a stale click into a clear error instead of an update to a commit the
+/// user never looked at.
+pub async fn update_pr_branch(
+    client: State<'_, GhClient>,
+    waker: State<'_, crate::poll::Waker>,
+    id: String,
+    repo: String,
+    number: u64,
+    expected_head: String,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    match client.update_pr_branch(&id, &expected_head).await {
+        Ok(()) => {
+            log::info!("{repo}#{number} branch updated from base");
+            waker.0.notify_one();
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} branch could not be updated: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn get_pr_detail(
     client: State<'_, GhClient>,
     repo: String,

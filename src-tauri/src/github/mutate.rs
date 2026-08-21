@@ -11,6 +11,12 @@
 use super::client::{ClientError, GitHubClient};
 use serde_json::json;
 
+/// The "Update branch" mutation, hoisted so its test asserts on the
+/// document actually sent rather than a copy that could drift from it.
+const UPDATE_BRANCH_DOC: &str = "mutation($id: ID!, $oid: GitObjectID!) { \
+     updatePullRequestBranch(input: { pullRequestId: $id, expectedHeadOid: $oid }) \
+     { clientMutationId } }";
+
 /// What a mutation does to a pull request.
 ///
 /// An enum rather than free-form strings so the UI cannot ask for an
@@ -82,6 +88,23 @@ impl GitHubClient {
         }))
         .await
     }
+
+    /// Merge the base branch into a pull request's head -- GitHub's
+    /// "Update branch" button.
+    ///
+    /// `expected_head` is the head OID the caller last saw. GitHub
+    /// refuses if the branch has moved since, which is the whole point:
+    /// without it, a stale click would quietly update a commit the user
+    /// never looked at. The issue this implements calls out exactly that
+    /// race ("the base moved between the check and the click"), and the
+    /// argument is how GitHub lets us lose it rather than paper over it.
+    pub async fn update_pr_branch(&self, id: &str, expected_head: &str) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": UPDATE_BRANCH_DOC,
+            "variables": { "id": id, "oid": expected_head }
+        }))
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -131,5 +154,24 @@ mod tests {
         assert_eq!(PrAction::Merge.describe(), "merged");
         assert_eq!(PrAction::Enqueue.describe(), "added to the merge queue");
         assert_eq!(PrAction::MarkReady.describe(), "marked ready for review");
+    }
+
+    /// Updating a branch must send `expectedHeadOid`. Without it GitHub
+    /// updates whatever the head is *now*, so a click on a stale row
+    /// would act on a commit the user never saw. The typed `GitObjectID!`
+    /// declaration is what makes the argument non-optional at the wire
+    /// level, so both halves are pinned here.
+    #[test]
+    fn updating_a_branch_pins_the_expected_head() {
+        let doc = UPDATE_BRANCH_DOC;
+        assert!(
+            doc.contains("$oid: GitObjectID!"),
+            "the OID must be declared non-null or it can be silently omitted"
+        );
+        assert!(
+            doc.contains("expectedHeadOid: $oid"),
+            "the OID must actually be passed to the mutation"
+        );
+        assert!(doc.contains("updatePullRequestBranch"));
     }
 }

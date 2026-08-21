@@ -50,6 +50,7 @@ mod tests {
             url: "https://github.com/octocat/hello-world/pull/42".into(),
             repo: "octocat/hello-world".into(),
             head_ref: "feature/x".into(),
+            head_oid: "deadbeef".into(),
             base_ref: "main".into(),
             author: "octocat".into(),
             is_draft: false,

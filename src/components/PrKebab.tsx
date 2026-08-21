@@ -1,7 +1,7 @@
 import { Copy, ExternalLink, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useActOnPr } from "../api/hooks";
+import { useActOnPr, useUpdatePrBranch } from "../api/hooks";
 import type { PrActionName } from "../api/tauri";
 import type { PullRequest } from "../types/pr";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -54,6 +54,7 @@ const LABEL: Record<PrActionName, string> = {
 /// that fails with a permissions error is worse than not offering it.
 export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: boolean }) {
   const act = useActOnPr();
+  const updateBranch = useUpdatePrBranch();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<PrActionName | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -133,6 +134,30 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
                 );
               })
             : null}
+
+          {/* Only for BEHIND. On a DIRTY pull request this either fails or
+              produces a conflicted merge commit, and an action that cannot
+              work should not be offered at all -- unlike Merge, where the
+              disabled-with-a-reason form teaches something. */}
+          {canWrite && pr.merge_status === "behind" ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                updateBranch(pr.id, pr.repo, pr.number, pr.head_oid).then(
+                  () => toast.success(`${pr.repo}#${pr.number} updated from base`),
+                  (e: unknown) =>
+                    toast.error(`Could not update #${pr.number}`, {
+                      description: typeof e === "string" ? e : undefined,
+                    }),
+                );
+              }}
+              className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm text-[#e6edf3] hover:bg-[#21262d]"
+            >
+              Update branch
+            </button>
+          ) : null}
 
           {canWrite ? <div className="my-1 border-t border-[#30363d]" /> : null}
 

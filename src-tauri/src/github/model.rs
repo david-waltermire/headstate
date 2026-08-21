@@ -89,6 +89,9 @@ pub struct PullRequest {
     /// merge until its base does, and is otherwise indistinguishable from
     /// one targeting the default branch.
     pub head_ref: String,
+    /// The head commit, so an "update branch" click can tell GitHub which
+    /// commit the user was actually looking at.
+    pub head_oid: String,
     pub base_ref: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -248,6 +251,9 @@ pub struct PrDetail {
     pub author: String,
     pub repo: String,
     pub head_ref: String,
+    /// The head commit, so an "update branch" click can tell GitHub which
+    /// commit the user was actually looking at.
+    pub head_oid: String,
     pub base_ref: String,
     pub merge_status: MergeStateStatus,
     pub review: ReviewState,
@@ -277,6 +283,7 @@ mod attention_tests {
             author: "a".into(),
             is_draft: false,
             head_ref: "feature/x".into(),
+            head_oid: "deadbeef".into(),
             base_ref: "main".into(),
             created_at: t,
             updated_at: t,

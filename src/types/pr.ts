@@ -25,6 +25,9 @@ export interface PullRequest {
   is_draft: boolean;
   /// The branch being merged, and the branch it merges into.
   head_ref: string;
+  /// The head commit the row was rendered from, so an "update branch"
+  /// click can tell GitHub which commit the user was looking at.
+  head_oid: string;
   base_ref: string;
   created_at: string;
   updated_at: string;
@@ -202,6 +205,9 @@ export interface PrDetail {
   author: string;
   repo: string;
   head_ref: string;
+  /// The head commit the row was rendered from, so an "update branch"
+  /// click can tell GitHub which commit the user was looking at.
+  head_oid: string;
   base_ref: string;
   merge_status: string;
   review: string;

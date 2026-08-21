@@ -22,6 +22,7 @@ const pr = (over: Partial<PrDetail> = {}): PrDetail => ({
   author: "octocat",
   repo: "octocat/hello-world",
   head_ref: "feature",
+  head_oid: "oid-detail",
   base_ref: "main",
   merge_status: "clean",
   review: "approved",

@@ -39,6 +39,7 @@
           ]
         },
         "headRefName": "feature/retry-client",
+        "headRefOid": "deadbeefcafe",
         "baseRefName": "main",
         "id": "PR_fixture0"
       },
@@ -79,6 +80,7 @@
           ]
         },
         "headRefName": "fix/flaky-test",
+        "headRefOid": "deadbeefcafe",
         "baseRefName": "main",
         "id": "PR_fixture1"
       },
@@ -112,6 +114,7 @@
           ]
         },
         "headRefName": "stack/part-2",
+        "headRefOid": "deadbeefcafe",
         "baseRefName": "stack/part-1",
         "id": "PR_fixture2"
       }

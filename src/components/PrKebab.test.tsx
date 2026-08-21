@@ -8,7 +8,12 @@ import type { PullRequest } from "@/types/pr";
 
 type Act = (id: string, repo: string, number: number, action: PrActionName) => Promise<void>;
 const act = vi.fn<Act>(() => Promise.resolve());
-vi.mock("@/api/hooks", () => ({ useActOnPr: () => act }));
+type Upd = (id: string, repo: string, number: number, head: string) => Promise<void>;
+const update = vi.fn<Upd>(() => Promise.resolve());
+vi.mock("@/api/hooks", () => ({
+  useActOnPr: () => act,
+  useUpdatePrBranch: () => update,
+}));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
@@ -23,7 +28,10 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
 
 const open = () => fireEvent.click(screen.getByRole("button", { name: /Actions for/ }));
 
-beforeEach(() => act.mockClear());
+beforeEach(() => {
+  act.mockClear();
+  update.mockClear();
+});
 
 describe("PrKebab", () => {
   it("merges without a confirmation step", async () => {
@@ -111,6 +119,47 @@ describe("PrKebab", () => {
     open();
     fireEvent.click(screen.getByRole("menuitem", { name: /Copy branch name/ }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith("ci_fix_2"));
+  });
+
+  // "Update branch" is offered only for BEHIND. On a DIRTY PR it would
+  // fail or produce a conflicted merge commit, so unlike Merge -- which
+  // is shown disabled with its reason -- this one is absent entirely.
+  it("offers Update branch only when the PR is behind its base", () => {
+    const { unmount } = render(<PrKebab pr={pr({ merge_status: "behind" })} />);
+    open();
+    expect(screen.getByRole("menuitem", { name: "Update branch" })).not.toBeNull();
+    unmount();
+
+    for (const status of ["clean", "dirty", "blocked", "unstable"] as const) {
+      const r = render(<PrKebab pr={pr({ merge_status: status })} />);
+      open();
+      expect(screen.queryByRole("menuitem", { name: "Update branch" })).toBeNull();
+      r.unmount();
+    }
+  });
+
+  // The OID is the whole point: it is what makes GitHub refuse a stale
+  // click instead of updating a commit the user never looked at.
+  it("sends the head commit the row was rendered from", async () => {
+    render(<PrKebab pr={pr({ merge_status: "behind", head_oid: "abc123" })} />);
+    open();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Update branch" }));
+    await waitFor(() => expect(update).toHaveBeenCalled());
+    expect(update.mock.calls[0][3]).toBe("abc123");
+  });
+
+  it("does not confirm before updating, since the change is recoverable", async () => {
+    render(<PrKebab pr={pr({ merge_status: "behind" })} />);
+    open();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Update branch" }));
+    await waitFor(() => expect(update).toHaveBeenCalled());
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("is not offered on a PR the user does not own", () => {
+    render(<PrKebab pr={pr({ merge_status: "behind" })} canWrite={false} />);
+    open();
+    expect(screen.queryByRole("menuitem", { name: "Update branch" })).toBeNull();
   });
 
   // The row is a click target that opens the detail view; acting from the

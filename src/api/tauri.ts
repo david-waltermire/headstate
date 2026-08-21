@@ -47,7 +47,7 @@ export const listWorktrees = () => invoke<WorktreeRepo[]>("list_worktrees");
 export const classifyWorktrees = (repoPath: string) =>
   invoke<Worktree[]>("classify_worktrees", { repoPath });
 
-/// Apply an action to a pull request. The only write to GitHub.
+/// Apply an action to a pull request.
 ///
 /// Rejects with GitHub's own message on refusal -- "base branch was
 /// modified" is display-ready and more useful than a substitute.
@@ -57,6 +57,20 @@ export const actOnPr = (
   number: number,
   action: PrActionName,
 ) => invoke<void>("act_on_pr", { id, repo, number, action });
+
+/// Merge the base branch into a pull request's head -- GitHub's "Update
+/// branch" button.
+///
+/// Separate from `actOnPr` because it needs `expectedHead`: GitHub
+/// refuses if the branch moved since the row was rendered, so a stale
+/// click reports an error rather than updating a commit the user never
+/// saw. Pass the `head_oid` from the same row that showed the button.
+export const updatePrBranch = (
+  id: string,
+  repo: string,
+  number: number,
+  expectedHead: string,
+) => invoke<void>("update_pr_branch", { id, repo, number, expectedHead });
 
 /// The actions the backend accepts. A union rather than `string`, so a
 /// typo is a compile error instead of a runtime "unknown action".
