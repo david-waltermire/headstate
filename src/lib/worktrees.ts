@@ -28,9 +28,21 @@ export function safetyReason(s: Safety): string {
       return "never pushed — commits exist only here";
     case "unmerged":
       return "branch not merged";
+    case "pending":
+      return "checking…";
     default:
       return `could not determine: ${s.detail}`;
   }
+}
+
+/// Whether a row is still waiting on its safety check.
+///
+/// The fast listing lands in ~2.6s and classification takes up to ~57s,
+/// so this is most of the first minute on a large tree -- long enough
+/// that the row must say "still working" rather than show a value that
+/// reads as final.
+export function isPending(s: Safety): boolean {
+  return s.kind === "pending";
 }
 
 /// Display-ready prose for a checkout's upstream state.
@@ -88,6 +100,8 @@ export function safetyTone(s: Safety): string {
     case "safe":
       return "text-[#3fb950]";
     case "main_checkout":
+      return "text-[#8b949e]";
+    case "pending":
       return "text-[#8b949e]";
     case "never_pushed":
       return "text-[#f85149]";

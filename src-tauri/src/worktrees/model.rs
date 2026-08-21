@@ -36,17 +36,29 @@ pub enum Safety {
     NeverPushed,
     /// Branch is not merged into the default branch.
     Unmerged,
+    /// Listed, but not yet classified. A transient state the UI shows as
+    /// a skeleton rather than as an answer -- distinct from `Unknown`,
+    /// which means the check ran and could not decide.
+    Pending,
     /// Git could not answer; never assume safe on an error.
     Unknown(String),
 }
 
-/// Defaults to `Unknown`, never `Safe`.
+/// Defaults to `Pending`, never `Safe`.
 ///
 /// A partially-constructed `Worktree` must not be deletable: the default
-/// is the value a bug is most likely to leave behind.
+/// is the value a bug is most likely to leave behind, and neither
+/// `Pending` nor `Unknown` is deletable.
 impl Default for Safety {
+    /// Not-yet-checked, which is NOT the same as checked-and-failed.
+    ///
+    /// This used to default to `Unknown("not yet classified")`, which the
+    /// UI rendered as "could not determine: not yet classified" -- a
+    /// failed check, in the same grey as a real failure. The fast listing
+    /// lands in ~2.6s and classification takes up to ~57s, so for most of
+    /// a minute every row claimed its safety check had failed.
     fn default() -> Self {
-        Safety::Unknown("not yet classified".into())
+        Safety::Pending
     }
 }
 
@@ -69,6 +81,7 @@ impl Safety {
             }
             Safety::NeverPushed => "never pushed — commits exist only here".into(),
             Safety::Unmerged => "branch not merged".into(),
+            Safety::Pending => "checking…".into(),
             Safety::Unknown(why) => format!("could not determine: {why}"),
         }
     }
@@ -143,4 +156,34 @@ pub struct Worktree {
     /// a branch written weeks before it merged, and the merge date is the
     /// one that answers "is this safe to forget about".
     pub merged_at: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The default must never be deletable. A partially-constructed
+    /// `Worktree` is what a bug leaves behind, and this is the one place
+    /// where getting it wrong deletes someone's work.
+    #[test]
+    fn the_default_safety_is_not_deletable() {
+        assert!(!Safety::default().is_safe());
+        assert_eq!(Safety::default(), Safety::Pending);
+    }
+
+    /// `Pending` and `Unknown` are different states and must stay
+    /// different.
+    ///
+    /// `Pending` means "not checked yet" and shows as a skeleton;
+    /// `Unknown` means "checked, could not decide" and shows as a
+    /// failure. Collapsing them is what made every unclassified row
+    /// claim its safety check had failed for the first minute of a scan.
+    #[test]
+    fn pending_reads_as_waiting_not_as_failure() {
+        assert_eq!(Safety::Pending.reason(), "checking…");
+        let unknown = Safety::Unknown("git exploded".into());
+        assert!(unknown.reason().contains("could not determine"));
+        assert_ne!(Safety::Pending.reason(), unknown.reason());
+        assert!(!Safety::Pending.is_safe());
+    }
 }

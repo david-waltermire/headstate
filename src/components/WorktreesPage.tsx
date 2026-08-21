@@ -7,6 +7,7 @@ import {
 } from "../api/hooks";
 import {
   formatSize,
+  isPending,
   isSafe,
   safetyReason,
   safetyTone,
@@ -25,14 +26,35 @@ import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 /// the biggest offenders are what you came for. But SAFETY is the primary
 /// axis: every row says whether it can be removed and why not, because
 /// 52 of 295 worktrees here hold commits that exist nowhere else.
+/// A shimmering placeholder sized to the text it stands in for.
+///
+/// Deliberately not a spinner per row: 289 spinners is a disco, and a
+/// spinner says "something is happening" where a skeleton says "a value
+/// belongs here and is coming". Respects prefers-reduced-motion via the
+/// motion-safe: prefix -- an animation on every row is exactly what that
+/// setting exists to stop.
+function Skeleton({ className = "" }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`inline-block h-3 rounded bg-[#30363d] align-middle motion-safe:animate-pulse ${className}`}
+    />
+  );
+}
+
 function Row({
   wt,
   onRemove,
+  sizePending,
 }: {
   wt: Worktree;
   onRemove: (wt: Worktree) => void;
+  /// Sizes arrive in their own pass, after safety. Tracked separately so
+  /// a row whose safety has resolved does not keep waiting on its size.
+  sizePending?: boolean;
 }) {
   const safe = isSafe(wt.safety);
+  const pending = isPending(wt.safety);
   return (
     <div className="flex items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">
       <span className="min-w-0 flex-1 truncate font-mono text-[#e6edf3]">
@@ -43,8 +65,14 @@ function Row({
           <span className="ml-2 text-xs text-[#8b949e]">detached</span>
         )}
       </span>
-      <span className={`shrink-0 text-xs ${safetyTone(wt.safety)}`}>
-        {safetyReason(wt.safety)}
+      <span
+        className={`shrink-0 text-xs ${safetyTone(wt.safety)}`}
+        // The whole row is one live region while it fills in, so a
+        // screen reader hears the resolved value once rather than
+        // announcing each cell as it lands.
+        aria-busy={pending || sizePending ? true : undefined}
+      >
+        {pending ? <Skeleton className="w-40" /> : safetyReason(wt.safety)}
         {wt.merged_at ? (
           <span className="text-[#8b949e]"> · merged {wt.merged_at}</span>
         ) : null}
@@ -59,7 +87,13 @@ function Row({
         ) : null}
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums text-xs text-[#8b949e]">
-        {formatSize(wt.size_bytes)}
+        {/* An em dash here read as "measured, and the answer is nothing".
+            A skeleton says a number is still coming. */}
+        {sizePending && wt.size_bytes === null ? (
+          <Skeleton className="w-12" />
+        ) : (
+          formatSize(wt.size_bytes)
+        )}
       </span>
       {/* Genuinely disabled when not safe, not a warning to click past:
           52 of 296 worktrees here hold commits that exist nowhere else.
@@ -136,7 +170,7 @@ export function WorktreesPage() {
 
   const selected = repos?.find((r) => r.path === filters.repo) ?? repos?.[0];
   const { data: classified, isLoading: classifying } = useWorktreeSafety(selected?.path);
-  const { data: sizes } = useWorktreeSizes(selected?.path);
+  const { data: sizes, isLoading: sizing } = useWorktreeSizes(selected?.path);
   const remove = useRemoveWorktree();
   const [pending, setPending] = useState<Worktree | null>(null);
 
@@ -176,7 +210,12 @@ export function WorktreesPage() {
   // list, so the page never flickers back to unclassified.
   const shown = (classified ?? selected?.worktrees ?? [])
     .map((w) => ({ ...w, size_bytes: sizes?.get(w.path) ?? w.size_bytes }))
-    .sort((a, b) => (b.size_bytes ?? 0) - (a.size_bytes ?? 0));
+    // Sorting by size while sizes are still arriving would make rows jump
+    // under the cursor -- a row you were about to click moves as its
+    // number lands. Hold the stable path order until they are all in.
+    .sort((a, b) =>
+      sizing ? a.path.localeCompare(b.path) : (b.size_bytes ?? 0) - (a.size_bytes ?? 0),
+    );
 
   const safeCount = shown.filter((w) => isSafe(w.safety)).length;
 
@@ -187,11 +226,17 @@ export function WorktreesPage() {
         <span className="text-[#8b949e]">
           {shown.length} worktree{shown.length === 1 ? "" : "s"}
         </span>
+        {/* The count is withheld, not shown as a growing number: a
+            "3 safe to remove" that climbs to 122 as rows resolve invites
+            acting on a figure that was never the answer. */}
         {classifying ? (
           <span className="text-xs text-[#58a6ff]">checking what is safe to remove…</span>
         ) : (
           <span className="text-xs text-[#3fb950]">{safeCount} safe to remove</span>
         )}
+        {!classifying && sizing ? (
+          <span className="text-xs text-[#8b949e]">measuring sizes…</span>
+        ) : null}
         <button
           type="button"
           onClick={() => setFilter("repo", undefined)}
@@ -232,7 +277,9 @@ export function WorktreesPage() {
             No worktrees in this repository.
           </div>
         ) : (
-          shown.map((wt) => <Row key={wt.path} wt={wt} onRemove={setPending} />)
+          shown.map((wt) => (
+            <Row key={wt.path} wt={wt} onRemove={setPending} sizePending={sizing} />
+          ))
         )}
       </div>
     </div>

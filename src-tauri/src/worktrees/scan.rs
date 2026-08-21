@@ -1305,6 +1305,7 @@ mod live {
                 Safety::Unpushed(_) => "unpushed",
                 Safety::NeverPushed => "never_pushed",
                 Safety::Unmerged => "unmerged",
+                Safety::Pending => "pending",
                 Safety::Unknown(_) => "unknown",
             };
             *counts.entry(k).or_default() += 1;

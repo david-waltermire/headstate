@@ -9,6 +9,8 @@ const state = vi.hoisted(() => ({
   isError: false,
   classified: undefined as Worktree[] | undefined,
   classifying: false,
+  sizes: undefined as Map<string, number> | undefined,
+  sizing: false,
 }));
 
 const toastSuccess = vi.hoisted(() => vi.fn());
@@ -27,7 +29,7 @@ vi.mock("../api/hooks", () => ({
   }),
   useWorktreeSafety: () => ({ data: state.classified, isLoading: state.classifying }),
   useRemoveWorktree: () => removeFn,
-  useWorktreeSizes: () => ({ data: undefined }),
+  useWorktreeSizes: () => ({ data: state.sizes, isLoading: state.sizing }),
 }));
 
 const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -56,6 +58,8 @@ describe("WorktreesPage", () => {
       isError: false,
       classified: undefined,
       classifying: false,
+      sizes: undefined,
+      sizing: false,
     });
     useFilters.setState({ filtersByView: { ...EMPTY }, view: "worktrees", panel: "list" });
     // Calls leak between tests otherwise, which makes "was not called"
@@ -196,5 +200,135 @@ describe("WorktreesPage", () => {
     state.classified = [wt({ safety: { kind: "safe" }, merged_at: "2026-08-18" })];
     render(<WorktreesPage />);
     expect(screen.getByText(/merged 2026-08-18/)).toBeTruthy();
+  });
+
+  // The bug: an unclassified row rendered "could not determine: not yet
+  // classified" -- a FAILED check, in the same grey as a real failure.
+  // Classification takes up to ~57s on a large tree, so that was most of
+  // the first minute.
+  it("shows a skeleton, not a failure, while a row is still being checked", () => {
+    Object.assign(state, {
+      repos: [
+        { name: "proj", path: "/code/proj", worktrees: [wt({ safety: { kind: "pending" } })] },
+      ],
+      classifying: true,
+    });
+    render(<WorktreesPage />);
+    expect(screen.queryByText(/could not determine/)).toBeNull();
+    const row = screen.getByText("proj-a").closest("div") as HTMLElement;
+    expect(row.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0);
+  });
+
+  // A row must stop being a skeleton the moment ITS answer lands, rather
+  // than waiting for the whole pass to finish.
+  it("resolves each row independently as its classification arrives", () => {
+    Object.assign(state, {
+      repos: [
+        {
+          name: "proj",
+          path: "/code/proj",
+          worktrees: [wt({ path: "/code/proj-a" }), wt({ path: "/code/proj-b" })],
+        },
+      ],
+      classified: [
+        wt({ path: "/code/proj-a", safety: { kind: "safe" } }),
+        wt({ path: "/code/proj-b", safety: { kind: "pending" } }),
+      ],
+      classifying: true,
+    });
+    render(<WorktreesPage />);
+    expect(screen.getByText(/safe to delete/)).not.toBeNull();
+    const pendingRow = screen.getByText("proj-b").closest("div") as HTMLElement;
+    expect(pendingRow.querySelectorAll('[aria-hidden="true"]').length).toBeGreaterThan(0);
+  });
+
+  // The em dash read as "measured, and the answer is nothing".
+  it("shows a skeleton rather than an em dash while a size is still coming", () => {
+    Object.assign(state, {
+      repos: [
+        {
+          name: "proj",
+          path: "/code/proj",
+          worktrees: [wt({ size_bytes: null, safety: { kind: "safe" } })],
+        },
+      ],
+      sizing: true,
+    });
+    render(<WorktreesPage />);
+    expect(screen.queryByText("—")).toBeNull();
+  });
+
+  // Safety and size are separate passes; a row whose safety resolved must
+  // not be held hostage by a size that has not.
+  it("shows a resolved safety even while that row's size is still pending", () => {
+    Object.assign(state, {
+      repos: [
+        {
+          name: "proj",
+          path: "/code/proj",
+          worktrees: [wt({ size_bytes: null, safety: { kind: "safe" } })],
+        },
+      ],
+      sizing: true,
+    });
+    render(<WorktreesPage />);
+    expect(screen.getByText(/safe to delete/)).not.toBeNull();
+  });
+
+  // A row you are about to click must not move as its number lands.
+  it("holds a stable order while sizes are still arriving", () => {
+    Object.assign(state, {
+      repos: [
+        {
+          name: "proj",
+          path: "/code/proj",
+          worktrees: [
+            wt({ path: "/code/aaa", size_bytes: null }),
+            wt({ path: "/code/zzz", size_bytes: 9_999_999 }),
+          ],
+        },
+      ],
+      sizing: true,
+    });
+    const { container } = render(<WorktreesPage />);
+    const names = [...container.querySelectorAll(".font-mono")].map((n) => n.textContent);
+    // Path order while sizing, NOT size order -- zzz is far bigger but
+    // must not jump to the top until every size is in.
+    expect(names[0]).toMatch(/^aaa/);
+  });
+
+  it("sorts by size once every size has arrived", () => {
+    Object.assign(state, {
+      repos: [
+        {
+          name: "proj",
+          path: "/code/proj",
+          worktrees: [
+            wt({ path: "/code/aaa", size_bytes: 10 }),
+            wt({ path: "/code/zzz", size_bytes: 9_999_999 }),
+          ],
+        },
+      ],
+      sizing: false,
+    });
+    const { container } = render(<WorktreesPage />);
+    const names = [...container.querySelectorAll(".font-mono")].map((n) => n.textContent);
+    expect(names[0]).toMatch(/^zzz/);
+  });
+
+  // Deleting on an unresolved verdict is the one unrecoverable mistake
+  // this page can make.
+  it("refuses to offer removal while a row is still being checked", () => {
+    Object.assign(state, {
+      repos: [
+        { name: "proj", path: "/code/proj", worktrees: [wt({ safety: { kind: "pending" } })] },
+      ],
+      classifying: true,
+    });
+    render(<WorktreesPage />);
+    const btn = screen.getByRole("button", { name: "Remove" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    fireEvent.click(btn);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

@@ -165,6 +165,9 @@ export type Safety =
   | { kind: "unpushed"; detail: number }
   | { kind: "never_pushed" }
   | { kind: "unmerged" }
+  /// Listed, but not yet classified. Distinct from `unknown`, which
+  /// means the check ran and could not decide.
+  | { kind: "pending" }
   | { kind: "unknown"; detail: string };
 
 /// How a checkout stands against its tracked upstream, as of the last
