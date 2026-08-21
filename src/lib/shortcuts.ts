@@ -23,23 +23,40 @@ function isTyping(target: EventTarget | null): boolean {
 ///
 /// Split from the listener so the mapping is testable without a DOM: the
 /// interesting rules are the guards, not the wiring.
+/// Whether this platform uses Cmd as its shortcut modifier.
+///
+/// Injected rather than read from `navigator` at each call site, so the
+/// mapping stays testable for both platforms without mocking globals.
+export function isMac(platform: string = navigator.platform ?? ""): boolean {
+  return /Mac|iPhone|iPad/.test(platform);
+}
+
 export function shortcutFor(
   e: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"> & {
     target?: EventTarget | null;
   },
+  mac: boolean = isMac(),
 ): keyof ShortcutHandlers | null {
+  // Cmd on macOS, Ctrl everywhere else -- and NOT both on either. Metakey
+  // is the Windows key off macOS, so gating on it alone meant no shortcut
+  // fired at all there; accepting `metaKey || ctrlKey` would instead make
+  // Ctrl+R fire on macOS, where it means something else.
+  const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
   // Escape closes the search field first; only hide when not typing.
   if (e.key === "Escape") return isTyping(e.target ?? null) ? null : "onHide";
 
-  // Cmd+R: refresh. Never Ctrl+R, which is a browser reload on other
-  // platforms and would be surprising here.
-  if (e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "r") {
+  // Refresh the pull request list. Ctrl+R is a browser reload elsewhere,
+  // which is why this was Cmd-only -- but a Tauri window has no browser
+  // chrome to reload into, and the listener calls preventDefault, so the
+  // webview never sees it. The instinct behind the original comment still
+  // holds: Ctrl+R must refresh the LIST, never the page.
+  if (mod && !e.altKey && e.key.toLowerCase() === "r") {
     return "onRefresh";
   }
 
-  // Cmd+F focuses search rather than opening the webview's find bar,
-  // which a Tauri window does not provide.
-  if (e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === "f") {
+  // Focuses search rather than opening the webview's find bar, which a
+  // Tauri window does not provide.
+  if (mod && !e.altKey && e.key.toLowerCase() === "f") {
     return "onFocusSearch";
   }
 
