@@ -51,6 +51,10 @@ export const classifyWorktrees = (repoPath: string) =>
 export const removeWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("remove_worktree", { repoPath, worktreePath });
 
+/// Tell the poll loop whether the active view needs live PR data.
+export const setViewNeedsGithub = (needs: boolean) =>
+  invoke<void>("set_view_needs_github", { needs });
+
 /// Directories scanned for git checkouts. Defaults to `~/code`.
 export const getWorktreeDirs = () => invoke<string[]>("get_worktree_dirs");
 

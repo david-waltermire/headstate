@@ -5,6 +5,7 @@ import {
   usePullRequests,
   useRefreshRequested,
   useReviewing,
+  useViewCadence,
   useTruncation,
 } from "./api/hooks";
 import { FilterBar } from "./components/FilterBar";
@@ -42,6 +43,7 @@ export default function App() {
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
   // is what actually makes it do anything (see the hook's own comment).
   useRefreshRequested();
+  useViewCadence(view);
   const truncatedTotal = useTruncation();
   const { data: reviewing = [] } = useReviewing();
 

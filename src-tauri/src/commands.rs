@@ -195,6 +195,23 @@ pub fn validate_dirs(dirs: Vec<String>) -> Result<Vec<String>, String> {
     }
 }
 
+/// Tell the poll loop whether the active view needs live PR data.
+///
+/// Switching BACK to a PR view wakes the loop, so the list is fresh
+/// immediately rather than after up to a full background interval.
+/// Switching away does not wake it -- there is nothing to hurry for.
+#[tauri::command]
+pub fn set_view_needs_github(
+    needs: bool,
+    state: State<'_, crate::poll::ViewNeedsGithub>,
+    waker: State<'_, crate::poll::Waker>,
+) {
+    let was = state.0.swap(needs, std::sync::atomic::Ordering::Relaxed);
+    if needs && !was {
+        waker.0.notify_one();
+    }
+}
+
 /// The configured focused poll interval, in seconds.
 #[tauri::command]
 pub fn get_poll_interval(state: State<'_, crate::poll::PollInterval>) -> u64 {

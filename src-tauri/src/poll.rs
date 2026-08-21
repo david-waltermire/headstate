@@ -297,12 +297,22 @@ pub struct Waker(pub Arc<Notify>);
 /// immediately rather than after the old, longer sleep expires.
 pub struct PollInterval(pub Arc<AtomicU64>);
 
+/// Whether the active view needs live GitHub data.
+///
+/// `false` while the user is looking at local worktrees, which need no
+/// PR data at all. The loop drops to the BACKGROUND cadence rather than
+/// stopping: the tray badge must not go stale while the window sits open
+/// on another view, and the badge staying honest is the stated reason
+/// polling lives in Rust at all.
+pub struct ViewNeedsGithub(pub Arc<AtomicBool>);
+
 pub fn spawn(
     app: AppHandle,
     client: Arc<GitHubClient>,
     focused: Arc<AtomicBool>,
     waker: Arc<Notify>,
     interval_secs: Arc<AtomicU64>,
+    view_needs_github: Arc<AtomicBool>,
 ) {
     tauri::async_runtime::spawn(async move {
         let mut previous: Vec<PullRequest> = Vec::new();
@@ -371,7 +381,10 @@ pub fn spawn(
             // full interval.
             tokio::select! {
                 _ = tokio::time::sleep(interval_for_secs(
-                    focused.load(Ordering::Relaxed),
+                    // A view that does not show PR data polls at the
+                    // background rate even when the window is focused.
+                    focused.load(Ordering::Relaxed)
+                        && view_needs_github.load(Ordering::Relaxed),
                     interval_secs.load(Ordering::Relaxed),
                 )) => {}
                 _ = waker.notified() => {}
@@ -514,6 +527,41 @@ mod tests {
             interval_for_secs(true, 0),
             Duration::from_secs(MIN_FOCUSED_SECS)
         );
+    }
+
+    /// A view that shows no PR data polls at the BACKGROUND rate even
+    /// when the window is focused -- but still polls, so the tray badge
+    /// does not go stale while the user cleans up worktrees.
+    #[test]
+    fn a_non_github_view_uses_the_background_cadence() {
+        let secs = 120;
+        // Read through atomics so the `focused && needs_github` the loop
+        // actually evaluates cannot be constant-folded away.
+        let focused = AtomicBool::new(true);
+        let needs_github = AtomicBool::new(true);
+        let effective = || {
+            interval_for_secs(
+                focused.load(Ordering::Relaxed) && needs_github.load(Ordering::Relaxed),
+                secs,
+            )
+        };
+
+        let fast = effective();
+        assert_eq!(fast, Duration::from_secs(secs));
+
+        // Focused, but on a view that shows no PR data.
+        needs_github.store(false, Ordering::Relaxed);
+        let on_worktrees = effective();
+
+        // Same as being unfocused...
+        focused.store(false, Ordering::Relaxed);
+        needs_github.store(true, Ordering::Relaxed);
+        assert_eq!(on_worktrees, effective());
+
+        // ...slower than focused, and never stopped: the tray badge must
+        // not go stale while the window sits on another view.
+        assert!(on_worktrees > fast);
+        assert!(on_worktrees.as_secs() > 0, "must not stop");
     }
 
     /// Budget guard for BOTH cadences, with the per-poll cost derived from

@@ -17,6 +17,7 @@ import {
   getStats,
   refreshNow,
   setPollInterval,
+  setViewNeedsGithub,
   setWorktreeDirs,
 } from "./tauri";
 
@@ -244,6 +245,21 @@ export function usePollState(): "idle" | "fetching" {
   }, []);
 
   return state;
+}
+
+/// Keep the poll cadence in step with the active view.
+///
+/// The worktrees view needs no GitHub data, so the loop drops to the
+/// background rate while it is open. It does NOT stop: the tray badge
+/// would silently go stale, and the badge staying honest while the window
+/// is not being watched is the reason polling lives in Rust.
+export function useViewCadence(view: string): void {
+  useEffect(() => {
+    // Tolerate a host without the command, as the other listeners do:
+    // cadence is an optimisation, and failing to set it must not break
+    // the page.
+    void setViewNeedsGithub(view !== "worktrees").catch(() => {});
+  }, [view]);
 }
 
 /// Repos with worktrees. Listing only -- see `useWorktreeSafety`.

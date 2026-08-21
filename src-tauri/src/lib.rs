@@ -70,6 +70,7 @@ pub fn run() {
             commands::list_worktrees,
             commands::classify_worktrees,
             commands::remove_worktree,
+            commands::set_view_needs_github,
             commands::get_cycle_trend,
             commands::get_merged_detail,
             commands::get_auth_state,
@@ -153,6 +154,10 @@ pub fn run() {
             let interval = Arc::new(std::sync::atomic::AtomicU64::new(saved));
             app.manage(poll::PollInterval(interval.clone()));
 
+            // Starts true: the app opens on a PR view.
+            let needs_gh = Arc::new(AtomicBool::new(true));
+            app.manage(poll::ViewNeedsGithub(needs_gh.clone()));
+
             log::info!(
                 "headstate v{} starting (authenticated: {})",
                 env!("CARGO_PKG_VERSION"),
@@ -162,7 +167,7 @@ pub fn run() {
             if let Some(client) = gh_client {
                 let focused = Arc::new(AtomicBool::new(true));
                 app.manage(Focused(focused.clone()));
-                poll::spawn(handle, client, focused, waker, interval);
+                poll::spawn(handle, client, focused, waker, interval, needs_gh);
             }
 
             tray::setup_tray(&app.handle().clone())?;
