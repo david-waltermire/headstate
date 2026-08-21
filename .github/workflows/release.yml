@@ -29,9 +29,25 @@ jobs:
           wait-interval: 15
           allowed-conclusions: success
 
-  release:
+  build:
     needs: gate
-    runs-on: macos-latest
+    strategy:
+      # One platform failing must not cancel the others: a release that
+      # advertises three platforms and ships one is worse than a release
+      # that shipped nothing, so we want to see every failure at once.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: universal-apple-darwin
+            bundles: app,dmg
+          - os: windows-latest
+            target: ""
+            bundles: nsis
+          - os: ubuntu-latest
+            target: ""
+            bundles: deb,appimage
+    runs-on: ${{ matrix.os }}
     # Hoisted to job level so the signing step's `if:` can test a plain env
     # var. A step-level `if: secrets.X != ''` is not reliably evaluatable --
     # the secrets context is not guaranteed available there, and the whole
@@ -45,7 +61,22 @@ jobs:
       # macos-latest runners are Apple Silicon, so aarch64-apple-darwin is
       # present by default. The Intel slice of the universal binary needs
       # its target added explicitly.
+      - name: Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # macos-latest runners are Apple Silicon, so aarch64-apple-darwin is
+      # present by default. The Intel slice of the universal binary needs
+      # its target added explicitly.
       - name: Add Intel target
+        if: matrix.os == 'macos-latest'
         run: rustup target add x86_64-apple-darwin
 
       # The tag is the single source of truth for the version. Without this,
@@ -137,7 +168,7 @@ jobs:
       #   2. the run script explicitly unsets the Apple vars in that case,
       #      so it does not matter whether Actions omits an empty value or
       #      exports it as an empty string.
-      - name: Build universal bundle
+      - name: Build the bundle
         env:
           # Tauri's build reads these directly, see
           # https://tauri.app/reference/environment-variables/.
@@ -162,7 +193,64 @@ jobs:
             unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
             echo "No signing certificate: building an unsigned bundle."
           fi
-          yarn tauri build --target universal-apple-darwin --bundles app,dmg
+          # Only macOS builds a universal binary; the other targets are
+          # the runner's own architecture, so --target is omitted there
+          # rather than passed empty.
+          if [ -n "${{ matrix.target }}" ]; then
+            yarn tauri build --target "${{ matrix.target }}" --bundles "${{ matrix.bundles }}"
+          else
+            yarn tauri build --bundles "${{ matrix.bundles }}"
+          fi
+
+      # macOS ships the .app as a tarball alongside the dmg: the dmg is
+      # for humans, the tarball is what an updater or a scripted install
+      # can consume.
+      - name: Package the macOS app bundle
+        if: matrix.os == 'macos-latest'
+        run: |
+          set -euo pipefail
+          BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
+          tar -czf "Headstate-${GITHUB_REF_NAME}.app.tar.gz" -C "$BUNDLE/macos" Headstate.app
+
+      # Collected into one directory so the upload glob does not have to
+      # know each platform's bundle layout.
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          BASE=src-tauri/target
+          if [ -n "${{ matrix.target }}" ]; then BASE="$BASE/${{ matrix.target }}"; fi
+          find "$BASE/release/bundle" -type f \
+            \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \
+               -o -name '*.deb' -o -name '*.AppImage' \) \
+            -exec cp {} dist/ \;
+          cp Headstate-*.app.tar.gz dist/ 2>/dev/null || true
+          ls -la dist
+          # A platform that builds but produces nothing must fail here,
+          # not silently contribute zero assets to the release.
+          [ -n "$(ls -A dist)" ] || { echo "no artifacts produced" >&2; exit 1; }
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bundle-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  # One job creates the release, after every platform has succeeded.
+  #
+  # `needs: build` means a failed platform blocks publication entirely --
+  # a release advertising three platforms while shipping one is worse than
+  # no release. It also avoids three parallel jobs racing to create the
+  # same tag.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Publish release
         env:
@@ -171,20 +259,19 @@ jobs:
           NOTARIZED: ${{ secrets.APPLE_ID != '' && 'true' || 'false' }}
         run: |
           set -euo pipefail
-          BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
-          tar -czf "Headstate-${GITHUB_REF_NAME}.app.tar.gz" -C "$BUNDLE/macos" Headstate.app
+          ls -la dist
 
           # --generate-notes prepends --notes ahead of the auto-generated
-          # changelog, so this reaches every release. The unsigned-build
-          # instructions only apply when this run had no signing secrets;
-          # once #23 lands for real, SIGNED/NOTARIZED flip and this note
-          # changes with no other edits to this file.
+          # changelog, so this reaches every release. Each platform gets
+          # only the caveat that applies to it: telling a Windows user to
+          # run `xattr` is noise, and saying nothing about SmartScreen
+          # means they meet it as a scary dialog instead.
           if [ "$SIGNED" = "true" ] && [ "$NOTARIZED" = "true" ]; then
-            NOTES="This build is signed and notarized."
+            MAC="The macOS build is signed and notarized."
           elif [ "$SIGNED" = "true" ]; then
-            NOTES="This build is signed but not notarized."
+            MAC="The macOS build is signed but not notarized."
           else
-            NOTES="This build is unsigned. Before first launch, run:
+            MAC="**macOS** — this build is unsigned. Before first launch, run:
 
           \`\`\`
           xattr -dr com.apple.quarantine /Applications/Headstate.app
@@ -193,9 +280,18 @@ jobs:
           Otherwise Gatekeeper will refuse to open it."
           fi
 
+          # Windows signing is #177's deferred item, parallel to #23 for
+          # macOS. An EV certificate is a purchase, and it should not hold
+          # up shipping working builds -- but a user should read about
+          # SmartScreen here rather than discover it.
+          NOTES="$MAC
+
+          **Windows** — this build is unsigned, so SmartScreen will warn on first run. Choose \"More info\" then \"Run anyway\".
+
+          **Linux** — \`.deb\` for Debian and Ubuntu, \`.AppImage\` for everything else. Mark the AppImage executable with \`chmod +x\` before running it."
+
           gh release create "$GITHUB_REF_NAME" \
             --title "Headstate ${GITHUB_REF_NAME}" \
             --notes "$NOTES" \
             --generate-notes \
-            "Headstate-${GITHUB_REF_NAME}.app.tar.gz" \
-            "$BUNDLE"/dmg/*.dmg
+            dist/*
