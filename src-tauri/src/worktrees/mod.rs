@@ -11,8 +11,10 @@
 //! Nothing here talks to GitHub. It is local disk work and deliberately
 //! runs off the poll loop.
 
+mod assess;
 mod model;
 mod scan;
 
+pub use assess::assess;
 pub use model::{Repo, Worktree};
 pub use scan::{classify_repo, remove_worktree, scan_dirs_fast, size_repo};

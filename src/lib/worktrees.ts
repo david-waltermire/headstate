@@ -35,6 +35,24 @@ export function safetyReason(s: Safety): string {
   }
 }
 
+/// Whether this row can be handed to a coding agent.
+///
+/// Every state that is NOT removable and not the main checkout. That is
+/// 124 of 268 worktrees on a real machine, and the largest group --
+/// never-pushed, at 52 -- is the one where the question matters most,
+/// because those commits exist nowhere else.
+///
+/// `pending` is excluded on purpose: offering an action based on a
+/// safety verdict that has not arrived is the bug #190 was.
+export function canClaudify(s: Safety): boolean {
+  return (
+    s.kind === "unmerged" ||
+    s.kind === "never_pushed" ||
+    s.kind === "unpushed" ||
+    s.kind === "dirty"
+  );
+}
+
 /// The final component of a path, whichever separator it uses.
 ///
 /// `split("/")` returns the whole string unchanged on a Windows path, so

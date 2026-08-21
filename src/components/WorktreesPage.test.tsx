@@ -34,6 +34,13 @@ vi.mock("../api/hooks", () => ({
 
 const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
+const claudify = vi.hoisted(() =>
+  vi.fn(() =>
+    Promise.resolve({ command: "cd '/code/proj-a' && claude 'assess'", claude_installed: true }),
+  ),
+);
+vi.mock("../api/tauri", () => ({ claudifyCommand: claudify }));
+
 import { WorktreesPage } from "./WorktreesPage";
 
 const wt = (over: Partial<Worktree>): Worktree => ({
@@ -124,10 +131,14 @@ describe("WorktreesPage", () => {
 
   // Genuinely disabled, not a warning to click past: 52 of 296 worktrees
   // here hold commits that exist nowhere else.
-  it("disables removal for anything not provably safe", () => {
+  // The invariant is unchanged -- nothing unsafe may be removed -- but
+  // the row now offers Claudify in that slot rather than a dead Remove,
+  // so "no removal is offered" is the assertion rather than "Remove is
+  // disabled".
+  it("offers no removal at all for anything not provably safe", () => {
     state.classified = [wt({ safety: { kind: "never_pushed" } })];
     render(<WorktreesPage />);
-    expect(screen.getByRole("button", { name: /remove/i })).toHaveProperty("disabled", true);
+    expect(screen.queryByRole("button", { name: /remove/i })).toBeNull();
   });
 
   it("enables removal only when safe", () => {
@@ -330,5 +341,66 @@ describe("WorktreesPage", () => {
     expect(btn.disabled).toBe(true);
     fireEvent.click(btn);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  // 124 of 268 worktrees on a real machine cannot be removed. The row
+  // used to show a dead Remove there; it now answers the question that
+  // actually applies -- is there anything in here worth keeping?
+  describe("Claudify", () => {
+    it.each([["never_pushed"], ["unmerged"], ["dirty"], ["unpushed"]])(
+      "offers it for %s",
+      (kind) => {
+        state.classified = [wt({ safety: { kind } as Worktree["safety"] })];
+        const r = render(<WorktreesPage />);
+        expect(screen.getByRole("button", { name: /claudify/i })).toBeTruthy();
+        r.unmount();
+      },
+    );
+
+    it("does not offer it where Remove already applies", () => {
+      state.classified = [wt({ safety: { kind: "safe" } })];
+      render(<WorktreesPage />);
+      expect(screen.queryByRole("button", { name: /claudify/i })).toBeNull();
+      expect(screen.getByRole("button", { name: /remove/i })).toBeTruthy();
+    });
+
+    // Offering an action based on a verdict that has not arrived is the
+    // bug #190 was.
+    it("does not offer it while the row is still being classified", () => {
+      state.classified = [wt({ safety: { kind: "pending" } })];
+      state.classifying = true;
+      const r = render(<WorktreesPage />);
+      expect(screen.queryByRole("button", { name: /claudify/i })).toBeNull();
+      r.unmount();
+      state.classifying = false;
+    });
+
+    it("copies the command and says where to paste it", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+      Object.assign(navigator, { clipboard: { writeText } });
+      state.classified = [wt({ safety: { kind: "never_pushed" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /claudify/i }));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      expect(writeText.mock.calls[0][0]).toContain("claude");
+      expect(toastSuccess).toHaveBeenCalled();
+      const [, opts] = toastSuccess.mock.calls[0] as [string, { description: string }];
+      expect(opts.description).toMatch(/paste it in your terminal/i);
+    });
+
+    // Better to learn it here than as `command not found` after pasting.
+    it("says so when Claude Code was not found, but still copies", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+      Object.assign(navigator, { clipboard: { writeText } });
+      claudify.mockResolvedValueOnce({ command: "cd x && claude y", claude_installed: false });
+      state.classified = [wt({ safety: { kind: "unmerged" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /claudify/i }));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+      const [, opts] = toastSuccess.mock.calls[0] as [string, { description: string }];
+      expect(opts.description).toMatch(/not found/i);
+    });
   });
 });

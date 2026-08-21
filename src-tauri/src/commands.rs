@@ -363,6 +363,50 @@ pub fn default_worktree_dirs() -> Vec<String> {
 /// Non-existent paths are rejected rather than stored: a typo should fail
 /// visibly here, not silently produce an empty worktrees view later.
 #[tauri::command]
+/// The shell command that hands a worktree to Claude Code.
+///
+/// Returns text for the clipboard rather than spawning anything.
+/// Spawning a terminal is not portable: macOS has no default-terminal
+/// concept at all (no LaunchServices handler exists, so a machine with
+/// both Terminal.app and iTerm gives no way to know which the user
+/// wants), and on Linux `x-terminal-emulator` is Debian-only while
+/// `gio open` on a shell script opens an editor. The clipboard works
+/// identically everywhere and lands the user in their OWN shell.
+///
+/// It also sidesteps PATH: `claude` lives in `~/.local/bin`, outside a
+/// GUI app's PATH, but the pasted command runs in a login shell where it
+/// resolves fine.
+pub fn claudify_command(
+    repo_path: String,
+    worktree_path: String,
+    branch: String,
+) -> ClaudifyCommand {
+    let facts = crate::worktrees::assess(&repo_path, &worktree_path, &branch);
+    // Fall back to the bare name: the command is going to a login shell,
+    // which resolves it even when this process could not.
+    let claude = crate::auth::find_claude();
+    let installed = claude.is_some();
+    let bin = claude
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "claude".to_string());
+
+    ClaudifyCommand {
+        command: facts.command(&bin),
+        claude_installed: installed,
+    }
+}
+
+/// The clipboard payload, plus whether Claude Code was actually found.
+///
+/// `claude_installed` is advisory only: the command is copied either way,
+/// because a user may be pasting it on another machine.
+#[derive(Debug, serde::Serialize)]
+pub struct ClaudifyCommand {
+    pub command: String,
+    pub claude_installed: bool,
+}
+
+#[tauri::command]
 pub fn set_worktree_dirs(app: AppHandle, dirs: Vec<String>) -> Result<Vec<String>, String> {
     let ok = validate_dirs(dirs)?;
     let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;

@@ -74,6 +74,7 @@ pub fn run() {
             commands::list_worktrees,
             commands::classify_worktrees,
             commands::remove_worktree,
+            commands::claudify_command,
             commands::size_worktrees,
             commands::set_view_needs_github,
             commands::get_cycle_trend,

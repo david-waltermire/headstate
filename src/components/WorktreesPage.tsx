@@ -1,3 +1,4 @@
+import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import {
   useRemoveWorktree,
@@ -7,6 +8,7 @@ import {
 } from "../api/hooks";
 import {
   formatSize,
+  canClaudify,
   isPending,
   isSafe,
   pathBasename,
@@ -15,6 +17,7 @@ import {
   upstreamReason,
   upstreamTone,
 } from "../lib/worktrees";
+import { claudifyCommand } from "../api/tauri";
 import { useActiveFilters, useFilters } from "../store/filters";
 import type { Worktree } from "../types/pr";
 import { toast } from "sonner";
@@ -46,16 +49,19 @@ function Skeleton({ className = "" }: { className?: string }) {
 function Row({
   wt,
   onRemove,
+  onClaudify,
   sizePending,
 }: {
   wt: Worktree;
   onRemove: (wt: Worktree) => void;
+  onClaudify: (wt: Worktree) => void;
   /// Sizes arrive in their own pass, after safety. Tracked separately so
   /// a row whose safety has resolved does not keep waiting on its size.
   sizePending?: boolean;
 }) {
   const safe = isSafe(wt.safety);
   const pending = isPending(wt.safety);
+  const claudifiable = canClaudify(wt.safety);
   return (
     <div className="flex items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">
       <span className="min-w-0 flex-1 truncate font-mono text-[#e6edf3]">
@@ -96,22 +102,38 @@ function Row({
           formatSize(wt.size_bytes)
         )}
       </span>
-      {/* Genuinely disabled when not safe, not a warning to click past:
-          52 of 296 worktrees here hold commits that exist nowhere else.
-          The title explains WHY, so the row teaches rather than blocks. */}
-      <button
-        type="button"
-        disabled={!safe}
-        onClick={() => onRemove(wt)}
-        title={safe ? "Remove this worktree" : safetyReason(wt.safety)}
-        className={`shrink-0 rounded border px-2 py-0.5 text-xs ${
-          safe
-            ? "border-[#f85149]/40 text-[#f85149] hover:bg-[#f85149]/10"
-            : "border-[#30363d] text-[#8b949e] opacity-50"
-        }`}
-      >
-        Remove
-      </button>
+      {/* One action per row, never two: the row is already dense. Safe
+          rows get Remove; the 124 that cannot be removed get Claudify,
+          which answers the question that actually applies to them --
+          "is there anything in here worth keeping?" -- rather than
+          showing a dead button that says the app will not help. */}
+      {claudifiable ? (
+        <button
+          type="button"
+          onClick={() => onClaudify(wt)}
+          title={`Copy a prompt asking Claude Code to assess this worktree (${safetyReason(
+            wt.safety,
+          )})`}
+          className="flex shrink-0 items-center gap-1 rounded border border-[#8957e5]/40 px-2 py-0.5 text-xs text-[#a371f7] hover:bg-[#8957e5]/10"
+        >
+          <Sparkles className="h-3 w-3" aria-hidden="true" />
+          Claudify
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled={!safe}
+          onClick={() => onRemove(wt)}
+          title={safe ? "Remove this worktree" : safetyReason(wt.safety)}
+          className={`shrink-0 rounded border px-2 py-0.5 text-xs ${
+            safe
+              ? "border-[#f85149]/40 text-[#f85149] hover:bg-[#f85149]/10"
+              : "border-[#30363d] text-[#8b949e] opacity-50"
+          }`}
+        >
+          Remove
+        </button>
+      )}
     </div>
   );
 }
@@ -173,6 +195,31 @@ export function WorktreesPage() {
   const { data: classified, isLoading: classifying } = useWorktreeSafety(selected?.path);
   const { data: sizes, isLoading: sizing } = useWorktreeSizes(selected?.path);
   const remove = useRemoveWorktree();
+
+  /// Copy rather than spawn. The command lands in the user's own shell,
+  /// where their config applies and `claude` resolves -- and there is no
+  /// portable way to open "the user's terminal" anyway.
+  const claudify = (wt: Worktree) => {
+    claudifyCommand(selected?.path ?? "", wt.path, wt.branch).then(
+      ({ command, claude_installed }) =>
+        navigator.clipboard.writeText(command).then(
+          () =>
+            toast.success("Command copied", {
+              // The user has to switch apps; this is the only place to
+              // say so. And if Claude Code is missing, better to learn it
+              // here than as a `command not found` after pasting.
+              description: claude_installed
+                ? "Paste it in your terminal to start the assessment."
+                : "Paste it in your terminal. Claude Code was not found on this machine.",
+            }),
+          () => toast.error("Could not copy the command"),
+        ),
+      (e: unknown) =>
+        toast.error("Could not build the command", {
+          description: typeof e === "string" ? e : undefined,
+        }),
+    );
+  };
   const [pending, setPending] = useState<Worktree | null>(null);
 
   if (isLoading) {
@@ -279,7 +326,13 @@ export function WorktreesPage() {
           </div>
         ) : (
           shown.map((wt) => (
-            <Row key={wt.path} wt={wt} onRemove={setPending} sizePending={sizing} />
+            <Row
+              key={wt.path}
+              wt={wt}
+              onRemove={setPending}
+              onClaudify={claudify}
+              sizePending={sizing}
+            />
           ))
         )}
       </div>

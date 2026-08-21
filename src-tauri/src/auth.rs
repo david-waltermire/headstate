@@ -127,6 +127,58 @@ const GH_FALLBACK_DIRS: &[&str] = &[
     r"C:\ProgramData\chocolatey\bin",
 ];
 
+/// Where Claude Code installs, beyond `PATH`.
+///
+/// Same problem as `gh`: the official installer puts it in
+/// `~/.local/bin`, which a GUI app's PATH does not include.
+///
+/// Less load-bearing than the `gh` list, though. The Claudify command is
+/// copied to the clipboard and pasted into the user's own terminal, which
+/// IS a login shell and resolves `claude` fine. This only lets the app
+/// say "not installed" rather than leaving the user to discover it as a
+/// `command not found` after pasting.
+fn claude_fallback_dirs() -> Vec<String> {
+    let mut dirs = Vec::new();
+    if let Ok(home) = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
+        dirs.push(format!("{home}/.local/bin"));
+        dirs.push(format!("{home}/.claude/local"));
+        if cfg!(windows) {
+            dirs.push(format!(r"{home}\AppData\Local\Programs\claude"));
+        }
+    }
+    dirs.extend(GH_FALLBACK_DIRS.iter().map(|d| (*d).to_string()));
+    dirs
+}
+
+/// Locate the Claude Code binary, or `None`.
+///
+/// `HEADSTATE_CLAUDE` overrides everything, matching `HEADSTATE_GH`.
+pub fn find_claude() -> Option<std::path::PathBuf> {
+    let exe = format!("claude{}", std::env::consts::EXE_SUFFIX);
+
+    if let Ok(explicit) = std::env::var("HEADSTATE_CLAUDE") {
+        let p = std::path::PathBuf::from(explicit);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Ok(path) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join(&exe);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    for dir in claude_fallback_dirs() {
+        let candidate = std::path::Path::new(&dir).join(&exe);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// Locate the `gh` binary: `PATH` first, then the known install locations.
 ///
 /// Returns the path to run. `None` means `gh` is genuinely not installed,

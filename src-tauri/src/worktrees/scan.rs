@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// Run a git command in a directory, returning stdout on success.
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(super) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -219,7 +219,7 @@ fn squash_merged(dir: &Path, default_branch: &str) -> Safety {
 }
 
 /// The repository's default branch, falling back to `main`.
-fn default_branch(repo: &Path) -> String {
+pub(super) fn default_branch(repo: &Path) -> String {
     git(
         repo,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],

@@ -58,6 +58,24 @@ export const actOnPr = (
   action: PrActionName,
 ) => invoke<void>("act_on_pr", { id, repo, number, action });
 
+/// The clipboard payload for Claudify, plus whether Claude Code was
+/// found. `claude_installed` is advisory: the command is returned either
+/// way, since a user may paste it on another machine.
+export interface ClaudifyCommand {
+  command: string;
+  claude_installed: boolean;
+}
+
+/// The shell command that hands a worktree to Claude Code.
+///
+/// Text for the clipboard, not a spawn. Spawning a terminal is not
+/// portable -- macOS has no default-terminal concept, and on Linux
+/// `gio open` on a shell script opens an editor -- and the clipboard
+/// lands the user in their own shell, where `claude` resolves even
+/// though a GUI app's PATH does not include it.
+export const claudifyCommand = (repoPath: string, worktreePath: string, branch: string) =>
+  invoke<ClaudifyCommand>("claudify_command", { repoPath, worktreePath, branch });
+
 /// Merge the base branch into a pull request's head -- GitHub's "Update
 /// branch" button.
 ///
