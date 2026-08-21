@@ -7,6 +7,7 @@ import type { CiState, Label, MergeState, PullRequest, ReviewState } from "../ty
 /// the happy path.
 export const PR_FIXTURES: PullRequest[] = [
   {
+    id: "PR_fixture0",
     number: 42,
     title: "Add retry to the fetch client",
     url: "https://github.com/octocat/hello-world/pull/42",
@@ -27,6 +28,7 @@ export const PR_FIXTURES: PullRequest[] = [
     unresolved_threads: 0,
   },
   {
+    id: "PR_fixture1",
     number: 43,
     title: "Fix flaky timezone test",
     url: "https://github.com/octocat/hello-world/pull/43",
@@ -47,6 +49,7 @@ export const PR_FIXTURES: PullRequest[] = [
     unresolved_threads: 2,
   },
   {
+    id: "PR_fixture2",
     number: 7,
     title: "Bump the parser dependency",
     url: "https://github.com/octocat/spoon-knife/pull/7",

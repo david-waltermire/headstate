@@ -44,6 +44,7 @@ mod tests {
 
     fn sample() -> PullRequest {
         PullRequest {
+            id: "PR_test".into(),
             number: 42,
             title: "Add retry to the fetch client".into(),
             url: "https://github.com/octocat/hello-world/pull/42".into(),

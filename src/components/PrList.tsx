@@ -15,6 +15,7 @@ export function PrList({
   hasFilters = false,
   total,
   onOpen,
+  canWrite = true,
 }: {
   prs: PullRequest[];
   hasFilters?: boolean;
@@ -23,6 +24,7 @@ export function PrList({
   total?: number;
   /// Called with the clicked PR. Omitted where rows are not clickable.
   onOpen?: (pr: PullRequest) => void;
+  canWrite?: boolean;
 }) {
   return (
     <div className="rounded-md border border-[#30363d]">
@@ -54,6 +56,7 @@ export function PrList({
             key={`${pr.repo}#${pr.number}`}
             pr={pr}
             onOpen={onOpen ? () => onOpen(pr) : undefined}
+            canWrite={canWrite}
           />
         ))
       )}

@@ -24,7 +24,7 @@ query($q: String!, $reviewing: String!) {
     issueCount
     nodes {
       ... on PullRequest {
-        number title url isDraft createdAt updatedAt
+        id number title url isDraft createdAt updatedAt
         headRefName baseRefName
         author { login }
         repository { nameWithOwner }
@@ -39,7 +39,7 @@ query($q: String!, $reviewing: String!) {
     issueCount
     nodes {
       ... on PullRequest {
-        number title url isDraft createdAt updatedAt
+        id number title url isDraft createdAt updatedAt
         headRefName baseRefName
         author { login }
         repository { nameWithOwner }

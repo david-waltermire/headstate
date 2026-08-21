@@ -199,6 +199,7 @@ export default function App() {
                 hasFilters={hasActiveFilters(filters)}
                 total={view === "my-prs" ? (truncatedTotal ?? undefined) : undefined}
                 onOpen={(pr) => selectPr({ repo: pr.repo, number: pr.number })}
+                canWrite={view === "my-prs"}
               />
             )}
           </div>

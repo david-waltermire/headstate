@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { PullRequest } from "@/types/pr";
 import { labelForeground } from "@/lib/labels";
+import { PrKebab } from "@/components/PrKebab";
 import { needsAttention } from "@/lib/derive";
 import { relativeTime } from "@/lib/time";
 
@@ -131,7 +132,17 @@ function prState(pr: PullRequest): { className: string; label: string } {
   return { className: "text-[#3fb950]", label: "Open" };
 }
 
-export function PrRow({ pr, onOpen }: { pr: PullRequest; onOpen?: () => void }) {
+export function PrRow({
+  pr,
+  onOpen,
+  canWrite = true,
+}: {
+  pr: PullRequest;
+  onOpen?: () => void;
+  /// False on the review view: merging or closing someone else's pull
+  /// request is usually not yours to do.
+  canWrite?: boolean;
+}) {
   const state = prState(pr);
   return (
     // The row opens the detail view; the title anchor still opens GitHub,
@@ -223,6 +234,7 @@ export function PrRow({ pr, onOpen }: { pr: PullRequest; onOpen?: () => void }) 
         </div>
       </div>
       <div className="shrink-0 text-xs text-[#8b949e]">{pr.repo}</div>
+      <PrKebab pr={pr} canWrite={canWrite} />
     </div>
   );
 }

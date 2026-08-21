@@ -15,6 +15,8 @@ export interface Label {
 }
 
 export interface PullRequest {
+  /// GraphQL node ID, so a row can act without opening the detail view.
+  id: string;
   number: number;
   title: string;
   url: string;

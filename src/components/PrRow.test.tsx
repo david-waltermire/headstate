@@ -1,5 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
+import { renderWithQuery as render } from "@/test-utils";
 import { describe, expect, it, vi } from "vitest";
+
 import type { PullRequest } from "@/types/pr";
 import { PR_FIXTURES } from "@/fixtures/prs";
 import { PrRow } from "./PrRow";

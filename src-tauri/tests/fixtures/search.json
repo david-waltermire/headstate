@@ -39,7 +39,8 @@
           ]
         },
         "headRefName": "feature/retry-client",
-        "baseRefName": "main"
+        "baseRefName": "main",
+        "id": "PR_fixture0"
       },
       {
         "number": 43,
@@ -78,7 +79,8 @@
           ]
         },
         "headRefName": "fix/flaky-test",
-        "baseRefName": "main"
+        "baseRefName": "main",
+        "id": "PR_fixture1"
       },
       {
         "number": 7,
@@ -110,7 +112,8 @@
           ]
         },
         "headRefName": "stack/part-2",
-        "baseRefName": "stack/part-1"
+        "baseRefName": "stack/part-1",
+        "id": "PR_fixture2"
       }
     ]
   },

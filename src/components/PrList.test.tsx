@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { renderWithQuery as render } from "@/test-utils";
+import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { PR_FIXTURES } from "@/fixtures/prs";
 import { PrList } from "@/components/PrList";

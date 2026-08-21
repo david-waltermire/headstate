@@ -180,6 +180,7 @@ fn labels(node: &Value) -> Vec<Label> {
 
 fn map_node(node: &Value) -> Option<PullRequest> {
     Some(PullRequest {
+        id: node["id"].as_str().unwrap_or_default().to_string(),
         number: node["number"].as_u64()?,
         title: node["title"].as_str()?.to_string(),
         url: node["url"].as_str()?.to_string(),

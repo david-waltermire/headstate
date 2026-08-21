@@ -74,6 +74,9 @@ pub struct Label {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PullRequest {
+    /// GraphQL node ID, so a row can act without first opening the
+    /// detail view. Rides along in the list query at no extra cost.
+    pub id: String,
     pub number: u64,
     pub title: String,
     pub url: String,
@@ -266,6 +269,7 @@ mod attention_tests {
             .unwrap()
             .with_timezone(&Utc);
         PullRequest {
+            id: "PR_test".into(),
             number: 1,
             title: "t".into(),
             url: "u".into(),
