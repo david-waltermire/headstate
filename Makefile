@@ -43,6 +43,9 @@ icons:
 	yarn tauri icon src-tauri/icons/icon.png
 	cp src-tauri/icons/icon-master.png src-tauri/icons/icon.png
 	rm -rf src-tauri/icons/android src-tauri/icons/ios
-	rm -f src-tauri/icons/icon.ico src-tauri/icons/StoreLogo.png
+	# icon.ico is KEPT: tauri_build embeds it as a Windows resource, and
+	# without it the build script fails before compiling any app code.
+	# Deleting it was correct while this was macOS-only and is not now.
+	rm -f src-tauri/icons/StoreLogo.png
 	rm -f src-tauri/icons/Square*.png src-tauri/icons/64x64.png
 	python3 scripts/make-icons.py --restore-icns-if-unchanged

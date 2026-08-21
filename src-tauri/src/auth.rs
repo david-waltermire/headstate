@@ -232,12 +232,30 @@ pub fn build_client(token: &str) -> Result<octocrab::Octocrab, AuthError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::process::ExitStatusExt;
     use std::process::{ExitStatus, Output};
+
+    /// Both platforms expose `ExitStatusExt::from_raw`, but they mean
+    /// different things by "raw": Unix wants a wait(2) status, where the
+    /// exit code lives in the high byte, and Windows wants the exit code
+    /// itself. Passing a shifted value on Windows would make every
+    /// "failed" case look like exit code 256 -- still non-zero, so the
+    /// tests would pass for the wrong reason.
+    fn exit_status(code: i32) -> ExitStatus {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            ExitStatus::from_raw(code << 8)
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::ExitStatusExt;
+            ExitStatus::from_raw(code as u32)
+        }
+    }
 
     fn output(code: i32, stdout: &str, stderr: &str) -> Output {
         Output {
-            status: ExitStatus::from_raw(code << 8),
+            status: exit_status(code),
             stdout: stdout.as_bytes().to_vec(),
             stderr: stderr.as_bytes().to_vec(),
         }

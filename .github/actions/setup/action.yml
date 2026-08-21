@@ -25,6 +25,16 @@ runs:
         # only reintroduces the version conflict above.
         package-manager-cache: false
 
+    # Corepack is enabled a SECOND time, after setup-node. The first call
+    # (before setup-node, which is required -- see above) writes shims for
+    # whatever Node was on the runner at the time; setup-node then installs
+    # its own Node, and on Windows those shims do not carry over, so
+    # `yarn` resolves to the runner's global 1.22 and hard-refuses a
+    # project pinned to yarn@4.5.1. Observed on windows-latest; harmless
+    # and idempotent on the platforms that did not need it.
+    - shell: bash
+      run: corepack enable
+
     - shell: bash
       run: yarn install --immutable
 

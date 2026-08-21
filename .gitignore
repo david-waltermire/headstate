@@ -15,11 +15,15 @@ coverage/
 node_modules/.tmp/
 
 # `yarn tauri icon` (run via `make icons`) generates Windows/iOS/Android
-# icon variants that this macOS-only app never uses. The Makefile prunes
-# them, but ignore them too as a backstop in case that step is skipped.
+# Icon variants this desktop app never uses. The Makefile prunes them, but
+# ignore them too as a backstop in case that step is skipped.
+#
+# icon.ico is NOT here any more: tauri_build embeds it as a Windows
+# resource, so without it the build script fails before compiling a line
+# of app code. It was ignored while this was macOS-only, which is exactly
+# what made the first Windows CI run fail.
 src-tauri/icons/android/
 src-tauri/icons/ios/
-src-tauri/icons/icon.ico
 src-tauri/icons/StoreLogo.png
 src-tauri/icons/Square*.png
 src-tauri/icons/64x64.png

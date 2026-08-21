@@ -197,4 +197,32 @@ mod tests {
         assert_eq!(badge_text(150).as_deref(), Some("99+"));
         assert!(badge_tooltip(150).contains("150"));
     }
+
+    /// Windows builds embed `icon.ico` as a resource via `tauri_build`.
+    /// Without it the build script fails before compiling a line of app
+    /// code -- which is how the first Windows CI run died, because the
+    /// Makefile deleted the file and .gitignore ignored it as leftovers
+    /// "this macOS-only app never uses".
+    ///
+    /// A unit test rather than trusting the build: on macOS the file's
+    /// absence is invisible until someone builds for Windows.
+    #[test]
+    fn the_windows_icon_is_present_and_is_a_real_ico() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/icons/icon.ico");
+        let bytes = std::fs::read(path)
+            .unwrap_or_else(|e| panic!("icons/icon.ico is missing ({e}); Windows builds need it"));
+
+        // ICONDIR: reserved=0, type=1 (icon), then the image count.
+        assert!(bytes.len() > 6, "icon.ico is truncated");
+        assert_eq!(&bytes[0..4], &[0, 0, 1, 0], "not an ICO header");
+        let count = u16::from_le_bytes([bytes[4], bytes[5]]);
+        assert!(count > 0, "icon.ico declares no images");
+
+        // Windows picks a size per context (taskbar, alt-tab, Explorer),
+        // so a single-size .ico gets scaled and looks it.
+        assert!(
+            count >= 4,
+            "icon.ico has only {count} size(s); Windows scales what it lacks"
+        );
+    }
 }

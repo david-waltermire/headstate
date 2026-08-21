@@ -112,3 +112,57 @@ jobs:
         run: cargo deny check
       - name: Yarn audit
         run: yarn npm audit --environment production --severity high
+
+  # Windows and Linux, deliberately NOT part of the jobs above.
+  #
+  # A `matrix` on `test-rust` would rename it to `test-rust (macos-latest)`,
+  # and the branch protection ruleset requires the bare names -- every PR
+  # would become unmergeable the moment this landed. Separate jobs keep the
+  # five required checks exactly as they are.
+  #
+  # Also NOT required checks yet, on purpose. These platforms have never
+  # been built, so the first honest thing they can do is report. Promote
+  # them in the ruleset once they are reliably green -- adding them as
+  # required while red would block all work behind a port.
+  platform:
+    name: platform (${{ matrix.os }})
+    strategy:
+      # One platform failing must not cancel the other: when both are
+      # broken, one run should tell you about both.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Tauri on Linux needs GTK and WebKit headers, and the tray needs
+      # libayatana-appindicator specifically -- without it the app compiles
+      # and the tray silently never appears, which is the hardest kind of
+      # failure to attribute later.
+      - name: Linux system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - uses: ./.github/actions/setup
+
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: Frontend tests
+        run: yarn vitest run
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build the app
+        run: yarn tauri build --no-bundle
