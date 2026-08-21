@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import type { PullRequest } from "@/types/pr";
 import { labelForeground } from "@/lib/labels";
+import { needsAttention } from "@/lib/derive";
 import { relativeTime } from "@/lib/time";
 
 /// A check for green, an X for red, and an amber dot while CI is running.
@@ -93,12 +94,50 @@ function ReviewGlyph({ pr }: { pr: PullRequest }) {
   return null;
 }
 
+/// The PR glyph's colour and label.
+///
+/// It was unconditionally green, so a draft, a queued PR and a blocked one
+/// all looked identical -- the icon carried no information at all.
+///
+/// Precedence is most-blocking first, and the order is the real decision:
+/// a draft WITH merge conflicts should read as blocked, not as a benign
+/// draft. "Blocked" deliberately means what `needsAttention` already means
+/// (conflicts or failing CI), so the icon agrees with the priorities strip
+/// and the tray badge rather than inventing a fourth definition of broken.
+///
+/// Colour never carries the meaning alone: the label names the state for
+/// anyone who cannot distinguish these hues, matching how `CiGlyph`
+/// already labels its states.
+function prState(pr: PullRequest): { className: string; label: string } {
+  if (needsAttention(pr)) {
+    return { className: "text-[#f85149]", label: "Blocked" };
+  }
+  if (pr.in_merge_queue) {
+    return { className: "text-[#db6d28]", label: "In merge queue" };
+  }
+  if (pr.is_draft) {
+    return { className: "text-[#8b949e]", label: "Draft" };
+  }
+  // GitHub's own verdict, which `needsAttention` cannot express: a PR
+  // waiting on a required review is neither broken nor ready, and a PR
+  // whose base has moved needs an update rather than a fix. Both look
+  // identical to the conflicts-or-red-CI rule above.
+  if (pr.merge_status === "blocked") {
+    return { className: "text-[#d29922]", label: "Blocked on review" };
+  }
+  if (pr.merge_status === "behind") {
+    return { className: "text-[#d29922]", label: "Behind base branch" };
+  }
+  return { className: "text-[#3fb950]", label: "Open" };
+}
+
 export function PrRow({ pr }: { pr: PullRequest }) {
+  const state = prState(pr);
   return (
     <div className="flex gap-3 border-b border-[#30363d] px-4 py-3 last:border-b-0 hover:bg-[#161b22]">
       <GitPullRequest
-        className="mt-0.5 h-4 w-4 shrink-0 text-[#3fb950]"
-        aria-hidden="true"
+        className={`mt-0.5 h-4 w-4 shrink-0 ${state.className}`}
+        aria-label={state.label}
       />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">

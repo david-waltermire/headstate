@@ -15,6 +15,35 @@ pub enum CiState {
     None,
 }
 
+/// GitHub's own summary of whether a PR can merge right now.
+///
+/// Richer than `MergeState`, which only distinguishes conflicts: this
+/// separates "ready" from "blocked on a required review" from "checks
+/// failing" -- the difference between a merge button that works and one
+/// that lies.
+///
+/// Live distribution across 25 open PRs when this was added: Clean 11,
+/// Dirty 7, Unstable 7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MergeStateStatus {
+    /// Mergeable now.
+    Clean,
+    /// Merge conflicts.
+    Dirty,
+    /// A required review or check is missing.
+    Blocked,
+    /// Non-required checks are failing.
+    Unstable,
+    /// The base has moved ahead; needs updating.
+    Behind,
+    /// Draft PRs cannot merge.
+    Draft,
+    /// Still being computed, or a state we do not model.
+    #[default]
+    Unknown,
+}
+
 /// Three states, not two. `Checking` exists because GitHub computes
 /// mergeability lazily and reports UNKNOWN until it finishes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,6 +88,8 @@ pub struct PullRequest {
     pub updated_at: DateTime<Utc>,
     pub ci: CiState,
     pub merge: MergeState,
+    /// GitHub's own merge-readiness summary. See `MergeStateStatus`.
+    pub merge_status: MergeStateStatus,
     pub review: ReviewState,
     pub in_merge_queue: bool,
     pub labels: Vec<Label>,
@@ -195,6 +226,7 @@ mod attention_tests {
             updated_at: t,
             ci,
             merge,
+            merge_status: MergeStateStatus::Clean,
             review: ReviewState::None,
             in_merge_queue: false,
             labels: vec![],

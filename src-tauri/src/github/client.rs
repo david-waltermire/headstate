@@ -599,6 +599,20 @@ mod tests {
         let t0 = std::time::Instant::now();
         let (authored, reviewing) = c.fetch_prs_and_reviewing().await.unwrap();
         println!("AUTHORED={} REVIEWING={}", authored.len(), reviewing.len());
+        {
+            use std::collections::BTreeMap;
+            let mut by: BTreeMap<String, usize> = BTreeMap::new();
+            for p in &authored {
+                *by.entry(format!("{:?}", p.merge_status)).or_default() += 1;
+            }
+            println!("MERGE_STATUS {by:?}");
+            assert!(
+                authored
+                    .iter()
+                    .any(|p| p.merge_status != crate::github::model::MergeStateStatus::Unknown),
+                "mergeStateStatus must be populated, not all Unknown"
+            );
+        }
         let stacked: Vec<_> = authored
             .iter()
             .filter(|p| p.base_ref != "main" && p.base_ref != "master")

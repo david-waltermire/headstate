@@ -28,6 +28,20 @@ export interface PullRequest {
   updated_at: string;
   ci: CiState;
   merge: MergeState;
+  /// GitHub's own merge-readiness summary.
+  ///
+  /// Richer than `merge`, which only distinguishes conflicts. `clean` is
+  /// what makes a merge button honest: any other value means GitHub would
+  /// reject or block the merge. Inlined rather than exported as a named
+  /// type, since nothing imports the name.
+  merge_status:
+    | "clean"
+    | "dirty"
+    | "blocked"
+    | "unstable"
+    | "behind"
+    | "draft"
+    | "unknown";
   review: ReviewState;
   in_merge_queue: boolean;
   labels: Label[];

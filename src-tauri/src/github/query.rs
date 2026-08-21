@@ -24,7 +24,7 @@ query($q: String!, $reviewing: String!) {
         headRefName baseRefName
         author { login }
         repository { nameWithOwner }
-        mergeable reviewDecision isInMergeQueue totalCommentsCount
+        mergeable mergeStateStatus reviewDecision isInMergeQueue totalCommentsCount
         labels(first: 20) { nodes { name color } }
         reviewThreads(first: 20) { nodes { isResolved isOutdated } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
@@ -39,7 +39,7 @@ query($q: String!, $reviewing: String!) {
         headRefName baseRefName
         author { login }
         repository { nameWithOwner }
-        mergeable reviewDecision isInMergeQueue totalCommentsCount
+        mergeable mergeStateStatus reviewDecision isInMergeQueue totalCommentsCount
         labels(first: 20) { nodes { name color } }
         reviewThreads(first: 20) { nodes { isResolved isOutdated } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }

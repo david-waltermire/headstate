@@ -320,6 +320,7 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::model::MergeStateStatus;
 
     /// `notify_one` stores a permit when nobody is waiting, so a refresh
     /// requested WHILE a fetch is in flight is not lost -- the next
@@ -400,6 +401,7 @@ mod tests {
             updated_at: Utc::now(),
             ci: CiState::Success,
             merge,
+            merge_status: MergeStateStatus::Clean,
             review: ReviewState::Approved,
             in_merge_queue: false,
             labels: Vec::<Label>::new(),
@@ -425,14 +427,28 @@ mod tests {
     /// assertion kept passing.
     #[test]
     fn both_cadences_stay_well_inside_the_rate_limit() {
-        // A LOWER BOUND, not the true cost: GitHub bills roughly one
-        // point per top-level `search`, but nested connections can push
-        // it higher (measured: PRS_QUERY costs 2, which happens to equal
-        // its search count). This guard catches a cadence or alias-count
-        // regression; it cannot catch a rise caused by nesting alone, so
-        // any new connection is worth measuring against the live API.
-        let cost = crate::github::query::PRS_QUERY.matches("search(").count() as u64;
-        assert!(cost > 0, "PRS_QUERY must contain at least one search");
+        let q = crate::github::query::PRS_QUERY;
+        assert!(
+            q.contains("search("),
+            "PRS_QUERY must contain at least one search"
+        );
+        // Cost is driven by NESTED CONNECTIONS, not the search count.
+        // Measured against the live API: labels, statusCheckRollup and
+        // reviewThreads each cost a point PER SEARCH and are additive, so
+        // three connections across two searches is 6 -- what the shipped
+        // query actually costs. (An earlier comment here claimed 2; that
+        // was measured on a stripped-down query, not the real one.)
+        //
+        // Occurrences, not presence: dropping a connection from a single
+        // search has to move this number.
+        let cost = ["labels(", "statusCheckRollup", "reviewThreads("]
+            .iter()
+            .map(|c| q.matches(c).count() as u64)
+            .sum::<u64>();
+        assert_eq!(
+            cost, 6,
+            "PRS_QUERY cost changed; re-measure against the live API"
+        );
 
         for focused in [true, false] {
             let per_hour = 3600 / interval_for(focused).as_secs();
@@ -497,6 +513,7 @@ mod tests {
             updated_at: t,
             ci,
             merge,
+            merge_status: MergeStateStatus::Clean,
             review: crate::github::model::ReviewState::None,
             in_merge_queue: false,
             labels: vec![],

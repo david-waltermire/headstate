@@ -30,7 +30,9 @@ use schema::migrate;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::github::model::{CiState, Label, MergeState, PullRequest, ReviewState};
+    use crate::github::model::{
+        CiState, Label, MergeState, MergeStateStatus, PullRequest, ReviewState,
+    };
     use chrono::Utc;
 
     fn db() -> rusqlite::Connection {
@@ -53,6 +55,7 @@ mod tests {
             updated_at: Utc::now(),
             ci: CiState::Success,
             merge: MergeState::Mergeable,
+            merge_status: MergeStateStatus::Clean,
             review: ReviewState::Approved,
             in_merge_queue: false,
             labels: vec![Label {

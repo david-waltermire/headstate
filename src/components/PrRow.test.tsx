@@ -155,3 +155,88 @@ describe("PrRow unresolved conversations", () => {
     expect(chip?.className).not.toContain("#f85149");
   });
 });
+
+describe("PrRow state icon", () => {
+  // It was unconditionally green, so the icon said nothing at all.
+  it("is green for a healthy open PR", () => {
+    const { container } = render(
+      <PrRow pr={pr({ ci: "success", merge: "mergeable", is_draft: false, in_merge_queue: false })} />,
+    );
+    expect(screen.getByLabelText("Open")).toBeTruthy();
+    expect(container.innerHTML).toContain("#3fb950");
+  });
+
+  it("is orange in the merge queue", () => {
+    render(<PrRow pr={pr({ ci: "success", merge: "mergeable", in_merge_queue: true })} />);
+    expect(screen.getByLabelText("In merge queue")).toBeTruthy();
+  });
+
+  it("is grey for a draft", () => {
+    render(<PrRow pr={pr({ ci: "success", merge: "mergeable", is_draft: true })} />);
+    expect(screen.getByLabelText("Draft")).toBeTruthy();
+  });
+
+  it("is red when blocked", () => {
+    render(<PrRow pr={pr({ ci: "failure", merge: "mergeable" })} />);
+    expect(screen.getByLabelText("Blocked")).toBeTruthy();
+  });
+
+  // The precedence decision: a draft that ALSO has conflicts is blocked,
+  // not a benign draft. Getting this backwards hides real problems.
+  it("prefers blocked over draft and queued", () => {
+    render(<PrRow pr={pr({ ci: "failure", is_draft: true, in_merge_queue: true })} />);
+    expect(screen.getByLabelText("Blocked")).toBeTruthy();
+    expect(screen.queryByLabelText("Draft")).toBeNull();
+  });
+
+  it("prefers queued over draft", () => {
+    render(
+      <PrRow pr={pr({ ci: "success", merge: "mergeable", is_draft: true, in_merge_queue: true })} />,
+    );
+    expect(screen.getByLabelText("In merge queue")).toBeTruthy();
+  });
+
+  // Colour must never be the only signal.
+  it("labels the state for anyone who cannot see the colour", () => {
+    for (const [p, label] of [
+      [{ ci: "success", merge: "mergeable" }, "Open"],
+      [{ merge: "conflicted" }, "Blocked"],
+      [{ ci: "success", merge: "mergeable", is_draft: true }, "Draft"],
+    ] as const) {
+      const { unmount } = render(<PrRow pr={pr(p)} />);
+      expect(screen.getByLabelText(label)).toBeTruthy();
+      unmount();
+    }
+  });
+});
+
+describe("PrRow merge-state nuance", () => {
+  // These two states are invisible to the conflicts-or-red-CI rule, which
+  // is exactly why mergeStateStatus is worth fetching.
+  it("distinguishes 'blocked on review' from broken and from ready", () => {
+    render(
+      <PrRow pr={pr({ ci: "success", merge: "mergeable", merge_status: "blocked" })} />,
+    );
+    expect(screen.getByLabelText("Blocked on review")).toBeTruthy();
+  });
+
+  it("shows when a branch is behind its base", () => {
+    render(
+      <PrRow pr={pr({ ci: "success", merge: "mergeable", merge_status: "behind" })} />,
+    );
+    expect(screen.getByLabelText("Behind base branch")).toBeTruthy();
+  });
+
+  // Real breakage still outranks GitHub's softer verdicts.
+  it("still prefers blocked-by-CI over blocked-on-review", () => {
+    render(<PrRow pr={pr({ ci: "failure", merge_status: "blocked" })} />);
+    expect(screen.getByLabelText("Blocked")).toBeTruthy();
+  });
+
+  it("treats clean as plain open", () => {
+    render(
+      <PrRow pr={pr({ ci: "success", merge: "mergeable", merge_status: "clean" })} />,
+    );
+    expect(screen.getByLabelText("Open")).toBeTruthy();
+  });
+});

@@ -1,8 +1,8 @@
 //! Mapping from the raw GraphQL JSON to typed `PullRequest`s.
 
 use super::model::{
-    CiState, CycleTrend, HistoryPoint, Label, MergeState, MergedDetail, MergedPr, PullRequest,
-    RepoCount, ReviewState,
+    CiState, CycleTrend, HistoryPoint, Label, MergeState, MergeStateStatus, MergedDetail, MergedPr,
+    PullRequest, RepoCount, ReviewState,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
@@ -40,6 +40,23 @@ fn unresolved_threads(node: &Value) -> u64 {
                 .count() as u64
         })
         .unwrap_or(0)
+}
+
+/// GitHub's merge-readiness summary.
+///
+/// Unrecognised and absent values both become `Unknown` rather than
+/// guessing: a merge button must never be enabled on a state we do not
+/// understand.
+fn merge_status(node: &Value) -> MergeStateStatus {
+    match node["mergeStateStatus"].as_str() {
+        Some("CLEAN") => MergeStateStatus::Clean,
+        Some("DIRTY") => MergeStateStatus::Dirty,
+        Some("BLOCKED") => MergeStateStatus::Blocked,
+        Some("UNSTABLE") => MergeStateStatus::Unstable,
+        Some("BEHIND") => MergeStateStatus::Behind,
+        Some("DRAFT") => MergeStateStatus::Draft,
+        _ => MergeStateStatus::Unknown,
+    }
 }
 
 fn merge_state(node: &Value) -> MergeState {
@@ -95,6 +112,7 @@ fn map_node(node: &Value) -> Option<PullRequest> {
         updated_at: ts(node, "updatedAt")?,
         ci: ci_state(node),
         merge: merge_state(node),
+        merge_status: merge_status(node),
         review: review_state(node),
         in_merge_queue: node["isInMergeQueue"].as_bool().unwrap_or(false),
         labels: labels(node),
@@ -385,6 +403,37 @@ mod tests {
             "labels": {"nodes": []}, "commits": {"nodes": []}
         }]}});
         assert_eq!(map_search(&v)[0].unresolved_threads, 0);
+    }
+
+    #[test]
+    fn maps_every_merge_state_status_we_model() {
+        for (raw, want) in [
+            ("CLEAN", MergeStateStatus::Clean),
+            ("DIRTY", MergeStateStatus::Dirty),
+            ("BLOCKED", MergeStateStatus::Blocked),
+            ("UNSTABLE", MergeStateStatus::Unstable),
+            ("BEHIND", MergeStateStatus::Behind),
+            ("DRAFT", MergeStateStatus::Draft),
+        ] {
+            let v = json!({"mergeStateStatus": raw});
+            assert_eq!(merge_status(&v), want, "for {raw}");
+        }
+    }
+
+    /// A value we do not model must never masquerade as mergeable: the
+    /// merge button keys off Clean, so guessing here would enable it on a
+    /// PR GitHub would reject.
+    #[test]
+    fn unrecognised_merge_status_is_unknown_never_clean() {
+        assert_eq!(
+            merge_status(&json!({"mergeStateStatus": "HAS_HOOKS"})),
+            MergeStateStatus::Unknown
+        );
+        assert_eq!(
+            merge_status(&json!({"mergeStateStatus": null})),
+            MergeStateStatus::Unknown
+        );
+        assert_eq!(merge_status(&json!({})), MergeStateStatus::Unknown);
     }
 
     /// Branch refs ride along in the existing query at no extra cost, and
