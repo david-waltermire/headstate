@@ -1,8 +1,9 @@
-import { Copy, ExternalLink, MoreHorizontal } from "lucide-react";
+import { Bot, Copy, ExternalLink, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useActOnPr, useUpdatePrBranch } from "../api/hooks";
 import type { PrActionName } from "../api/tauri";
+import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
 import type { PullRequest } from "../types/pr";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
@@ -161,6 +162,23 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
 
           {canWrite ? <div className="my-1 border-t border-[#30363d]" /> : null}
 
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              navigator.clipboard
+                .writeText(agentPrompt(toAgentContext(pr)))
+                .then(
+                  () => toast.success("Prompt copied — paste it to an agent"),
+                  () => toast.error("Could not copy"),
+                );
+            }}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-[#e6edf3] hover:bg-[#21262d]"
+          >
+            <Bot className="h-3.5 w-3.5" aria-hidden="true" />
+            Copy for agent
+          </button>
           <button
             type="button"
             role="menuitem"

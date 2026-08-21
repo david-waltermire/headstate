@@ -112,6 +112,20 @@ describe("PrKebab", () => {
     expect(screen.getByRole("menuitem", { name: /View on GitHub/ })).not.toBeNull();
   });
 
+  // Available on every PR regardless of state and without write access:
+  // it is a clipboard operation, not a mutation.
+  it("copies an agent prompt naming the PR and its branch pair", async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+    Object.assign(navigator, { clipboard: { writeText } });
+    render(<PrKebab pr={pr({ head_ref: "ci_fix_2", base_ref: "main" })} canWrite={false} />);
+    open();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Copy for agent/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    const text = writeText.mock.calls[0][0];
+    expect(text).toContain("(ci_fix_2 → main)");
+    expect(text).toContain(`#${PR_FIXTURES[0].number}`);
+  });
+
   it("copies the head branch, not the base", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.assign(navigator, { clipboard: { writeText } });
