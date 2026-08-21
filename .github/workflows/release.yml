@@ -257,6 +257,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # `gh release create` resolves the repository from the git remote, so
+      # it fails with "not a git repository" without a checkout -- even
+      # though this job builds nothing. Found by the v2.0.1 tag, where all
+      # three platforms built and only publication died.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # --generate-notes diffs against the previous tag, which the
+          # default depth-1 clone does not have.
+          fetch-depth: 0
+
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
@@ -300,8 +310,17 @@ jobs:
 
           **Linux** — \`.deb\` for Debian and Ubuntu, \`.AppImage\` for everything else. Mark the AppImage executable with \`chmod +x\` before running it."
 
-          gh release create "$GITHUB_REF_NAME" \
-            --title "Headstate ${GITHUB_REF_NAME}" \
-            --notes "$NOTES" \
-            --generate-notes \
-            dist/*
+          # Idempotent: a rerun after a partial failure -- exactly what
+          # happened on the first v2.0.1 attempt, where all three platforms
+          # built and only this job died -- must upload to the existing
+          # release rather than failing on "already exists".
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release exists; uploading assets to it."
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "Headstate ${GITHUB_REF_NAME}" \
+              --notes "$NOTES" \
+              --generate-notes \
+              dist/*
+          fi
