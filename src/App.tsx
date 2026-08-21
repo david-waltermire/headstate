@@ -127,9 +127,13 @@ export default function App() {
                   : "Pull requests"}
           </h1>
           <div className="ml-auto">
-            {/* scopedRepo skips the wizard's "which repositories?" step:
-                selecting a repo in the sidebar already answers it. */}
-            <NudgeWizard prs={source} scopedRepo={filters.repo} />
+            {/* PR views only: composing a list of pull requests needing
+                review is meaningless on a page about local directories. */}
+            {view !== "worktrees" ? (
+              // scopedRepo skips the wizard's "which repositories?" step:
+              // selecting a repo in the sidebar already answers it.
+              <NudgeWizard prs={source} scopedRepo={filters.repo} />
+            ) : null}
           </div>
         </header>
 

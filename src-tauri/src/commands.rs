@@ -112,6 +112,18 @@ pub async fn classify_worktrees(
         .map_err(|e| e.to_string())
 }
 
+/// Disk sizes for one repo's worktrees, as `(path, bytes)` pairs.
+///
+/// Separate from classification because it is a full tree walk -- ~60ms
+/// per worktree, so ~18s across the 296 on this machine. The UI shows the
+/// list, then safety, then sizes.
+#[tauri::command]
+pub async fn size_worktrees(repo_path: String) -> Result<Vec<(String, u64)>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::worktrees::size_repo(&repo_path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Remove a worktree, refusing anything not provably safe.
 ///
 /// The safety gate is re-evaluated inside `remove_worktree` rather than

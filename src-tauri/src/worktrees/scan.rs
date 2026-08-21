@@ -132,6 +132,93 @@ pub fn scan_dirs_fast(dirs: &[String]) -> Vec<Repo> {
     repos
 }
 
+/// Bytes on disk for a directory tree.
+///
+/// Walks rather than shelling out to `du`: one subprocess per worktree
+/// across 296 of them is a lot of process churn for a number, and this
+/// skips symlinks so a link into another tree is not counted twice.
+///
+/// Unreadable entries are skipped rather than failing the whole
+/// measurement -- a permission error on one file should not turn a real
+/// size into "unknown".
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let Ok(meta) = e.metadata() else { continue };
+            if meta.is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                stack.push(e.path());
+            } else {
+                total += meta.len();
+            }
+        }
+    }
+    total
+}
+
+/// Sizes for one repo's worktrees, keyed by path.
+///
+/// A separate pass from classification: ~60ms per worktree, so ~18s
+/// across all 296 here. The UI fills these in after the list and the
+/// safety states are already on screen.
+pub fn size_repo(repo_path: &str) -> Vec<(String, u64)> {
+    let dir = Path::new(repo_path);
+    let Ok(list) = git(dir, &["worktree", "list", "--porcelain"]) else {
+        return Vec::new();
+    };
+    parse_porcelain(&list)
+        .into_iter()
+        .map(|w| {
+            let bytes = dir_size(Path::new(&w.path));
+            (w.path, bytes)
+        })
+        .collect()
+}
+
+/// When a branch's tip landed in the default branch.
+///
+/// The first commit on an ancestry path from the tip to the default
+/// branch is the one that brought it in. Only meaningful for a merged
+/// branch, so callers skip it otherwise -- it is an extra `git log` per
+/// worktree, and 283 of the 296 here are not merged.
+/// Classify a worktree and, when merged, date it.
+///
+/// The single place both scan paths go through: `classify_repo` and
+/// `collect_inner` previously each had their own copy, and adding the
+/// merge date to one silently left the other behind.
+fn classify(w: &mut Worktree, repo: &Path, default_branch: &str) {
+    w.safety = worktree_safety(w, default_branch);
+    // Only for merged branches: an extra git call, and the date is
+    // meaningless for anything else. 283 of 296 here are not merged.
+    if w.safety.is_safe() {
+        w.merged_at = merged_date(repo, &w.head, default_branch);
+    }
+}
+
+fn merged_date(repo: &Path, head: &str, default_branch: &str) -> Option<String> {
+    let range = format!("{head}..{default_branch}");
+    let out = git(
+        repo,
+        &[
+            "log",
+            "--format=%cs",
+            "--ancestry-path",
+            "--reverse",
+            &range,
+        ],
+    )
+    .ok()?;
+    let first = out.lines().next()?.trim();
+    (!first.is_empty()).then(|| first.to_string())
+}
+
 /// Classify one repo's worktrees. Called per repo so the UI can fill in
 /// results as they arrive rather than waiting for all 37.
 pub fn classify_repo(repo_path: &str) -> Vec<Worktree> {
@@ -143,7 +230,7 @@ pub fn classify_repo(repo_path: &str) -> Vec<Worktree> {
     parse_porcelain(&list)
         .into_iter()
         .map(|mut w| {
-            w.safety = worktree_safety(&w, &branch);
+            classify(&mut w, dir, &branch);
             w
         })
         .collect()
@@ -168,7 +255,7 @@ pub fn scan_dirs(dirs: &[String]) -> Vec<Repo> {
     repos
 }
 
-fn collect_inner(dir: &Path, depth: usize, out: &mut Vec<Repo>, classify: bool) {
+fn collect_inner(dir: &Path, depth: usize, out: &mut Vec<Repo>, with_safety: bool) {
     if depth > 2 || !dir.is_dir() {
         return;
     }
@@ -187,8 +274,8 @@ fn collect_inner(dir: &Path, depth: usize, out: &mut Vec<Repo>, classify: bool) 
             let worktrees = parse_porcelain(&list)
                 .into_iter()
                 .map(|mut w| {
-                    if classify {
-                        w.safety = worktree_safety(&w, &branch);
+                    if with_safety {
+                        classify(&mut w, dir, &branch);
                     }
                     w
                 })
@@ -214,7 +301,7 @@ fn collect_inner(dir: &Path, depth: usize, out: &mut Vec<Repo>, classify: bool) 
                 .file_name()
                 .is_some_and(|n| n.to_string_lossy().starts_with('.'))
         {
-            collect_inner(&p, depth + 1, out, classify);
+            collect_inner(&p, depth + 1, out, with_safety);
         }
     }
 }
@@ -365,6 +452,66 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
         );
     }
 
+    /// A repo whose worktree is merged, pushed and clean -- the only
+    /// state in which a merge date exists.
+    fn merged_worktree_fixture() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let ident = [
+            ("GIT_AUTHOR_NAME", "octocat"),
+            ("GIT_COMMITTER_NAME", "octocat"),
+            ("GIT_AUTHOR_EMAIL", "octocat@invalid"),
+            ("GIT_COMMITTER_EMAIL", "octocat@invalid"),
+        ];
+        let run_in = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .envs(ident)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+
+        let remote = tmp.path().join("remote.git");
+        std::fs::create_dir_all(&remote).unwrap();
+        run_in(&remote, &["init", "-q", "--bare", "-b", "main"]);
+
+        let repo = tmp.path().join("proj");
+        std::fs::create_dir_all(&repo).unwrap();
+        run_in(&repo, &["init", "-q", "-b", "main"]);
+        run_in(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        run_in(
+            &repo,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        run_in(&repo, &["push", "-q", "-u", "origin", "main"]);
+
+        let wt = tmp.path().join("proj-done");
+        run_in(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--track",
+                "-b",
+                "done",
+                wt.to_str().unwrap(),
+                "main",
+            ],
+        );
+        run_in(&wt, &["push", "-q", "-u", "origin", "done"]);
+        // Advance main so there IS an ancestry path to date.
+        run_in(&repo, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        run_in(&repo, &["push", "-q", "origin", "main"]);
+        (tmp, repo, wt)
+    }
+
     /// A real repo with one worktree, for the deletion tests.
     ///
     /// Real git throughout: a synthetic fixture would let the gate pass
@@ -483,6 +630,39 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
         assert!(!list.contains("proj-done"), "git still lists it: {list}");
     }
 
+    /// Both scan paths must classify identically.
+    ///
+    /// They each had their own copy of the logic, and adding the merge
+    /// date to one silently left the other returning None -- which is how
+    /// this shipped broken the first time.
+    #[test]
+    fn both_scan_paths_classify_the_same_way() {
+        // A MERGED worktree, so merged_at is actually populated -- with a
+        // never-pushed one both paths return None and the comparison
+        // proves nothing. Checked: with the drift re-introduced and an
+        // unmerged fixture, this test passed vacuously.
+        let (_t, repo, wt) = merged_worktree_fixture();
+        let _ = &wt;
+        let base = repo.parent().unwrap().to_string_lossy().into_owned();
+
+        let via_scan = scan_dirs(std::slice::from_ref(&base));
+        let scanned = via_scan
+            .iter()
+            .find(|r| r.name == "proj")
+            .expect("repo not found");
+        let via_classify = classify_repo(repo.to_str().unwrap());
+
+        assert_eq!(scanned.worktrees.len(), via_classify.len());
+        for (a, b) in scanned.worktrees.iter().zip(via_classify.iter()) {
+            assert_eq!(a.safety, b.safety, "safety differs for {}", a.path);
+            assert_eq!(
+                a.merged_at, b.merged_at,
+                "merge date differs for {}",
+                a.path
+            );
+        }
+    }
+
     #[test]
     fn refuses_the_main_checkout() {
         let (_t, repo, _wt) = repo_with_worktree("feature");
@@ -576,6 +756,34 @@ mod live {
             .take(4)
             .collect();
         println!("SAFE SAMPLE {safe:?}");
+
+        // Merge dates on the safe ones, and sizes for one repo.
+        let dated: Vec<(&str, &str)> = repos
+            .iter()
+            .flat_map(|r| &r.worktrees)
+            .filter(|w| w.safety.is_safe())
+            .filter_map(|w| {
+                w.merged_at
+                    .as_deref()
+                    .map(|d| (w.path.rsplit('/').next().unwrap_or(""), d))
+            })
+            .take(4)
+            .collect();
+        println!("MERGED DATES {dated:?}");
+
+        if let Some(r) = repos.iter().max_by_key(|r| r.worktrees.len()) {
+            let t = std::time::Instant::now();
+            let sizes = size_repo(&r.path);
+            let total: u64 = sizes.iter().map(|(_, b)| b).sum();
+            println!(
+                "SIZED {} worktrees of {} in {:?}, total {:.1} GB",
+                sizes.len(),
+                r.name,
+                t.elapsed(),
+                total as f64 / 1024.0 / 1024.0 / 1024.0
+            );
+            assert!(sizes.iter().any(|(_, b)| *b > 0), "sizes must be populated");
+        }
 
         assert!(!repos.is_empty(), "expected repos under ~/code");
         // The main checkout of every repo must be classified as such --

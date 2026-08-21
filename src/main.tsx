@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { Toaster } from "sonner";
 import { AuthGate } from "./components/AuthGate";
 import { initSplash } from "./splash";
 import "./index.css";
@@ -19,6 +20,9 @@ createRoot(document.getElementById("root") as HTMLElement).render(
       <AuthGate>
         <App />
       </AuthGate>
+      {/* Dark to match the app, and bottom-right so it never covers the
+          list the user is acting on. */}
+      <Toaster theme="dark" position="bottom-right" richColors />
     </QueryClientProvider>
   </StrictMode>,
 );

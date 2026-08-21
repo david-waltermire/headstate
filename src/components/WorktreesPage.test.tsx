@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Worktree, WorktreeRepo } from "@/types/pr";
 import { useFilters } from "@/store/filters";
@@ -11,6 +11,12 @@ const state = vi.hoisted(() => ({
   classifying: false,
 }));
 
+const toastSuccess = vi.hoisted(() => vi.fn());
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({
+  toast: { success: toastSuccess, error: toastError },
+}));
+
 vi.mock("../api/hooks", () => ({
   useWorktrees: () => ({
     data: state.repos,
@@ -21,6 +27,7 @@ vi.mock("../api/hooks", () => ({
   }),
   useWorktreeSafety: () => ({ data: state.classified, isLoading: state.classifying }),
   useRemoveWorktree: () => removeFn,
+  useWorktreeSizes: () => ({ data: undefined }),
 }));
 
 const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -34,6 +41,7 @@ const wt = (over: Partial<Worktree>): Worktree => ({
   size_bytes: 1024,
   safety: { kind: "unmerged" },
   is_main: false,
+  merged_at: null,
   ...over,
 });
 
@@ -52,6 +60,8 @@ describe("WorktreesPage", () => {
     // Calls leak between tests otherwise, which makes "was not called"
     // assertions pass or fail depending on ordering.
     removeFn.mockClear();
+    toastSuccess.mockClear();
+    toastError.mockClear();
   });
 
   it("says what it is doing while scanning", () => {
@@ -121,13 +131,14 @@ describe("WorktreesPage", () => {
     expect(screen.getByRole("button", { name: /remove/i })).toHaveProperty("disabled", false);
   });
 
-  // A count is not enough to act on: the user must see WHICH directory
-  // is about to disappear.
-  it("confirms with the path before removing anything", () => {
+  // A modal, not an inline banner: with 149 worktrees on one repo the
+  // clicked row is far down the page, and a prompt at the top is
+  // off-screen -- indistinguishable from nothing happening.
+  it("confirms in a dialog naming the path", () => {
     state.classified = [wt({ path: "/code/proj-gone", safety: { kind: "safe" } })];
     render(<WorktreesPage />);
     fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
-    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.getByText("/code/proj-gone")).toBeTruthy();
     expect(removeFn).not.toHaveBeenCalled();
   });
@@ -136,7 +147,7 @@ describe("WorktreesPage", () => {
     state.classified = [wt({ path: "/code/proj-gone", safety: { kind: "safe" } })];
     render(<WorktreesPage />);
     fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
-    const dialog = screen.getByRole("alertdialog");
+    const dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: /^remove$/i }));
     expect(removeFn).toHaveBeenCalledWith("/code/proj", "/code/proj-gone");
   });
@@ -147,21 +158,42 @@ describe("WorktreesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(removeFn).not.toHaveBeenCalled();
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   // A refusal means the work is still there, which the user must see
   // rather than have hidden behind an optimistic update.
-  it("surfaces a refusal from the backend", async () => {
-    removeFn.mockImplementationOnce(() => Promise.reject("not safe to remove: 3 uncommitted files"));
-    state.classified = [wt({ safety: { kind: "safe" } })];
+  it("toasts the backend's refusal, message and all", async () => {
+    removeFn.mockImplementationOnce(() =>
+      Promise.reject("not safe to remove: 3 uncommitted files"),
+    );
+    state.classified = [wt({ path: "/code/proj-gone", safety: { kind: "safe" } })];
     render(<WorktreesPage />);
     fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
-    const dialog = screen.getByRole("alertdialog");
-    fireEvent.click(within(dialog).getByRole("button", { name: /^remove$/i }));
-    expect(await screen.findByRole("alert")).toHaveProperty(
-      "textContent",
-      "not safe to remove: 3 uncommitted files",
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^remove$/i }));
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith(
+        "Could not remove proj-gone",
+        expect.objectContaining({ description: "not safe to remove: 3 uncommitted files" }),
+      ),
     );
+  });
+
+  // Removal is otherwise silent: the row vanishes on refetch with no
+  // confirmation of what happened, which matters when clearing several.
+  it("toasts success, naming the worktree", async () => {
+    state.classified = [wt({ path: "/code/proj-gone", safety: { kind: "safe" } })];
+    render(<WorktreesPage />);
+    fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: /^remove$/i }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Removed proj-gone"));
+  });
+
+  // A merged worktree should say WHEN, so "four months ago" reads
+  // differently from "yesterday".
+  it("shows the merge date when there is one", () => {
+    state.classified = [wt({ safety: { kind: "safe" }, merged_at: "2026-08-18" })];
+    render(<WorktreesPage />);
+    expect(screen.getByText(/merged 2026-08-18/)).toBeTruthy();
   });
 });

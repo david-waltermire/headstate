@@ -13,6 +13,7 @@ import {
   classifyWorktrees,
   listWorktrees,
   removeWorktree,
+  sizeWorktrees,
   getReviewing,
   getStats,
   refreshNow,
@@ -283,6 +284,23 @@ export function useWorktreeSafety(repoPath: string | undefined) {
     queryFn: () => classifyWorktrees(repoPath as string),
     enabled: Boolean(repoPath),
     staleTime: 30_000,
+  });
+}
+
+/// Disk sizes for one repo's worktrees, keyed by path.
+///
+/// The slowest of the three passes (~13s for 147 worktrees), so it is
+/// last: the list appears, then safety, then sizes. Sizes change only
+/// when the tree does, so they are cached for longer than the rest.
+export function useWorktreeSizes(repoPath: string | undefined) {
+  return useQuery({
+    queryKey: ["worktree-sizes", repoPath],
+    queryFn: async () => {
+      const pairs = await sizeWorktrees(repoPath as string);
+      return new Map(pairs);
+    },
+    enabled: Boolean(repoPath),
+    staleTime: 5 * 60 * 1000,
   });
 }
 

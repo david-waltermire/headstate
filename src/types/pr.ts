@@ -169,6 +169,11 @@ export interface Worktree {
   size_bytes: number | null;
   safety: Safety;
   is_main: boolean;
+  /// `YYYY-MM-DD` when this branch landed in the default branch, when it
+  /// can be determined. The date the work REACHED the default branch, not
+  /// the branch tip's own commit date -- those diverge for a branch
+  /// written weeks before it merged.
+  merged_at: string | null;
 }
 
 export interface WorktreeRepo {

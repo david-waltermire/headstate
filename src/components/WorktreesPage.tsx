@@ -1,9 +1,16 @@
 import { useState } from "react";
-import { useRemoveWorktree, useWorktreeSafety, useWorktrees } from "../api/hooks";
+import {
+  useRemoveWorktree,
+  useWorktreeSafety,
+  useWorktreeSizes,
+  useWorktrees,
+} from "../api/hooks";
 import { formatSize, isSafe, safetyReason, safetyTone } from "../lib/worktrees";
 import { useActiveFilters, useFilters } from "../store/filters";
 import type { Worktree } from "../types/pr";
+import { toast } from "sonner";
 import { QueryError, errorMessage } from "./QueryError";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
 /// Local git worktrees, so lingering ones can be found and removed.
 ///
@@ -31,6 +38,9 @@ function Row({
       </span>
       <span className={`shrink-0 text-xs ${safetyTone(wt.safety)}`}>
         {safetyReason(wt.safety)}
+        {wt.merged_at ? (
+          <span className="text-[#8b949e]"> · merged {wt.merged_at}</span>
+        ) : null}
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums text-xs text-[#8b949e]">
         {formatSize(wt.size_bytes)}
@@ -57,8 +67,12 @@ function Row({
 
 /// Confirmation, naming the path and the branch.
 ///
-/// A count is not enough to act on safely: the user needs to see WHICH
-/// directory is about to disappear.
+/// A MODAL, not an inline banner: with 149 worktrees on one repository
+/// the user clicks a row far down the page, and a prompt rendered at the
+/// top is off-screen -- indistinguishable from nothing happening.
+///
+/// A count is not enough to act on safely either: the user needs to see
+/// WHICH directory is about to disappear.
 function ConfirmRemove({
   wt,
   onConfirm,
@@ -69,34 +83,33 @@ function ConfirmRemove({
   onCancel: () => void;
 }) {
   return (
-    <div
-      role="alertdialog"
-      aria-label="Confirm removal"
-      className="rounded-md border border-[#f85149]/40 bg-[#161b22] px-4 py-3"
-    >
-      <p className="text-sm font-semibold text-[#e6edf3]">Remove this worktree?</p>
-      <p className="mt-1 font-mono text-xs text-[#8b949e]">{wt.path}</p>
-      <p className="mt-1 text-xs text-[#8b949e]">
-        Branch <span className="font-mono">{wt.branch || "detached"}</span> — merged and
-        pushed, so nothing is lost.
-      </p>
-      <div className="mt-3 flex gap-2">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded border border-[#30363d] px-3 py-1 text-sm hover:bg-[#21262d]"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={onConfirm}
-          className="rounded bg-[#da3633] px-3 py-1 text-sm font-medium text-white hover:bg-[#f85149]"
-        >
-          Remove
-        </button>
-      </div>
-    </div>
+    <Dialog open onOpenChange={(open) => !open && onCancel()}>
+      <DialogContent className="max-w-lg">
+        <DialogTitle>Remove this worktree?</DialogTitle>
+        <p className="mt-3 break-all font-mono text-xs text-[#8b949e]">{wt.path}</p>
+        <p className="mt-2 text-sm text-[#8b949e]">
+          Branch <span className="font-mono">{wt.branch || "detached"}</span> is merged and
+          pushed
+          {wt.merged_at ? <> (merged {wt.merged_at})</> : null}, so nothing is lost.
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded border border-[#30363d] px-3 py-1.5 text-sm hover:bg-[#21262d]"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149]"
+          >
+            Remove
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -107,9 +120,9 @@ export function WorktreesPage() {
 
   const selected = repos?.find((r) => r.path === filters.repo) ?? repos?.[0];
   const { data: classified, isLoading: classifying } = useWorktreeSafety(selected?.path);
+  const { data: sizes } = useWorktreeSizes(selected?.path);
   const remove = useRemoveWorktree();
   const [pending, setPending] = useState<Worktree | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -143,8 +156,10 @@ export function WorktreesPage() {
   // Classified data replaces the unclassified listing as it arrives, so
   // the page is useful immediately and gets more informative rather than
   // blocking on ~16s of git calls.
+  // Sizes arrive last and are merged in here rather than refetching the
+  // list, so the page never flickers back to unclassified.
   const shown = (classified ?? selected?.worktrees ?? [])
-    .slice()
+    .map((w) => ({ ...w, size_bytes: sizes?.get(w.path) ?? w.size_bytes }))
     .sort((a, b) => (b.size_bytes ?? 0) - (a.size_bytes ?? 0));
 
   const safeCount = shown.filter((w) => isSafe(w.safety)).length;
@@ -170,15 +185,6 @@ export function WorktreesPage() {
         </button>
       </div>
 
-      {failure ? (
-        <div
-          role="alert"
-          className="rounded-md border border-[#f85149]/40 bg-[#f85149]/5 px-4 py-2 text-sm text-[#f85149]"
-        >
-          {failure}
-        </div>
-      ) : null}
-
       {/* Per worktree, not bulk. Bulk-deleting directories is where a
           wrong predicate becomes unrecoverable at scale, and with 149
           removable worktrees on one repo the temptation is real. */}
@@ -188,10 +194,17 @@ export function WorktreesPage() {
           onCancel={() => setPending(null)}
           onConfirm={() => {
             const target = pending;
+            const name = target.path.split("/").pop() ?? target.path;
             setPending(null);
-            setFailure(null);
-            remove(selected?.path ?? "", target.path).catch((e: unknown) =>
-              setFailure(typeof e === "string" ? e : "Could not remove the worktree"),
+            remove(selected?.path ?? "", target.path).then(
+              () => toast.success(`Removed ${name}`),
+              // The backend re-checks safety at delete time, so a
+              // worktree that went dirty since the scan is refused. That
+              // message is the useful part -- show it, do not summarise.
+              (e: unknown) =>
+                toast.error(`Could not remove ${name}`, {
+                  description: typeof e === "string" ? e : undefined,
+                }),
             );
           }}
         />

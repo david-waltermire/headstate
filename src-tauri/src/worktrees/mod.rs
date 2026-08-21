@@ -15,4 +15,4 @@ mod model;
 mod scan;
 
 pub use model::{Repo, Worktree};
-pub use scan::{classify_repo, remove_worktree, scan_dirs_fast};
+pub use scan::{classify_repo, remove_worktree, scan_dirs_fast, size_repo};

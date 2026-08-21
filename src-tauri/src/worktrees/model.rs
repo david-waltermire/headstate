@@ -21,6 +21,10 @@ pub struct Repo {
 #[serde(rename_all = "snake_case", tag = "kind", content = "detail")]
 pub enum Safety {
     /// Merged, clean, and pushed. Removable.
+    ///
+    /// Carries the date the branch landed in the default branch, when it
+    /// can be determined -- knowing a branch merged yesterday versus four
+    /// months ago changes how confidently you delete it.
     Safe,
     /// The repository's own checkout, not a worktree.
     MainCheckout,
@@ -81,4 +85,11 @@ pub struct Worktree {
     pub safety: Safety,
     /// True for the repository's own checkout.
     pub is_main: bool,
+    /// `YYYY-MM-DD` when this branch landed in the default branch.
+    ///
+    /// The date the work reached the default branch, NOT the branch tip's
+    /// own commit date. They coincide for a fast-forward but diverge for
+    /// a branch written weeks before it merged, and the merge date is the
+    /// one that answers "is this safe to forget about".
+    pub merged_at: Option<String>,
 }

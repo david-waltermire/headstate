@@ -46,6 +46,13 @@ export const listWorktrees = () => invoke<WorktreeRepo[]>("list_worktrees");
 export const classifyWorktrees = (repoPath: string) =>
   invoke<Worktree[]>("classify_worktrees", { repoPath });
 
+/// Disk sizes for one repo's worktrees, as `[path, bytes]` pairs.
+///
+/// A full tree walk -- ~13s for 147 worktrees -- so it is a separate
+/// query from listing and classification, and arrives last.
+export const sizeWorktrees = (repoPath: string) =>
+  invoke<[string, number][]>("size_worktrees", { repoPath });
+
 /// Remove a worktree. Rejects anything not provably safe; the gate is
 /// re-evaluated on the Rust side rather than trusted from the last scan.
 export const removeWorktree = (repoPath: string, worktreePath: string) =>
