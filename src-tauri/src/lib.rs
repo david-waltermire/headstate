@@ -4,6 +4,7 @@ pub mod github;
 pub mod poll;
 pub mod store;
 pub mod tray;
+mod worktrees;
 
 use commands::{AuthState, GhClient};
 use github::client::GitHubClient;
@@ -66,6 +67,8 @@ pub fn run() {
             commands::set_poll_interval,
             commands::get_worktree_dirs,
             commands::set_worktree_dirs,
+            commands::list_worktrees,
+            commands::classify_worktrees,
             commands::get_cycle_trend,
             commands::get_merged_detail,
             commands::get_auth_state,

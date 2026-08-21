@@ -86,6 +86,32 @@ pub async fn get_cycle_trend(client: State<'_, GhClient>) -> Result<CycleTrend, 
         .map_err(|e| e.to_string())
 }
 
+/// Repos and their worktrees, unclassified.
+///
+/// Fast enough to block a view on: ~800ms for 37 repos and 295 worktrees
+/// on this machine. Safety classification is four git calls per worktree
+/// and takes ~16s across that set, so it is a separate command the UI
+/// calls per repo as results arrive.
+#[tauri::command]
+pub async fn list_worktrees(app: AppHandle) -> Result<Vec<crate::worktrees::Repo>, String> {
+    let dirs = get_worktree_dirs(app);
+    // Blocking filesystem and subprocess work: keep it off the async
+    // runtime's worker threads.
+    tauri::async_runtime::spawn_blocking(move || crate::worktrees::scan_dirs_fast(&dirs))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Classify one repo's worktrees. See `list_worktrees`.
+#[tauri::command]
+pub async fn classify_worktrees(
+    repo_path: String,
+) -> Result<Vec<crate::worktrees::Worktree>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::worktrees::classify_repo(&repo_path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Directories scanned for git checkouts.
 ///
 /// Defaults to `~/code` when unset, so the app works with no
