@@ -12,12 +12,15 @@ pub enum AuthError {
     // A GUI app does not inherit the shell's PATH, so "not on PATH" is the
     // common case for a user who has gh working in their terminal. The
     // message names the searched locations so that is diagnosable.
+    // The message lists the locations actually searched on THIS platform --
+    // naming Homebrew paths to a Windows user is worse than saying nothing,
+    // since it suggests the app is looking somewhere it never looked.
     #[error(
         "could not find the GitHub CLI (gh). Headstate looked on PATH and in \
-         /opt/homebrew/bin, /usr/local/bin, /opt/local/bin. If gh is installed \
-         somewhere else, set HEADSTATE_GH to its full path."
+         {searched}. If gh is installed somewhere else, set HEADSTATE_GH to \
+         its full path."
     )]
-    GhNotFound,
+    GhNotFound { searched: String },
     #[error("gh is installed but not logged in: {0}")]
     GhNotLoggedIn(String),
     #[error("failed to run gh: {0}")]
@@ -45,6 +48,42 @@ pub fn read_token_from(out: Output) -> Result<String, AuthError> {
     Ok(token)
 }
 
+/// Every location searched, for the not-found message.
+///
+/// Built from the same lists the search walks, so the message cannot claim
+/// to have looked somewhere it did not.
+fn searched_locations() -> String {
+    let mut dirs = user_fallback_dirs();
+    dirs.extend(GH_FALLBACK_DIRS.iter().map(|d| (*d).to_string()));
+    dirs.join(", ")
+}
+
+/// Per-user install locations that cannot be written as constants.
+///
+/// winget and Scoop install under the user's profile, so the path depends
+/// on who is logged in. Empty on non-Windows, where the constants above
+/// already cover the realistic locations.
+fn user_fallback_dirs() -> Vec<String> {
+    if !cfg!(windows) {
+        return Vec::new();
+    }
+    let Ok(profile) = std::env::var("USERPROFILE") else {
+        return Vec::new();
+    };
+    vec![
+        format!(r"{profile}\AppData\Local\Microsoft\WinGet\Links"),
+        format!(r"{profile}\scoop\shims"),
+    ]
+}
+
+/// The `gh` executable's filename on this platform.
+///
+/// `gh` on Unix, `gh.exe` on Windows. `EXE_SUFFIX` is a compile-time
+/// constant, so this costs nothing and needs no `cfg`.
+fn gh_exe() -> String {
+    format!("gh{}", std::env::consts::EXE_SUFFIX)
+}
+
 /// Directories to search for `gh` beyond the inherited `PATH`.
 ///
 /// A GUI-launched .app does NOT inherit the shell's PATH. On a clean Mac it
@@ -53,13 +92,39 @@ pub fn read_token_from(out: Output) -> Result<String, AuthError> {
 /// `gh` works fine in the user's terminal. Verified: `env -i
 /// PATH=/usr/bin:/bin:/usr/sbin:/sbin gh` -> "command not found".
 ///
-/// Ordered most- to least-common: Apple Silicon Homebrew, Intel Homebrew,
-/// MacPorts, then a manual install under the user's home.
+/// Ordered most- to least-common within each platform. Chosen per target
+/// rather than one merged list: a merged list makes every platform pay to
+/// stat paths that cannot exist there, and buries why each entry is here.
+#[cfg(target_os = "macos")]
 const GH_FALLBACK_DIRS: &[&str] = &[
+    // Apple Silicon Homebrew, Intel Homebrew, MacPorts, system.
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/opt/local/bin",
     "/usr/bin",
+];
+
+/// Linux has no PATH-stripping equivalent of the macOS .app problem, but a
+/// desktop launcher can still start with a minimal environment, so the same
+/// belt-and-braces search applies. These are where distro packages, the
+/// official .deb, and manual installs land.
+#[cfg(all(unix, not(target_os = "macos")))]
+const GH_FALLBACK_DIRS: &[&str] = &[
+    "/usr/bin",
+    "/usr/local/bin",
+    "/snap/bin",
+    "/home/linuxbrew/.linuxbrew/bin",
+];
+
+/// Windows installs `gh` via winget, the MSI, or Chocolatey/Scoop shims.
+/// The absolute paths here are only the machine-wide ones -- per-user
+/// locations depend on the profile directory and are resolved at runtime by
+/// `user_fallback_dirs` instead.
+#[cfg(windows)]
+const GH_FALLBACK_DIRS: &[&str] = &[
+    r"C:\Program Files\GitHub CLI\bin",
+    r"C:\Program Files (x86)\GitHub CLI\bin",
+    r"C:\ProgramData\chocolatey\bin",
 ];
 
 /// Locate the `gh` binary: `PATH` first, then the known install locations.
@@ -74,6 +139,7 @@ pub fn find_gh() -> Option<std::path::PathBuf> {
 /// the entire fix for a GUI app's PATH not containing Homebrew -- is
 /// testable without depending on what is installed on the test machine.
 pub fn find_gh_in(fallbacks: &[&str]) -> Option<std::path::PathBuf> {
+    let exe = gh_exe();
     // An explicit override wins over everything: the escape hatch for a
     // non-standard install, and the only thing a user can act on when the
     // fallback list does not cover their setup.
@@ -86,14 +152,22 @@ pub fn find_gh_in(fallbacks: &[&str]) -> Option<std::path::PathBuf> {
     // `PATH` next so an explicitly-installed gh beats the fallbacks.
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
-            let candidate = dir.join("gh");
+            let candidate = dir.join(&exe);
             if candidate.is_file() {
                 return Some(candidate);
             }
         }
     }
+    // Per-user installs before machine-wide ones: if a user installed gh
+    // for themselves, that is the one they mean.
+    for dir in user_fallback_dirs() {
+        let candidate = std::path::Path::new(&dir).join(&exe);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
     for dir in fallbacks {
-        let candidate = std::path::Path::new(dir).join("gh");
+        let candidate = std::path::Path::new(dir).join(&exe);
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -102,13 +176,17 @@ pub fn find_gh_in(fallbacks: &[&str]) -> Option<std::path::PathBuf> {
 }
 
 pub fn read_token() -> Result<String, AuthError> {
-    let gh = find_gh().ok_or(AuthError::GhNotFound)?;
+    let gh = find_gh().ok_or_else(|| AuthError::GhNotFound {
+        searched: searched_locations(),
+    })?;
     let out = Command::new(&gh)
         .args(["auth", "token"])
         .output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                AuthError::GhNotFound
+                AuthError::GhNotFound {
+                    searched: searched_locations(),
+                }
             } else {
                 AuthError::Io(e)
             }
@@ -183,12 +261,21 @@ mod tests {
         assert!(matches!(err, AuthError::GhNotLoggedIn(_)));
     }
 
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
+    /// A stand-in `gh`, named as this platform names it.
+    ///
+    /// Uses `gh_exe()` rather than a literal "gh" so these tests exercise
+    /// the same name resolution the app does -- a hardcoded "gh" here
+    /// would let a Windows-broken search pass every test.
     fn fake_gh(dir: &std::path::Path) -> std::path::PathBuf {
         std::fs::create_dir_all(dir).unwrap();
-        let p = dir.join("gh");
+        let p = dir.join(gh_exe());
         std::fs::write(&p, "#!/bin/sh\necho tok\n").unwrap();
+        // Executability only matters on Unix, and `from_mode` does not
+        // exist on Windows. The search checks `is_file`, not the mode.
+        #[cfg(unix)]
         std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
         p
     }
@@ -280,6 +367,76 @@ mod tests {
             },
         );
         std::fs::remove_dir_all(&empty).ok();
+    }
+
+    /// The executable name must follow the platform. Windows installs
+    /// `gh.exe`, so a hardcoded "gh" finds nothing and the app tells a
+    /// user with gh installed that it is not installed.
+    #[test]
+    fn the_executable_name_follows_the_platform() {
+        let want = if cfg!(windows) { "gh.exe" } else { "gh" };
+        assert_eq!(gh_exe(), want);
+    }
+
+    /// A file named plain `gh` must NOT satisfy the search on Windows --
+    /// that is the bug. On Unix it must, since that is the real name.
+    #[test]
+    fn a_bare_gh_file_matches_only_where_that_is_the_real_name() {
+        let tmp = std::env::temp_dir().join(format!("hs-gh-bare-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let bare = tmp.join("gh");
+        std::fs::write(&bare, "x").unwrap();
+
+        temp_env::with_vars(
+            [
+                ("PATH", Some(tmp.to_str().unwrap())),
+                ("HEADSTATE_GH", None),
+            ],
+            || {
+                let found = find_gh_in(&[]);
+                if cfg!(windows) {
+                    assert_eq!(found, None, "a bare `gh` is not an executable on Windows");
+                } else {
+                    assert_eq!(found, Some(bare.clone()));
+                }
+            },
+        );
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// The fallback list is per-platform, so it must never contain paths
+    /// that belong to a different OS -- searching Homebrew on Windows is
+    /// wasted work and, worse, appears in the not-found message.
+    #[test]
+    fn fallback_dirs_belong_to_this_platform() {
+        for dir in GH_FALLBACK_DIRS {
+            if cfg!(windows) {
+                assert!(dir.contains(':'), "{dir} is not a Windows path");
+            } else {
+                assert!(dir.starts_with('/'), "{dir} is not a Unix path");
+            }
+        }
+    }
+
+    /// The not-found message must name the places actually searched. It
+    /// used to hardcode the macOS list, which told a Windows user the app
+    /// had looked in /opt/homebrew -- somewhere it never looked.
+    #[test]
+    fn the_not_found_message_names_only_real_search_locations() {
+        let msg = AuthError::GhNotFound {
+            searched: searched_locations(),
+        }
+        .to_string();
+        assert!(msg.contains("HEADSTATE_GH"), "must name the escape hatch");
+        for dir in GH_FALLBACK_DIRS {
+            assert!(msg.contains(dir), "message omits {dir}");
+        }
+        if cfg!(windows) {
+            assert!(
+                !msg.contains("/opt/homebrew"),
+                "message names a macOS path on Windows"
+            );
+        }
     }
 }
 
