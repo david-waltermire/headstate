@@ -1,7 +1,7 @@
 import type { PullRequest } from "@/types/pr";
 import type { Filters } from "@/lib/derive";
 import { deriveStats, hasUnresolvedThreads, isStale } from "@/lib/derive";
-import { useFilters } from "@/store/filters";
+import { useActiveFilters, useFilters } from "@/store/filters";
 
 /// Clickable counters above the list.
 ///
@@ -62,7 +62,8 @@ const CHIPS: {
 ];
 
 export function TriageChips({ prs, now = new Date() }: { prs: PullRequest[]; now?: Date }) {
-  const { filters, applyPreset } = useFilters();
+  const filters = useActiveFilters();
+  const { applyPreset } = useFilters();
   const active = CHIPS.filter((c) => c.count(prs, now) > 0);
   if (active.length === 0) return null;
 

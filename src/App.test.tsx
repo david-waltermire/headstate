@@ -69,7 +69,7 @@ function renderApp() {
 
 describe("App — priorities strip scoping", () => {
   afterEach(() => {
-    useFilters.setState({ filters: {}, view: "list" });
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
     vi.clearAllMocks();
   });
 
@@ -89,7 +89,7 @@ describe("App — priorities strip scoping", () => {
     });
     mockPrs.mockReturnValue([here, elsewhere]);
 
-    useFilters.setState({ filters: { repo: "octocat/hello-world" }, view: "list" });
+    useFilters.setState({ filtersByView: { "my-prs": { repo: "octocat/hello-world" }, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
 
     // Scope to the strip: the selected repo's PR also appears in the list
@@ -113,7 +113,7 @@ describe("App — priorities strip scoping", () => {
     });
     mockPrs.mockReturnValue([here, elsewhere]);
 
-    useFilters.setState({ filters: {}, view: "list" });
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
 
     expect(screen.getByText(/Needs your attention \(2\)/)).toBeDefined();
@@ -131,7 +131,7 @@ describe("App — priorities strip scoping", () => {
     });
     mockPrs.mockReturnValue([blocked]);
 
-    useFilters.setState({ filters: {}, view: "dashboard" });
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "stats" } as never);
     renderApp();
 
     expect(screen.queryByText(/Needs your attention/)).toBeNull();
@@ -152,7 +152,7 @@ describe("App — priorities strip scoping", () => {
     });
     mockPrs.mockReturnValue([blocked, ...PR_FIXTURES]);
 
-    useFilters.setState({ filters: { includeLabels: ["bug"] }, view: "list" });
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
 
     const strip = screen.getByText(/Needs your attention/).closest("section");

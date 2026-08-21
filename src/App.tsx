@@ -18,7 +18,7 @@ import { StatusBar } from "./components/StatusBar";
 import { StatsPage } from "./components/StatsPage";
 import { applyFilters, hasActiveFilters, sortPrs } from "./lib/derive";
 import { shortcutFor } from "./lib/shortcuts";
-import { useFilters } from "./store/filters";
+import { useActiveFilters, useFilters } from "./store/filters";
 
 /// The assembled app shell. `AuthGate` already wraps this component once in
 /// `main.tsx` -- it is not repeated here, so there is exactly one
@@ -33,7 +33,8 @@ export default function App() {
     refetch,
     dataUpdatedAt,
   } = usePullRequests();
-  const { filters, view } = useFilters();
+  const filters = useActiveFilters();
+  const { view, panel } = useFilters();
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
   // is what actually makes it do anything (see the hook's own comment).
@@ -94,7 +95,7 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3]">
       <div className="flex min-h-0 flex-1">
-      <RepoSidebar prs={prs} reviewingCount={reviewing.length} />
+      <RepoSidebar prs={prs} viewCounts={{ "to-review": reviewing.length }} />
       <main className="flex-1 overflow-auto">
         <header className="flex items-center gap-2 border-b border-[#30363d] px-4 py-3">
           {/* View selection lives in the sidebar ("Stats", pinned to its
@@ -102,11 +103,13 @@ export default function App() {
               already where you choose what you are looking at, and a tab row
               repeated above every page competed with it. */}
           <h1 className="text-sm font-semibold">
-            {view === "dashboard"
-              ? "Stats"
-              : view === "reviewing"
-                ? "Awaiting your review"
-                : "Pull requests"}
+            {view === "to-review"
+              ? "Pull requests to review"
+              : view === "worktrees"
+                ? "Worktrees"
+                : panel === "stats"
+                  ? "Stats"
+                  : "Pull requests"}
           </h1>
           <div className="ml-auto">
             {/* scopedRepo skips the wizard's "which repositories?" step:
@@ -115,14 +118,22 @@ export default function App() {
           </div>
         </header>
 
-        {view === "reviewing" ? (
+        {view === "to-review" ? (
           <div className="p-4">
             {/* Sorted newest-first like the main list. No filter bar: these
                 are other people's PRs, and the triage predicates here are
                 about the author's own work. */}
             <PrList prs={sortPrs(reviewing, "newest")} hasFilters={false} />
           </div>
-        ) : view === "dashboard" ? (
+        ) : view === "worktrees" ? (
+          <div className="p-4">
+            {/* Placeholder until #150. Says what it is rather than
+                rendering blank, which would read as a bug. */}
+            <div className="rounded-md border border-[#30363d] px-4 py-12 text-center text-sm text-[#8b949e]">
+              Local worktrees will appear here.
+            </div>
+          </div>
+        ) : panel === "stats" ? (
           <div className="p-4">
             {/* No priorities strip here: Stats is a read-only summary of the
                 whole account, and the strip is a triage surface that belongs

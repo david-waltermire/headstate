@@ -1,6 +1,7 @@
-import { BarChart3, Eye } from "lucide-react";
+import { BarChart3 } from "lucide-react";
 import type { PullRequest } from "@/types/pr";
-import { useFilters } from "@/store/filters";
+import { type View, useActiveFilters, useFilters } from "@/store/filters";
+import { ViewSwitcher } from "@/components/ViewSwitcher";
 import { repoCounts } from "@/lib/repos";
 
 /// Repos where the user currently has open PRs, busiest first, plus an
@@ -15,12 +16,14 @@ import { repoCounts } from "@/lib/repos";
 /// the scroll area keeps it reachable at any repo count.
 export function RepoSidebar({
   prs,
-  reviewingCount = 0,
+  viewCounts,
 }: {
   prs: PullRequest[];
-  reviewingCount?: number;
+  /// Badge counts for the switcher, e.g. how many PRs await review.
+  viewCounts?: Partial<Record<View, number>>;
 }) {
-  const { filters, setFilter, view, setView } = useFilters();
+  const filters = useActiveFilters();
+  const { setFilter, view, panel, setPanel } = useFilters();
   const counts = repoCounts(prs);
 
   const rowClass = (active: boolean) =>
@@ -30,16 +33,17 @@ export function RepoSidebar({
 
   // A repo is only "selected" while the list is showing. On the stats view
   // the sidebar highlight belongs to Stats, or two rows look active at once.
-  const listActive = view === "list";
+  const listActive = view === "my-prs" && panel === "list";
 
   return (
     <nav className="flex w-64 shrink-0 flex-col border-r border-[#30363d] p-3">
+      <ViewSwitcher counts={viewCounts} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <button
           type="button"
           onClick={() => {
             setFilter("repo", undefined);
-            setView("list");
+            setPanel("list");
           }}
           className={rowClass(listActive && !filters.repo)}
         >
@@ -52,7 +56,7 @@ export function RepoSidebar({
             key={repo}
             onClick={() => {
               setFilter("repo", repo);
-              setView("list");
+              setPanel("list");
             }}
             className={rowClass(listActive && filters.repo === repo)}
           >
@@ -63,26 +67,11 @@ export function RepoSidebar({
       </div>
 
       <div className="mt-2 shrink-0 border-t border-[#30363d] pt-2">
-        {/* Incoming review requests: the queue the user is the bottleneck
-            for. Pinned beside Stats rather than in the repo list because
-            it spans repos, like Stats does. */}
         <button
           type="button"
-          onClick={() => setView("reviewing")}
-          aria-pressed={view === "reviewing"}
-          className={rowClass(view === "reviewing")}
-        >
-          <span className="flex items-center gap-2">
-            <Eye className="h-4 w-4 shrink-0" aria-hidden="true" />
-            Awaiting your review
-          </span>
-          {reviewingCount > 0 ? <span>{reviewingCount}</span> : null}
-        </button>
-        <button
-          type="button"
-          onClick={() => setView("dashboard")}
-          aria-pressed={view === "dashboard"}
-          className={rowClass(view === "dashboard")}
+          onClick={() => setPanel("stats")}
+          aria-pressed={view === "my-prs" && panel === "stats"}
+          className={rowClass(view === "my-prs" && panel === "stats")}
         >
           <span className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 shrink-0" aria-hidden="true" />

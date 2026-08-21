@@ -37,15 +37,17 @@ function renderApp() {
   );
 }
 
-describe("Awaiting your review", () => {
-  it("shows the incoming count in the sidebar", () => {
-    useFilters.setState({ filters: {}, view: "list" } as never);
+describe("PRs to review", () => {
+  it("shows the incoming count on the view switcher", () => {
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
-    expect(screen.getByRole("button", { name: /awaiting your review/i })).toBeTruthy();
+    // The switcher heads the sidebar and badges the count; the old
+    // bottom-pinned entry is gone.
+    expect(screen.getByRole("button", { name: /my pull requests/i })).toBeTruthy();
   });
 
   it("lists the incoming PRs on its own view", () => {
-    useFilters.setState({ filters: {}, view: "reviewing" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "to-review", panel: "list" } as never);
     renderApp();
     expect(screen.getByText("Someone else's PR")).toBeTruthy();
   });
@@ -55,7 +57,7 @@ describe("Awaiting your review", () => {
   // problem to fix, and must not inflate the strip, the chips, or the
   // tray badge.
   it("does not let another author's red CI reach the priorities strip", () => {
-    useFilters.setState({ filters: {}, view: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
     expect(screen.queryByText("Someone else's PR")).toBeNull();
   });

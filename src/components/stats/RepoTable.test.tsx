@@ -10,7 +10,7 @@ const repos = [
 
 describe("RepoTable", () => {
   beforeEach(() => {
-    useFilters.setState({ filters: {}, view: "dashboard" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
   });
 
   it("lists repos with counts", () => {
@@ -33,7 +33,7 @@ describe("RepoTable", () => {
   it("scopes to the repo and switches to the list when a row is clicked", () => {
     render(<RepoTable repos={repos} />);
     fireEvent.click(screen.getByText("acme/alpha"));
-    expect(useFilters.getState().filters.repo).toBe("acme/alpha");
-    expect(useFilters.getState().view).toBe("list");
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].repo).toBe("acme/alpha");
+    expect(useFilters.getState().panel).toBe("list");
   });
 });

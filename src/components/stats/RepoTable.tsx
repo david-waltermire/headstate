@@ -14,7 +14,7 @@ export function RepoTable({
   repos: RepoCount[];
   sampleSize?: number;
 }) {
-  const { setFilter, setView } = useFilters();
+  const { setFilter, setPanel } = useFilters();
   const total = repos.reduce((sum, r) => sum + r.merged, 0);
 
   return (
@@ -41,7 +41,7 @@ export function RepoTable({
                 type="button"
                 onClick={() => {
                   setFilter("repo", r.repo);
-                  setView("list");
+                  setPanel("list");
                 }}
                 className="flex items-center gap-3 rounded px-2 py-1.5 text-sm hover:bg-[#161b22]"
               >

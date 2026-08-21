@@ -31,27 +31,27 @@ describe("RepoSidebar", () => {
   it("selecting a repo writes through the shared filter store", () => {
     render(<RepoSidebar prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByText("octocat/spoon-knife"));
-    expect(useFilters.getState().filters.repo).toBe("octocat/spoon-knife");
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].repo).toBe("octocat/spoon-knife");
   });
 
   it("selecting All clears the repo filter", () => {
     useFilters.getState().setFilter("repo", "octocat/spoon-knife");
     render(<RepoSidebar prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByText("All repositories"));
-    expect(useFilters.getState().filters.repo).toBeUndefined();
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].repo).toBeUndefined();
   });
 
   it("shows a count badge per repo, busiest first in DOM order", () => {
     render(<RepoSidebar prs={PR_FIXTURES} />);
     const buttons = screen.getAllByRole("button");
-    // All repositories, then octocat/hello-world (2), then
-    // octocat/spoon-knife (1), then the two cross-repo destinations
-    // pinned to the bottom.
+    // The view switcher heads the sidebar, then the repo rows, then
+    // Stats pinned at the bottom. "Awaiting your review" is gone: it is a
+    // top-level view now, reachable from the switcher.
     expect(buttons.map((b) => b.textContent)).toEqual([
+      "My pull requests",
       "All repositories3",
       "octocat/hello-world2",
       "octocat/spoon-knife1",
-      "Awaiting your review",
       "Stats",
     ]);
   });
@@ -66,14 +66,14 @@ describe("RepoSidebar", () => {
     expect(labels[labels.length - 1]).toBe("Stats");
   });
 
-  it("switches to the stats view and marks itself pressed", () => {
+  it("switches to the stats panel and marks itself pressed", () => {
     render(<RepoSidebar prs={PR_FIXTURES} />);
     const stats = screen.getByRole("button", { name: /stats/i });
     expect(stats.getAttribute("aria-pressed")).toBe("false");
 
     fireEvent.click(stats);
 
-    expect(useFilters.getState().view).toBe("dashboard");
+    expect(useFilters.getState().panel).toBe("stats");
     expect(
       screen.getByRole("button", { name: /stats/i }).getAttribute("aria-pressed"),
     ).toBe("true");
@@ -83,12 +83,12 @@ describe("RepoSidebar", () => {
   /// the click appears to do nothing, because the stats view ignores the repo
   /// filter entirely.
   it("returns to the list when a repo is chosen from the stats view", () => {
-    useFilters.setState({ filters: {}, view: "dashboard" });
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "stats" } as never);
     render(<RepoSidebar prs={PR_FIXTURES} />);
 
     fireEvent.click(screen.getByRole("button", { name: /octocat\/hello-world/ }));
 
-    expect(useFilters.getState().view).toBe("list");
-    expect(useFilters.getState().filters.repo).toBe("octocat/hello-world");
+    expect(useFilters.getState().panel).toBe("list");
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].repo).toBe("octocat/hello-world");
   });
 });

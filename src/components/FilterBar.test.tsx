@@ -22,15 +22,15 @@ describe("FilterBar", () => {
     render(<FilterBar prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByText("Label"));
     fireEvent.click(screen.getByText("bug"));
-    expect(useFilters.getState().filters.includeLabels).toEqual(["bug"]);
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].includeLabels).toEqual(["bug"]);
   });
 
   it("adds a label to excludeLabels independently of includeLabels", () => {
     render(<FilterBar prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByText("Exclude label"));
     fireEvent.click(screen.getByText("dependencies"));
-    expect(useFilters.getState().filters.excludeLabels).toEqual(["dependencies"]);
-    expect(useFilters.getState().filters.includeLabels ?? []).toEqual([]);
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].excludeLabels).toEqual(["dependencies"]);
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].includeLabels ?? []).toEqual([]);
   });
 
   it("toggling the same label twice removes it again", () => {
@@ -38,27 +38,27 @@ describe("FilterBar", () => {
     fireEvent.click(screen.getByText("Label"));
     fireEvent.click(screen.getByText("bug"));
     fireEvent.click(screen.getByText("bug"));
-    expect(useFilters.getState().filters.includeLabels).toEqual([]);
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].includeLabels).toEqual([]);
   });
 
   it("setting a review filter writes through the store", () => {
     render(<FilterBar prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByText(/^Reviews/));
     fireEvent.click(screen.getByText("Approved"));
-    expect(useFilters.getState().filters.review).toBe("approved");
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].review).toBe("approved");
   });
 
   it("selecting a sort option writes through the store", () => {
     render(<FilterBar prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByText(/^Sort/));
     fireEvent.click(screen.getByText("Oldest"));
-    expect(useFilters.getState().filters.sort).toBe("oldest");
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].sort).toBe("oldest");
   });
 
   it("toggles draftsOnly", () => {
     render(<FilterBar prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByText("Drafts only"));
-    expect(useFilters.getState().filters.draftsOnly).toBe(true);
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].draftsOnly).toBe(true);
   });
 
   it("Clear filters resets the whole filter set", () => {
@@ -66,7 +66,7 @@ describe("FilterBar", () => {
     useFilters.getState().setFilter("review", "approved");
     render(<FilterBar prs={PR_FIXTURES} />);
     fireEvent.click(screen.getByText("Clear filters"));
-    expect(useFilters.getState().filters).toEqual({});
+    expect(useFilters.getState().filtersByView[useFilters.getState().view]).toEqual({});
   });
 
   it("reflects existing store state rather than owning its own copy", () => {

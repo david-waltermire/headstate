@@ -22,7 +22,7 @@ const PRS: PullRequest[] = [
 
 describe("TriageChips", () => {
   beforeEach(() => {
-    useFilters.setState({ filters: {}, view: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
   });
 
   it("shows a count for each non-empty triage state", () => {
@@ -41,8 +41,8 @@ describe("TriageChips", () => {
   it("applies the preset and switches to the list on click", () => {
     render(<TriageChips prs={PRS} now={NOW} />);
     fireEvent.click(screen.getByRole("button", { name: /need attention/i }));
-    expect(useFilters.getState().filters.needsAttentionOnly).toBe(true);
-    expect(useFilters.getState().view).toBe("list");
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].needsAttentionOnly).toBe(true);
+    expect(useFilters.getState().panel).toBe("list");
   });
 
   it("toggles back off when clicked again", () => {
@@ -50,14 +50,22 @@ describe("TriageChips", () => {
     const btn = screen.getByRole("button", { name: /need attention/i });
     fireEvent.click(btn);
     fireEvent.click(screen.getByRole("button", { name: /need attention/i }));
-    expect(useFilters.getState().filters.needsAttentionOnly).toBeUndefined();
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].needsAttentionOnly).toBeUndefined();
   });
 
   it("keeps the repo selection, which is navigation rather than a filter", () => {
-    useFilters.setState({ filters: { repo: "octocat/hello-world" }, view: "list" } as never);
+    useFilters.setState({
+      filtersByView: {
+        "my-prs": { repo: "octocat/hello-world" },
+        "to-review": {},
+        worktrees: {},
+      },
+      view: "my-prs",
+      panel: "list",
+    } as never);
     render(<TriageChips prs={PRS} now={NOW} />);
     fireEvent.click(screen.getByRole("button", { name: /need attention/i }));
-    expect(useFilters.getState().filters.repo).toBe("octocat/hello-world");
+    expect(useFilters.getState().filtersByView[useFilters.getState().view].repo).toBe("octocat/hello-world");
   });
 
   // THE regression this design exists to prevent: two dashboard cards once
@@ -68,10 +76,10 @@ describe("TriageChips", () => {
     for (const btn of screen.getAllByRole("button")) {
       const shown = Number(btn.textContent?.match(/\d+/)?.[0]);
       fireEvent.click(btn);
-      const listed = applyFilters(PRS, useFilters.getState().filters, NOW).length;
+      const listed = applyFilters(PRS, useFilters.getState().filtersByView[useFilters.getState().view], NOW).length;
       expect(listed).toBe(shown);
       // Reset for the next chip.
-      useFilters.setState({ filters: {}, view: "list" } as never);
+      useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
     }
   });
 });

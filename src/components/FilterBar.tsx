@@ -1,6 +1,6 @@
 import type { PullRequest, ReviewState } from "@/types/pr";
 import type { Filters } from "@/lib/derive";
-import { useFilters } from "@/store/filters";
+import { useActiveFilters, useFilters } from "@/store/filters";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -36,7 +36,8 @@ const SORT_OPTIONS: { value: NonNullable<Filters["sort"]>; label: string }[] = [
 /// `setFilter`; this component holds no filter state of its own, so it
 /// never drifts from what the PR list is actually showing.
 export function FilterBar({ prs }: { prs: PullRequest[] }) {
-  const { filters, setFilter, reset } = useFilters();
+  const filters = useActiveFilters();
+  const { setFilter, reset } = useFilters();
   const labels = [...new Set(prs.flatMap((pr) => pr.labels.map((l) => l.name)))].sort();
 
   const toggleLabel = (key: "includeLabels" | "excludeLabels", name: string) => {
