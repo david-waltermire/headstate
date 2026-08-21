@@ -2,6 +2,7 @@ import { ArrowLeft, Check, CircleDot, CircleSlash, ExternalLink, X } from "lucid
 import { usePrDetail } from "../api/hooks";
 import { relativeTime } from "../lib/time";
 import { Markdown } from "./Markdown";
+import { PrActions } from "./PrActions";
 import { QueryError, errorMessage } from "./QueryError";
 
 /// One check, with its outcome and a link to the run.
@@ -118,6 +119,8 @@ export function PrDetailView({
           ) : null}
         </p>
       </div>
+
+      <PrActions pr={pr} />
 
       {pr.body.trim() ? (
         <div className="rounded-md border border-[#30363d] p-4">

@@ -79,6 +79,7 @@ pub fn map_detail(v: &Value, repo: &str) -> PrDetail {
         .collect();
 
     PrDetail {
+        id: pr["id"].as_str().unwrap_or_default().to_string(),
         number: pr["number"].as_u64().unwrap_or(0),
         title: pr["title"].as_str().unwrap_or_default().to_string(),
         url: pr["url"].as_str().unwrap_or_default().to_string(),

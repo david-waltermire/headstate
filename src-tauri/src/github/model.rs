@@ -233,6 +233,9 @@ pub struct PrComment {
 /// would make every poll carry data almost none of the rows need.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PrDetail {
+    /// GraphQL node ID. Every mutation takes this rather than a number,
+    /// so the detail view is what makes a PR actionable.
+    pub id: String,
     pub number: u64,
     pub title: String,
     pub url: String,

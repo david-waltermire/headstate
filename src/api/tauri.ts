@@ -47,6 +47,28 @@ export const listWorktrees = () => invoke<WorktreeRepo[]>("list_worktrees");
 export const classifyWorktrees = (repoPath: string) =>
   invoke<Worktree[]>("classify_worktrees", { repoPath });
 
+/// Apply an action to a pull request. The only write to GitHub.
+///
+/// Rejects with GitHub's own message on refusal -- "base branch was
+/// modified" is display-ready and more useful than a substitute.
+export const actOnPr = (
+  id: string,
+  repo: string,
+  number: number,
+  action: PrActionName,
+) => invoke<void>("act_on_pr", { id, repo, number, action });
+
+/// The actions the backend accepts. A union rather than `string`, so a
+/// typo is a compile error instead of a runtime "unknown action".
+export type PrActionName =
+  | "merge"
+  | "close"
+  | "reopen"
+  | "draft"
+  | "ready"
+  | "enqueue"
+  | "dequeue";
+
 /// Everything the detail view shows for one pull request. Cost 1.
 export const getPrDetail = (repo: string, number: number) =>
   invoke<PrDetail>("get_pr_detail", { repo, number });

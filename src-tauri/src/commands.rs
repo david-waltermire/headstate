@@ -6,6 +6,7 @@ use crate::github::client::GitHubClient;
 use crate::github::model::{
     CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats,
 };
+use crate::github::mutate::PrAction;
 use crate::store::{load_snapshot, open_db, settings};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
@@ -86,6 +87,54 @@ pub async fn get_cycle_trend(client: State<'_, GhClient>) -> Result<CycleTrend, 
         .fetch_cycle_trend(chrono::Utc::now())
         .await
         .map_err(|e| e.to_string())
+}
+
+/// Apply an action to a pull request.
+///
+/// **The only command that writes to GitHub.** The read-only invariant
+/// asserted elsewhere in this codebase is now "reads by default, writes
+/// only on explicit user action" -- see `github::mutate`.
+///
+/// Confirmation is the UI's job, not this layer's: a command cannot show
+/// a dialog, and putting the policy here would mean a caller that forgot
+/// to confirm silently gets the destructive path anyway. What this DOES
+/// guarantee is that every write is logged with repo, number and action,
+/// so "did I merge that?" has an answer.
+#[tauri::command]
+pub async fn act_on_pr(
+    client: State<'_, GhClient>,
+    waker: State<'_, crate::poll::Waker>,
+    id: String,
+    repo: String,
+    number: u64,
+    action: String,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    let act = match action.as_str() {
+        "merge" => PrAction::Merge,
+        "close" => PrAction::Close,
+        "reopen" => PrAction::Reopen,
+        "draft" => PrAction::ConvertToDraft,
+        "ready" => PrAction::MarkReady,
+        "enqueue" => PrAction::Enqueue,
+        "dequeue" => PrAction::Dequeue,
+        other => return Err(format!("unknown action: {other}")),
+    };
+
+    match client.mutate_pr(&id, act).await {
+        Ok(()) => {
+            log::info!("{repo}#{number} {}", act.describe());
+            // Refresh promptly rather than waiting out the poll interval:
+            // the list would otherwise keep showing a PR as open for up
+            // to two minutes after merging it.
+            waker.0.notify_one();
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} could not be {}: {e}", act.describe());
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Everything the detail view shows for one pull request.

@@ -188,6 +188,9 @@ export interface WorktreeRepo {
 /// on a poll loop -- carrying a body and comments there would make every
 /// tick haul data almost no row needs.
 export interface PrDetail {
+  /// GraphQL node ID. Every mutation takes this rather than a number, so
+  /// a write can only follow a read of the thing being written.
+  id: string;
   number: number;
   title: string;
   url: string;

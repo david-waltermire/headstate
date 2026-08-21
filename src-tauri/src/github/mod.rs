@@ -4,4 +4,5 @@
 pub mod client;
 pub mod map;
 pub mod model;
+pub mod mutate;
 pub mod query;

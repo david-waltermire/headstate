@@ -1,7 +1,8 @@
 //! The GitHub client: wraps octocrab's GraphQL transport with the two
 //! queries the product needs, and maps their responses into typed Rust.
 //!
-//! Read-only: every query here is a `search`, never a mutation.
+//! Reads by default; writes only on explicit user action. The mutation
+//! transport is `graphql_mutation` below, used solely by `mutate.rs`.
 
 use super::map::{
     map_cycle_trend, map_detail, map_history, map_list, map_merged_detail, map_rate_limit,
@@ -121,6 +122,48 @@ impl GitHubClient {
             .graphql_partial_ok(&json!({ "query": cycle_trend_query(now) }))
             .await?;
         Ok(map_cycle_trend(&v))
+    }
+
+    /// Run a mutation, treating ANY error as failure.
+    ///
+    /// Deliberately unlike `graphql_partial_ok`, which keeps `data` when
+    /// errors accompany it. That is right for a read -- 26 good PR nodes
+    /// beat none -- and wrong for a write: "partly merged" is not a
+    /// state, and reporting success while GitHub complained would be the
+    /// worst possible outcome for an action the user cannot undo.
+    ///
+    /// The GitHub message is passed through verbatim: "base branch was
+    /// modified" is display-ready and more useful than anything this
+    /// layer could substitute.
+    pub(super) async fn graphql_mutation(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<(), ClientError> {
+        let raw: serde_json::Value = self.octocrab.post("/graphql", Some(body)).await?;
+
+        if let Some(errs) = raw.get("errors").and_then(|e| e.as_array()) {
+            if !errs.is_empty() {
+                let msg = errs
+                    .iter()
+                    .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(ClientError::Graphql(if msg.is_empty() {
+                    "GitHub refused the change".to_string()
+                } else {
+                    msg
+                }));
+            }
+        }
+
+        // A response with neither errors nor data means something is
+        // wrong with our request shape; do not report success for it.
+        if raw.get("data").is_none_or(|d| d.is_null()) {
+            return Err(ClientError::Graphql(
+                "GitHub returned no result for the change".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Everything the detail view needs, in one request at cost 1.
@@ -423,6 +466,71 @@ mod tests {
         let err = client_for(&server).await.fetch_prs().await.unwrap_err();
         assert!(matches!(err, ClientError::RateLimited(_)), "got {err:?}");
         assert!(err.to_string().contains("resume automatically"));
+    }
+
+    /// A mutation that GitHub refuses must NOT report success.
+    ///
+    /// Deliberately unlike the read path, which keeps partial data: for
+    /// a write, "partly merged" is not a state, and claiming success
+    /// while GitHub complained is the worst outcome for an action the
+    /// user cannot undo.
+    #[tokio::test]
+    async fn a_refused_mutation_is_an_error_with_github_s_own_words() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "mergePullRequest": null },
+                "errors": [{ "message": "Base branch was modified. Review and try the merge again." }]
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server)
+            .await
+            .mutate_pr("PR_abc", crate::github::mutate::PrAction::Merge)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Base branch was modified"),
+            "GitHub's own message must survive: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clean_mutation_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "closePullRequest": { "clientMutationId": null } }
+            })))
+            .mount(&server)
+            .await;
+
+        client_for(&server)
+            .await
+            .mutate_pr("PR_abc", crate::github::mutate::PrAction::Close)
+            .await
+            .expect("a clean response is success");
+    }
+
+    /// A response with neither data nor errors means our request shape is
+    /// wrong; reporting success would hide that.
+    #[tokio::test]
+    async fn an_empty_mutation_response_is_not_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&server)
+            .await;
+
+        assert!(client_for(&server)
+            .await
+            .mutate_pr("PR_abc", crate::github::mutate::PrAction::Merge)
+            .await
+            .is_err());
     }
 
     /// `issueCount` is what makes truncation visible; it was requested by
