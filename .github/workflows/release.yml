@@ -87,6 +87,10 @@ jobs:
       # bump keeps the three version fields from drifting apart, and the
       # edits are never committed: the tag already records the version.
       - name: Stamp version from tag
+        # Explicit shell: Windows runners default to PowerShell, where the
+        # heredoc below is a parse error. Caught by the v2.0.1-rc.1
+        # rehearsal, which is what that tag was for.
+        shell: bash
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
@@ -136,7 +140,11 @@ jobs:
       # See CONTRIBUTING.md "Code signing" for the full checklist of what
       # to generate and where to add it.
       - name: Import Apple Developer Certificate
-        if: env.HAS_SIGNING_CERT == 'true'
+        # macOS only, and explicitly so: `security` and `codesign` do not
+        # exist elsewhere, and without the os guard this step would fire on
+        # all three runners the moment a signing secret is added.
+        if: matrix.os == 'macos-latest' && env.HAS_SIGNING_CERT == 'true'
+        shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -169,6 +177,7 @@ jobs:
       #      so it does not matter whether Actions omits an empty value or
       #      exports it as an empty string.
       - name: Build the bundle
+        shell: bash
         env:
           # Tauri's build reads these directly, see
           # https://tauri.app/reference/environment-variables/.
@@ -207,6 +216,7 @@ jobs:
       # can consume.
       - name: Package the macOS app bundle
         if: matrix.os == 'macos-latest'
+        shell: bash
         run: |
           set -euo pipefail
           BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
