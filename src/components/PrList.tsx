@@ -16,6 +16,7 @@ export function PrList({
   total,
   onOpen,
   canWrite = true,
+  selectable = false,
 }: {
   prs: PullRequest[];
   hasFilters?: boolean;
@@ -25,6 +26,7 @@ export function PrList({
   /// Called with the clicked PR. Omitted where rows are not clickable.
   onOpen?: (pr: PullRequest) => void;
   canWrite?: boolean;
+  selectable?: boolean;
 }) {
   return (
     <div className="rounded-md border border-[#30363d]">
@@ -57,6 +59,7 @@ export function PrList({
             pr={pr}
             onOpen={onOpen ? () => onOpen(pr) : undefined}
             canWrite={canWrite}
+            selectable={selectable}
           />
         ))
       )}

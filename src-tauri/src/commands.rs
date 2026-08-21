@@ -110,16 +110,7 @@ pub async fn act_on_pr(
     action: String,
 ) -> Result<(), String> {
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
-    let act = match action.as_str() {
-        "merge" => PrAction::Merge,
-        "close" => PrAction::Close,
-        "reopen" => PrAction::Reopen,
-        "draft" => PrAction::ConvertToDraft,
-        "ready" => PrAction::MarkReady,
-        "enqueue" => PrAction::Enqueue,
-        "dequeue" => PrAction::Dequeue,
-        other => return Err(format!("unknown action: {other}")),
-    };
+    let act = parse_action(&action)?;
 
     match client.mutate_pr(&id, act).await {
         Ok(()) => {
@@ -141,6 +132,101 @@ pub async fn act_on_pr(
 ///
 /// Fetched on open rather than in the poll loop: it is per-PR and only
 /// needed while the view is on screen.
+/// Map the frontend's action name onto the typed action.
+///
+/// Shared by the single and batch commands so the two cannot drift into
+/// accepting different sets of names -- the batch would otherwise reject
+/// an action the kebab menu happily offers.
+fn parse_action(action: &str) -> Result<PrAction, String> {
+    match action {
+        "merge" => Ok(PrAction::Merge),
+        "close" => Ok(PrAction::Close),
+        "reopen" => Ok(PrAction::Reopen),
+        "draft" => Ok(PrAction::ConvertToDraft),
+        "ready" => Ok(PrAction::MarkReady),
+        "enqueue" => Ok(PrAction::Enqueue),
+        "dequeue" => Ok(PrAction::Dequeue),
+        other => Err(format!("unknown action: {other}")),
+    }
+}
+
+/// One pull request's outcome in a batch.
+///
+/// `error` is `None` on success. A batch reports every outcome rather
+/// than a single verdict: partial failure is the normal case here, not
+/// the exception -- some mutations are rejected while others apply, and
+/// a lone "done" would hide the rejections.
+#[derive(Debug, serde::Serialize)]
+pub struct BatchOutcome {
+    pub repo: String,
+    pub number: u64,
+    pub error: Option<String>,
+}
+
+/// How many mutations may be in flight at once.
+///
+/// GitHub applies secondary rate limits to concurrent mutations, and a
+/// batch is exactly the shape that trips them -- the premise of this
+/// feature is that AI-assisted work produces *many* pull requests, so
+/// forty at once is a realistic batch, not a pathological one. Four is
+/// well inside the limit while still finishing a large batch promptly.
+const BATCH_CONCURRENCY: usize = 4;
+
+#[tauri::command]
+/// Apply one action to several pull requests.
+///
+/// Deliberately not a loop over `act_on_pr` from the frontend: that
+/// would fire every mutation at once and wake the poll loop once per
+/// success. This bounds concurrency and wakes once at the end.
+pub async fn act_on_prs(
+    client: State<'_, GhClient>,
+    waker: State<'_, crate::poll::Waker>,
+    prs: Vec<(String, String, u64)>,
+    action: String,
+) -> Result<Vec<BatchOutcome>, String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    let act = parse_action(&action)?;
+
+    let mut outcomes = Vec::with_capacity(prs.len());
+    for chunk in prs.chunks(BATCH_CONCURRENCY) {
+        let mut set = tokio::task::JoinSet::new();
+        for (id, repo, number) in chunk {
+            let (client, id, repo, number) = (client.clone(), id.clone(), repo.clone(), *number);
+            set.spawn(async move {
+                let error = match client.mutate_pr(&id, act).await {
+                    Ok(()) => {
+                        log::info!("{repo}#{number} {}", act.describe());
+                        None
+                    }
+                    Err(e) => {
+                        log::warn!("{repo}#{number} could not be {}: {e}", act.describe());
+                        Some(e.to_string())
+                    }
+                };
+                BatchOutcome {
+                    repo,
+                    number,
+                    error,
+                }
+            });
+        }
+        while let Some(res) = set.join_next().await {
+            match res {
+                Ok(o) => outcomes.push(o),
+                // A panicked task must not vanish silently, or the batch
+                // would report fewer outcomes than it was given and the
+                // UI would show a PR as neither succeeded nor failed.
+                Err(e) => return Err(format!("a batch task failed: {e}")),
+            }
+        }
+    }
+
+    // Once, at the end -- not per success, which would wake the poll loop
+    // forty times for a forty-PR batch.
+    waker.0.notify_one();
+    Ok(outcomes)
+}
+
 #[tauri::command]
 /// Merge the base branch into a pull request's head.
 ///
@@ -404,6 +490,51 @@ pub fn get_auth_state(state: State<'_, AuthState>) -> AuthState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both commands must accept exactly the same action names. If they
+    /// drift, the batch rejects an action the kebab menu offers -- a
+    /// failure that only shows up when a user selects rows and acts.
+    #[test]
+    fn every_offered_action_parses() {
+        for name in [
+            "merge", "close", "reopen", "draft", "ready", "enqueue", "dequeue",
+        ] {
+            assert!(parse_action(name).is_ok(), "{name} should parse");
+        }
+    }
+
+    /// An unknown action names itself in the error, so a typo in the
+    /// frontend is diagnosable from the message alone.
+    #[test]
+    fn an_unknown_action_is_named_in_the_error() {
+        let err = parse_action("frobnicate").unwrap_err();
+        assert!(err.contains("frobnicate"), "got: {err}");
+    }
+
+    /// A batch is issued in chunks, never all at once: GitHub applies
+    /// secondary rate limits to concurrent mutations, and the premise of
+    /// this feature is that AI-assisted work produces *many* pull
+    /// requests, so a forty-PR batch is realistic rather than
+    /// pathological. Asserting on the const alone would be vacuous
+    /// (clippy says so), so this exercises the chunking the command
+    /// actually performs.
+    #[test]
+    fn a_large_batch_is_issued_in_bounded_chunks() {
+        let batch: Vec<u64> = (0..40).collect();
+        let chunks: Vec<_> = batch.chunks(BATCH_CONCURRENCY).collect();
+
+        assert!(
+            chunks.iter().all(|c| c.len() <= BATCH_CONCURRENCY),
+            "no chunk may exceed the concurrency bound"
+        );
+        assert!(
+            chunks.len() > 1,
+            "a 40-PR batch must be split, not fired at once"
+        );
+        // Every pull request is issued exactly once -- a chunking bug
+        // that dropped or duplicated one would report the wrong outcomes.
+        assert_eq!(chunks.concat(), batch);
+    }
 
     /// The guard against an unbounded query. Its absence is invisible to
     /// every other test in the project.

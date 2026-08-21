@@ -32,6 +32,18 @@ interface FilterStore {
   /// PR that has since merged is worse than landing on the list.
   selectedPr: { repo: string; number: number } | null;
   selectPr: (pr: { repo: string; number: number } | null) => void;
+  /// Rows checked for a bulk action, keyed `repo#number`.
+  ///
+  /// Keyed rather than held as a list of PRs so selection is independent
+  /// of the filtered list: narrowing a filter after selecting must not
+  /// silently drop rows from the batch, which the issue calls out as the
+  /// first requirement. Not persisted -- a selection is a working set for
+  /// one sitting, and restoring it against PRs that may have merged
+  /// would be worse than starting empty.
+  checked: string[];
+  toggleChecked: (key: string) => void;
+  setChecked: (keys: string[]) => void;
+  clearChecked: () => void;
   reset: () => void;
 }
 
@@ -73,10 +85,22 @@ export const useFilters = create<FilterStore>()(
           filtersByView: { ...s.filtersByView, [s.view]: filters },
           panel: "list",
         })),
-      setView: (view) => set({ view, selectedPr: null }),
+      // Selection clears with the view: a working set assembled on My
+      // PRs means nothing on the review list, and carrying it across
+      // would let a later batch act on rows the user cannot see.
+      setView: (view) => set({ view, selectedPr: null, checked: [] }),
       setPanel: (panel) => set({ panel }),
       selectedPr: null,
       selectPr: (selectedPr) => set({ selectedPr }),
+      checked: [],
+      toggleChecked: (key) =>
+        set((s) => ({
+          checked: s.checked.includes(key)
+            ? s.checked.filter((k) => k !== key)
+            : [...s.checked, key],
+        })),
+      setChecked: (checked) => set({ checked }),
+      clearChecked: () => set({ checked: [] }),
       // `repo` is sidebar NAVIGATION, not a filter chip -- it decides
       // which page you are on, scopes the priorities strip, and
       // pre-answers the wizard's repo step. Clearing it navigated the user

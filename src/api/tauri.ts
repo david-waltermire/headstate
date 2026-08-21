@@ -71,6 +71,22 @@ export const updatePrBranch = (
   number: number,
   expectedHead: string,
 ) => invoke<void>("update_pr_branch", { id, repo, number, expectedHead });
+/// One pull request's outcome in a batch. `error` is null on success.
+export interface BatchOutcome {
+  repo: string;
+  number: number;
+  error: string | null;
+}
+
+/// Apply one action to several pull requests.
+///
+/// Returns an outcome per pull request rather than throwing on the first
+/// rejection: partial failure is the normal case for a batch, and a
+/// single verdict would hide the rejections.
+export const actOnPrs = (
+  prs: [string, string, number][],
+  action: PrActionName,
+) => invoke<BatchOutcome[]>("act_on_prs", { prs, action });
 
 /// The actions the backend accepts. A union rather than `string`, so a
 /// typo is a compile error instead of a runtime "unknown action".

@@ -10,6 +10,8 @@ import {
 import type { PullRequest } from "@/types/pr";
 import { labelForeground } from "@/lib/labels";
 import { PrKebab } from "@/components/PrKebab";
+import { prKey } from "@/components/BulkBar";
+import { useFilters } from "@/store/filters";
 import { needsAttention } from "@/lib/derive";
 import { relativeTime } from "@/lib/time";
 
@@ -136,14 +138,20 @@ export function PrRow({
   pr,
   onOpen,
   canWrite = true,
+  selectable = false,
 }: {
   pr: PullRequest;
   onOpen?: () => void;
   /// False on the review view: merging or closing someone else's pull
   /// request is usually not yours to do.
   canWrite?: boolean;
+  /// Show the bulk-selection checkbox. Off on the review view for the
+  /// same reason `canWrite` is: every bulk action is a write.
+  selectable?: boolean;
 }) {
   const state = prState(pr);
+  const { checked, toggleChecked } = useFilters();
+  const key = prKey(pr);
   return (
     // The row opens the detail view; the title anchor still opens GitHub,
     // and stops propagation so a deliberate click on it is not hijacked.
@@ -161,6 +169,23 @@ export function PrRow({
         onOpen ? "cursor-pointer" : ""
       }`}
     >
+      {selectable ? (
+        // Its own click target, stopping propagation so checking a row
+        // does not also open it.
+        <label
+          className="flex items-start pt-0.5"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <span className="sr-only">Select #{pr.number}</span>
+          <input
+            type="checkbox"
+            checked={checked.includes(key)}
+            onChange={() => toggleChecked(key)}
+            className="h-4 w-4 cursor-pointer accent-[#1f6feb]"
+          />
+        </label>
+      ) : null}
       <GitPullRequest
         className={`mt-0.5 h-4 w-4 shrink-0 ${state.className}`}
         aria-label={state.label}

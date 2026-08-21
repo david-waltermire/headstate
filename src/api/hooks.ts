@@ -5,6 +5,7 @@ import type { PullRequest } from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
   getCached,
+  actOnPrs,
   updatePrBranch,
   getHistory,
   getMergedDetail,
@@ -302,6 +303,22 @@ export function useUpdatePrBranch() {
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
       void qc.invalidateQueries({ queryKey: ["prs"] });
       void qc.invalidateQueries({ queryKey: ["reviewing"] });
+    });
+}
+
+/// Apply one action to several pull requests.
+///
+/// Invalidates once after the whole batch rather than per pull request:
+/// forty mutations would otherwise trigger forty refetches of the same
+/// list. Resolves with per-PR outcomes; it rejects only if the batch
+/// itself could not run.
+export function useActOnPrs() {
+  const qc = useQueryClient();
+  return (prs: [string, string, number][], action: PrActionName) =>
+    actOnPrs(prs, action).then((outcomes) => {
+      void qc.invalidateQueries({ queryKey: ["prs"] });
+      void qc.invalidateQueries({ queryKey: ["reviewing"] });
+      return outcomes;
     });
 }
 

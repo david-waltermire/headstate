@@ -12,6 +12,7 @@ import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
 import { PrDetailView } from "./components/PrDetailView";
+import { BulkBar } from "./components/BulkBar";
 import { PrList } from "./components/PrList";
 import { ReviewChips } from "./components/ReviewChips";
 import { TriageChips } from "./components/TriageChips";
@@ -170,6 +171,10 @@ export default function App() {
             {view === "my-prs" ? <TriageChips prs={scopedForStrip} /> : null}
             {view === "to-review" ? <ReviewChips prs={scopedForStrip} /> : null}
             <FilterBar prs={source} />
+            {/* Fed the UNFILTERED list on purpose: selection is keyed by
+                repo#number, so narrowing a filter after selecting must
+                not shrink the batch out from under the user. */}
+            {view === "my-prs" ? <BulkBar prs={source} /> : null}
             {isLoading ? (
               // `get_cached` returns `[]` both for "never polled" and for
               // "authenticated, first poll (~3s) still in flight" -- an
@@ -200,6 +205,7 @@ export default function App() {
                 total={view === "my-prs" ? (truncatedTotal ?? undefined) : undefined}
                 onOpen={(pr) => selectPr({ repo: pr.repo, number: pr.number })}
                 canWrite={view === "my-prs"}
+                selectable={view === "my-prs"}
               />
             )}
           </div>
