@@ -4,7 +4,7 @@
 
 use crate::github::client::GitHubClient;
 use crate::github::model::{CycleTrend, History, MergedDetail, Periods, PullRequest, Stats};
-use crate::store::{load_snapshot, open_db};
+use crate::store::{load_snapshot, open_db, settings};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
 
@@ -40,7 +40,7 @@ pub fn clamp_days(days: i64) -> i64 {
     days.clamp(1, 90)
 }
 
-fn db_path(app: &AppHandle) -> std::path::PathBuf {
+pub fn db_path(app: &AppHandle) -> std::path::PathBuf {
     app.path()
         .app_data_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -86,6 +86,66 @@ pub async fn get_cycle_trend(client: State<'_, GhClient>) -> Result<CycleTrend, 
         .map_err(|e| e.to_string())
 }
 
+/// Directories scanned for git checkouts.
+///
+/// Defaults to `~/code` when unset, so the app works with no
+/// configuration on a machine that follows that convention -- and says
+/// what it scanned rather than silently finding nothing.
+#[tauri::command]
+pub fn get_worktree_dirs(app: AppHandle) -> Vec<String> {
+    open_db(&db_path(&app))
+        .ok()
+        .and_then(|c| settings::get::<Vec<String>>(&c, settings::keys::WORKTREE_DIRS).ok())
+        .flatten()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(default_worktree_dirs)
+}
+
+/// `~/code` if it exists, else nothing.
+///
+/// Returning a path that does not exist would make the worktrees view
+/// report "no repos found" for a directory the user never chose.
+pub fn default_worktree_dirs() -> Vec<String> {
+    std::env::var("HOME")
+        .ok()
+        .map(|h| std::path::PathBuf::from(h).join("code"))
+        .filter(|p| p.is_dir())
+        .map(|p| vec![p.to_string_lossy().into_owned()])
+        .unwrap_or_default()
+}
+
+/// Replace the scanned directories.
+///
+/// Non-existent paths are rejected rather than stored: a typo should fail
+/// visibly here, not silently produce an empty worktrees view later.
+#[tauri::command]
+pub fn set_worktree_dirs(app: AppHandle, dirs: Vec<String>) -> Result<Vec<String>, String> {
+    let ok = validate_dirs(dirs)?;
+    let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
+    settings::set(&conn, settings::keys::WORKTREE_DIRS, &ok).map_err(|e| e.to_string())?;
+    log::info!("worktree directories set to {} path(s)", ok.len());
+    Ok(ok)
+}
+
+/// Trim, drop blanks, and reject anything that is not a directory.
+///
+/// Split from the command so it is testable without an AppHandle. A typo
+/// must fail HERE, visibly, rather than being stored and producing an
+/// empty worktrees view that looks like "you have no worktrees".
+pub fn validate_dirs(dirs: Vec<String>) -> Result<Vec<String>, String> {
+    let (ok, bad): (Vec<String>, Vec<String>) = dirs
+        .into_iter()
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty())
+        .partition(|d| std::path::Path::new(d).is_dir());
+
+    if bad.is_empty() {
+        Ok(ok)
+    } else {
+        Err(format!("not a directory: {}", bad.join(", ")))
+    }
+}
+
 /// The configured focused poll interval, in seconds.
 #[tauri::command]
 pub fn get_poll_interval(state: State<'_, crate::poll::PollInterval>) -> u64 {
@@ -101,13 +161,25 @@ pub fn get_poll_interval(state: State<'_, crate::poll::PollInterval>) -> u64 {
 /// clamp rather than showing a number the backend rejected.
 #[tauri::command]
 pub fn set_poll_interval(
+    app: AppHandle,
     secs: u64,
     state: State<'_, crate::poll::PollInterval>,
     waker: State<'_, crate::poll::Waker>,
 ) -> u64 {
     let applied = crate::poll::clamp_interval(secs);
     state.0.store(applied, std::sync::atomic::Ordering::Relaxed);
-    log::info!("poll interval set to {applied}s");
+
+    // Persist so the choice survives a relaunch. A write failure is
+    // logged, not surfaced: the setting is already live in memory, and
+    // refusing the change because the disk is unhappy would be worse than
+    // forgetting it next launch.
+    match open_db(&db_path(&app))
+        .and_then(|c| crate::store::settings::set(&c, settings::keys::POLL_INTERVAL_SECS, &applied))
+    {
+        Ok(()) => log::info!("poll interval set to {applied}s"),
+        Err(e) => log::warn!("poll interval set to {applied}s but not persisted: {e}"),
+    }
+
     waker.0.notify_one();
     applied
 }
@@ -176,6 +248,39 @@ mod tests {
     fn the_cap_bounds_concurrent_chunks() {
         let chunks = clamp_days(10_000) / crate::github::query::HISTORY_CHUNK_DAYS;
         assert!(chunks <= 18, "at most 18 concurrent chunks, got {chunks}");
+    }
+
+    #[test]
+    fn validate_dirs_accepts_real_directories() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().to_string_lossy().into_owned();
+        assert_eq!(validate_dirs(vec![p.clone()]).unwrap(), vec![p]);
+    }
+
+    #[test]
+    fn validate_dirs_trims_and_drops_blanks() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = d.path().to_string_lossy().into_owned();
+        let out = validate_dirs(vec![format!("  {p}  "), "".into(), "   ".into()]).unwrap();
+        assert_eq!(out, vec![p]);
+    }
+
+    /// The point of validating at all: a typo should fail loudly rather
+    /// than being stored and later rendering as "no worktrees found".
+    #[test]
+    fn validate_dirs_rejects_a_path_that_is_not_a_directory() {
+        let err = validate_dirs(vec!["/definitely/not/here".into()]).unwrap_err();
+        assert!(err.contains("/definitely/not/here"), "{err}");
+    }
+
+    /// A file is not a directory, and the error should say so rather than
+    /// accepting it and failing during the scan.
+    #[test]
+    fn validate_dirs_rejects_a_file() {
+        let d = tempfile::TempDir::new().unwrap();
+        let f = d.path().join("a-file");
+        std::fs::write(&f, "x").unwrap();
+        assert!(validate_dirs(vec![f.to_string_lossy().into_owned()]).is_err());
     }
 
     #[test]

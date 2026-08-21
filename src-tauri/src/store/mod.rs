@@ -20,6 +20,7 @@
 
 mod cache;
 mod schema;
+pub mod settings;
 
 pub use cache::{load_snapshot, save_snapshot};
 pub use schema::{open_db, StoreError};

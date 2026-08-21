@@ -7,6 +7,7 @@ const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
 vi.mock("../api/hooks", () => ({
   usePollState: () => state.current,
   usePollInterval: () => ({ seconds: 120, set: setInterval_ }),
+  useWorktreeDirs: () => ({ dirs: [], set: () => Promise.resolve([]) }),
 }));
 
 import { StatusBar } from "./StatusBar";

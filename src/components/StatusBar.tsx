@@ -1,5 +1,8 @@
+import { Settings } from "lucide-react";
+import { useState } from "react";
 import { usePollInterval, usePollState } from "../api/hooks";
 import { relativeTime } from "../lib/time";
+import { SettingsDialog } from "./SettingsDialog";
 
 const CHOICES = [60, 120, 300, 900];
 
@@ -16,6 +19,7 @@ function label(secs: number): string {
 export function StatusBar({ updatedAt }: { updatedAt: number }) {
   const state = usePollState();
   const { seconds, set } = usePollInterval();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <div className="flex shrink-0 items-center gap-3 border-t border-[#30363d] bg-[#0d1117] px-4 py-1.5 text-xs text-[#8b949e]">
@@ -50,6 +54,18 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
           ))}
         </select>
       </label>
+
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        aria-label="Settings"
+        title="Settings"
+        className="rounded p-1 hover:bg-[#161b22]"
+      >
+        <Settings className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
   );
 }

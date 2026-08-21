@@ -34,6 +34,14 @@ export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 /// always come back zero today. Does not persist to SQLite.
 export const getStats = () => invoke<Stats>("get_stats");
 
+/// Directories scanned for git checkouts. Defaults to `~/code`.
+export const getWorktreeDirs = () => invoke<string[]>("get_worktree_dirs");
+
+/// Replace the scanned directories. Rejects paths that are not
+/// directories, so a typo fails here rather than yielding an empty view.
+export const setWorktreeDirs = (dirs: string[]) =>
+  invoke<string[]>("set_worktree_dirs", { dirs });
+
 /// The configured focused poll interval, in seconds.
 export const getPollInterval = () => invoke<number>("get_poll_interval");
 

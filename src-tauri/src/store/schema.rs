@@ -35,6 +35,21 @@ const MIGRATIONS: &[&str] = &[
     // that does not exist. Additive-only migrations elsewhere; this one is
     // safe because nothing ever read it either.
     "DROP TABLE IF EXISTS merge_history;",
+    // 3: user settings.
+    //
+    // Key-value rather than a column per setting: settings are read and
+    // written one at a time, and a new one should not need a migration.
+    // Values are JSON so a setting can grow from a scalar to a list --
+    // `worktree_dirs` in particular starts as one path and will not stay
+    // that way.
+    //
+    // Lives in SQLite rather than localStorage because the POLL LOOP and
+    // the worktree scanner both need these values, and neither can read
+    // the webview's storage.
+    "CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+     );",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<(), StoreError> {

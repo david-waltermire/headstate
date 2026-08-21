@@ -16,6 +16,7 @@ vi.mock("./api/hooks", () => ({
   useTruncation: () => null,
   usePollState: () => "idle",
   usePollInterval: () => ({ seconds: 120, set: () => Promise.resolve(120) }),
+  useWorktreeDirs: () => ({ dirs: [], set: () => Promise.resolve([]) }),
   useReviewing: () => ({ data: [], isLoading: false }),
   useCycleTrend: () => ({ data: undefined }),
   // StatsPage owns these; this suite only asserts the shell's layout, so

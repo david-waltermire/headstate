@@ -9,10 +9,12 @@ import {
   getCycleTrend,
   getPeriods,
   getPollInterval,
+  getWorktreeDirs,
   getReviewing,
   getStats,
   refreshNow,
   setPollInterval,
+  setWorktreeDirs,
 } from "./tauri";
 
 /// The PR list. Seeded from the SQLite snapshot so the first paint shows
@@ -239,6 +241,26 @@ export function usePollState(): "idle" | "fetching" {
   }, []);
 
   return state;
+}
+
+/// Directories scanned for git checkouts, and a way to change them.
+///
+/// The mutation can FAIL -- a path that is not a directory is rejected by
+/// the backend -- so this surfaces the error rather than swallowing it,
+/// unlike the interval setting which only clamps.
+export function useWorktreeDirs() {
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: ["worktree-dirs"],
+    queryFn: getWorktreeDirs,
+    staleTime: Infinity,
+  });
+  const set = (dirs: string[]) =>
+    setWorktreeDirs(dirs).then((applied) => {
+      qc.setQueryData(["worktree-dirs"], applied);
+      return applied;
+    });
+  return { dirs: query.data ?? [], set };
 }
 
 /// The poll interval setting, and a way to change it.

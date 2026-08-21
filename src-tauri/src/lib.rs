@@ -64,6 +64,8 @@ pub fn run() {
             commands::get_reviewing,
             commands::get_poll_interval,
             commands::set_poll_interval,
+            commands::get_worktree_dirs,
+            commands::set_worktree_dirs,
             commands::get_cycle_trend,
             commands::get_merged_detail,
             commands::get_auth_state,
@@ -132,9 +134,19 @@ pub fn run() {
 
             // Managed unconditionally, like the Waker: the settings command
             // must find it whether or not auth succeeded.
-            let interval = Arc::new(std::sync::atomic::AtomicU64::new(
-                poll::DEFAULT_FOCUSED_SECS,
-            ));
+            // Restore the saved interval, falling back to the default.
+            // Read here rather than lazily so the FIRST tick already uses
+            // the user's choice instead of polling fast once and then
+            // settling down.
+            let saved = store::open_db(&commands::db_path(&handle))
+                .ok()
+                .and_then(|c| {
+                    store::settings::get::<u64>(&c, store::settings::keys::POLL_INTERVAL_SECS).ok()
+                })
+                .flatten()
+                .map(poll::clamp_interval)
+                .unwrap_or(poll::DEFAULT_FOCUSED_SECS);
+            let interval = Arc::new(std::sync::atomic::AtomicU64::new(saved));
             app.manage(poll::PollInterval(interval.clone()));
 
             log::info!(
