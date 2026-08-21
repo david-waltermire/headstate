@@ -167,6 +167,17 @@ export type Safety =
   | { kind: "unmerged" }
   | { kind: "unknown"; detail: string };
 
+/// How a checkout stands against its tracked upstream, as of the last
+/// fetch. Never live -- the scan reads refs on disk and does not fetch.
+export type Upstream =
+  | { kind: "current" }
+  | { kind: "ahead"; n: number }
+  | { kind: "behind"; n: number }
+  | { kind: "diverged"; n: [number, number] }
+  | { kind: "untracked" }
+  | { kind: "detached" }
+  | { kind: "unknown"; n: string };
+
 export interface Worktree {
   path: string;
   branch: string;
@@ -179,6 +190,9 @@ export interface Worktree {
   /// the branch tip's own commit date -- those diverge for a branch
   /// written weeks before it merged.
   merged_at: string | null;
+  /// Only populated for the main checkout: the other rows already answer
+  /// the question that matters for them (may I delete this?).
+  upstream: Upstream | null;
 }
 
 export interface WorktreeRepo {

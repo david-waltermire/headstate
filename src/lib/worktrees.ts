@@ -1,4 +1,4 @@
-import type { Safety } from "@/types/pr";
+import type { Safety, Upstream } from "@/types/pr";
 
 /// Only `safe` may be deleted.
 ///
@@ -30,6 +30,52 @@ export function safetyReason(s: Safety): string {
       return "branch not merged";
     default:
       return `could not determine: ${s.detail}`;
+  }
+}
+
+/// Display-ready prose for a checkout's upstream state.
+///
+/// Mirrors `Upstream::reason` on the Rust side, for the same reason
+/// `safetyReason` does.
+///
+/// Says "as of last fetch" on the states where staleness changes the
+/// meaning: "behind 40" invites a pull, and the user should know the
+/// number could itself be stale. "Up to date" carries the same caveat
+/// and is the one most likely to mislead.
+export function upstreamReason(u: Upstream): string {
+  const commits = (n: number) => `${n} commit${n === 1 ? "" : "s"}`;
+  switch (u.kind) {
+    case "current":
+      return "up to date with upstream (as of last fetch)";
+    case "ahead":
+      return `${commits(u.n)} ahead of upstream`;
+    case "behind":
+      return `${commits(u.n)} behind upstream (as of last fetch)`;
+    case "diverged":
+      return `diverged — ${commits(u.n[0])} ahead, ${commits(u.n[1])} behind`;
+    case "untracked":
+      return "no upstream — local only";
+    case "detached":
+      return "detached HEAD";
+    default:
+      return `upstream unknown: ${u.n}`;
+  }
+}
+
+/// Tailwind colour for an upstream state.
+///
+/// Green only for genuinely current. Amber where action might be wanted,
+/// grey where the question simply does not apply -- a local-only repo is
+/// not a problem, it is a choice.
+export function upstreamTone(u: Upstream): string {
+  switch (u.kind) {
+    case "current":
+      return "text-[#3fb950]";
+    case "behind":
+    case "diverged":
+      return "text-[#d29922]";
+    default:
+      return "text-[#8b949e]";
   }
 }
 

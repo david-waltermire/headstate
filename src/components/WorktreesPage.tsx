@@ -5,7 +5,14 @@ import {
   useWorktreeSizes,
   useWorktrees,
 } from "../api/hooks";
-import { formatSize, isSafe, safetyReason, safetyTone } from "../lib/worktrees";
+import {
+  formatSize,
+  isSafe,
+  safetyReason,
+  safetyTone,
+  upstreamReason,
+  upstreamTone,
+} from "../lib/worktrees";
 import { useActiveFilters, useFilters } from "../store/filters";
 import type { Worktree } from "../types/pr";
 import { toast } from "sonner";
@@ -40,6 +47,15 @@ function Row({
         {safetyReason(wt.safety)}
         {wt.merged_at ? (
           <span className="text-[#8b949e]"> · merged {wt.merged_at}</span>
+        ) : null}
+        {/* The main checkout's row said only what it was, while every
+            other row earned its space. "Behind by 40" is also what
+            explains why the worktrees below it are stale. */}
+        {wt.upstream ? (
+          <span className={upstreamTone(wt.upstream)}>
+            {" · "}
+            {upstreamReason(wt.upstream)}
+          </span>
         ) : null}
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums text-xs text-[#8b949e]">

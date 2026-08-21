@@ -74,6 +74,51 @@ impl Safety {
     }
 }
 
+/// How a checkout stands against its tracked upstream.
+///
+/// Separate from `Safety` on purpose: safety answers "may I delete
+/// this?", while this answers "is this current?". Folding them together
+/// would make the main checkout's row a safety verdict about a directory
+/// nobody is proposing to delete.
+///
+/// Comparison is against the last fetch -- reading refs already on disk,
+/// never the network. This is a local disk-usage view, and a scan that
+/// silently fetched 37 remotes would be both slow and surprising.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "n")]
+pub enum Upstream {
+    /// Level with the upstream as of the last fetch.
+    Current,
+    Ahead(u64),
+    Behind(u64),
+    /// Both sides moved: `.0` ahead, `.1` behind.
+    Diverged(u64, u64),
+    /// A local-only branch. Normal, not an error -- and distinctly not
+    /// "up to date", which is what a bare zero would imply.
+    Untracked,
+    /// No branch to compare, so the question does not apply.
+    Detached,
+    Unknown(String),
+}
+
+impl Upstream {
+    /// Display-ready prose, so the UI does not re-derive it.
+    pub fn reason(&self) -> String {
+        let commits = |n: &u64| format!("{n} commit{}", if *n == 1 { "" } else { "s" });
+        match self {
+            Upstream::Current => "up to date with upstream".into(),
+            Upstream::Ahead(n) => format!("{} ahead of upstream", commits(n)),
+            Upstream::Behind(n) => format!("{} behind upstream", commits(n)),
+            Upstream::Diverged(a, b) => {
+                format!("diverged: {} ahead, {} behind", commits(a), commits(b))
+            }
+            Upstream::Untracked => "no upstream — local only".into(),
+            Upstream::Detached => "detached HEAD".into(),
+            Upstream::Unknown(why) => format!("upstream unknown: {why}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Worktree {
     pub path: String,
@@ -85,6 +130,12 @@ pub struct Worktree {
     pub safety: Safety,
     /// True for the repository's own checkout.
     pub is_main: bool,
+    /// How this checkout stands against its upstream. Only computed for
+    /// the main checkout today -- the other rows already answer the
+    /// question that matters for them (may I delete this?), and one git
+    /// call per worktree for a question nobody asked is not worth the
+    /// scan time.
+    pub upstream: Option<Upstream>,
     /// `YYYY-MM-DD` when this branch landed in the default branch.
     ///
     /// The date the work reached the default branch, NOT the branch tip's

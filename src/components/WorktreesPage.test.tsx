@@ -42,6 +42,7 @@ const wt = (over: Partial<Worktree>): Worktree => ({
   safety: { kind: "unmerged" },
   is_main: false,
   merged_at: null,
+  upstream: null,
   ...over,
 });
 
