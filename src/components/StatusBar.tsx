@@ -1,6 +1,6 @@
 import { Settings } from "lucide-react";
 import { useState } from "react";
-import { usePollInterval, usePollState } from "../api/hooks";
+import { usePollError, usePollInterval, usePollState } from "../api/hooks";
 import { relativeTime } from "../lib/time";
 import { SettingsDialog } from "./SettingsDialog";
 
@@ -14,23 +14,54 @@ function label(secs: number): string {
 /// heard from GitHub.
 ///
 /// Deliberately quiet. The window is small and the list is the point, so
-/// this is one line of muted text, not a second header. Errors keep going
-/// to the banner -- this shows STATE, not messages.
+/// this is one line of muted text, not a second header.
+///
+/// It used to know only "fetching" and "Up to date", on the reasoning
+/// that errors go to the banner. That holds only while a banner actually
+/// appears -- and in #190 none did, so this line confidently asserted
+/// everything was fine while both PR views sat empty. A status bar that
+/// can only ever say "fine" is not a status bar.
+///
+/// It still shows STATE, not messages: the banner keeps the detail and
+/// the retry. This just stops claiming success it cannot vouch for.
 export function StatusBar({ updatedAt }: { updatedAt: number }) {
   const state = usePollState();
+  const pollError = usePollError();
+
+  // "Never succeeded" and "stale after a failure" are different. A green
+  // dot beside "Updated 3 hours ago" is defensible; a green dot with no
+  // successful fetch at all is not.
+  const status = pollError
+    ? updatedAt > 0
+      ? ("stale" as const)
+      : ("failed" as const)
+    : state === "fetching"
+      ? ("fetching" as const)
+      : ("ok" as const);
+
+  const DOT = {
+    fetching: "bg-[#58a6ff]",
+    ok: "bg-[#3fb950]",
+    stale: "bg-[#d29922]",
+    failed: "bg-[#f85149]",
+  } as const;
+
+  const TEXT = {
+    fetching: "Checking GitHub…",
+    ok: "Up to date",
+    stale: "Could not refresh",
+    failed: "Could not reach GitHub",
+  } as const;
   const { seconds, set } = usePollInterval();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
     <div className="flex shrink-0 items-center gap-3 border-t border-[#30363d] bg-[#0d1117] px-4 py-1.5 text-xs text-[#8b949e]">
       <span className="flex items-center gap-1.5">
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${
-            state === "fetching" ? "bg-[#58a6ff]" : "bg-[#3fb950]"
-          }`}
-          aria-hidden="true"
-        />
-        {state === "fetching" ? "Checking GitHub…" : "Up to date"}
+        <span className={`h-1.5 w-1.5 rounded-full ${DOT[status]}`} aria-hidden="true" />
+        <span className={status === "failed" ? "text-[#f85149]" : undefined}>
+          {TEXT[status]}
+        </span>
       </span>
 
       {/* `dataUpdatedAt`, not `isFetching`: the tray path advances the

@@ -1,11 +1,15 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-const state = vi.hoisted(() => ({ current: "idle" as "idle" | "fetching" }));
+const state = vi.hoisted(() => ({
+  current: "idle" as "idle" | "fetching",
+  error: null as string | null,
+}));
 const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
 
 vi.mock("../api/hooks", () => ({
   usePollState: () => state.current,
+  usePollError: () => state.error,
   usePollInterval: () => ({ seconds: 120, set: setInterval_ }),
   useWorktreeDirs: () => ({ dirs: [], set: () => Promise.resolve([]) }),
 }));
@@ -55,5 +59,56 @@ describe("StatusBar", () => {
       screen.getByLabelText(/poll interval/i).querySelectorAll("option"),
     ).map((o) => Number(o.getAttribute("value")));
     expect(Math.min(...opts)).toBeGreaterThanOrEqual(60);
+  });
+
+  // The bug behind #190 being invisible: this line could only ever say
+  // "Up to date", so it asserted everything was fine while both PR views
+  // sat empty and no banner appeared.
+  describe("when a poll has failed", () => {
+    it("never shows the green up-to-date pair", () => {
+      state.current = "idle";
+      state.error = "connection refused";
+      const { container, unmount } = render(<StatusBar updatedAt={0} />);
+      expect(screen.queryByText(/up to date/i)).toBeNull();
+      expect(container.querySelector(".bg-\\[\\#3fb950\\]")).toBeNull();
+      unmount();
+      state.error = null;
+    });
+
+    // "Never succeeded" and "stale after a failure" are different
+    // situations, and collapsing them hides the worse one.
+    it("distinguishes never-succeeded from stale-after-a-failure", () => {
+      state.current = "idle";
+      state.error = "boom";
+
+      const never = render(<StatusBar updatedAt={0} />);
+      expect(screen.getByText(/could not reach github/i)).toBeTruthy();
+      never.unmount();
+
+      const stale = render(<StatusBar updatedAt={Date.now() - 3_600_000} />);
+      expect(screen.getByText(/could not refresh/i)).toBeTruthy();
+      stale.unmount();
+
+      state.error = null;
+    });
+
+    it("goes back to up to date once a poll succeeds", () => {
+      state.current = "idle";
+      state.error = null;
+      render(<StatusBar updatedAt={Date.now()} />);
+      expect(screen.getByText(/up to date/i)).toBeTruthy();
+    });
+
+    // A failure must win over the in-flight indicator: a retry that is
+    // itself failing should not read as ordinary progress.
+    it("keeps reporting the failure while a retry is in flight", () => {
+      state.current = "fetching";
+      state.error = "still broken";
+      const { unmount } = render(<StatusBar updatedAt={0} />);
+      expect(screen.queryByText(/checking github/i)).toBeNull();
+      unmount();
+      state.current = "idle";
+      state.error = null;
+    });
   });
 });
