@@ -10,6 +10,8 @@ import {
   getPeriods,
   getPollInterval,
   getWorktreeDirs,
+  classifyWorktrees,
+  listWorktrees,
   getReviewing,
   getStats,
   refreshNow,
@@ -241,6 +243,30 @@ export function usePollState(): "idle" | "fetching" {
   }, []);
 
   return state;
+}
+
+/// Repos with worktrees. Listing only -- see `useWorktreeSafety`.
+///
+/// `staleTime` is short but non-zero: the set changes when the user
+/// creates or removes a worktree, not on a timer, so refetching on every
+/// mount would spend a second of subprocess work for nothing.
+export function useWorktrees() {
+  return useQuery({
+    queryKey: ["worktrees"],
+    queryFn: listWorktrees,
+    staleTime: 30_000,
+  });
+}
+
+/// Safety for one repo's worktrees, fetched only when that repo is
+/// selected -- classifying all 37 up front would take ~16s.
+export function useWorktreeSafety(repoPath: string | undefined) {
+  return useQuery({
+    queryKey: ["worktree-safety", repoPath],
+    queryFn: () => classifyWorktrees(repoPath as string),
+    enabled: Boolean(repoPath),
+    staleTime: 30_000,
+  });
 }
 
 /// Directories scanned for git checkouts, and a way to change them.

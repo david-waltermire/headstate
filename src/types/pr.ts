@@ -146,3 +146,33 @@ export interface CycleTrend {
   previous_count: number;
   sampled: boolean;
 }
+
+/// Why a worktree can or cannot be removed.
+///
+/// An enum rather than a boolean because the UI has to explain itself:
+/// "3 uncommitted files" is actionable where a greyed-out button is not.
+/// `never_pushed` is the dangerous one -- 52 of 295 worktrees on this
+/// machine have no upstream, so their commits exist nowhere else.
+export type Safety =
+  | { kind: "safe" }
+  | { kind: "main_checkout" }
+  | { kind: "dirty"; detail: number }
+  | { kind: "unpushed"; detail: number }
+  | { kind: "never_pushed" }
+  | { kind: "unmerged" }
+  | { kind: "unknown"; detail: string };
+
+export interface Worktree {
+  path: string;
+  branch: string;
+  head: string;
+  size_bytes: number | null;
+  safety: Safety;
+  is_main: boolean;
+}
+
+export interface WorktreeRepo {
+  name: string;
+  path: string;
+  worktrees: Worktree[];
+}

@@ -417,6 +417,23 @@ mod live {
         }
         println!("SAFETY {counts:?}");
 
+        // What the sidebar will show: repos, and removable counts.
+        let mut top: Vec<(usize, &str)> = repos
+            .iter()
+            .map(|r| (r.worktrees.len().saturating_sub(1), r.name.as_str()))
+            .collect();
+        top.sort_by_key(|a| std::cmp::Reverse(a.0));
+        println!("TOP REPOS {:?}", &top[..top.len().min(4)]);
+
+        let safe: Vec<&str> = repos
+            .iter()
+            .flat_map(|r| &r.worktrees)
+            .filter(|w| w.safety.is_safe())
+            .map(|w| w.path.rsplit('/').next().unwrap_or(""))
+            .take(4)
+            .collect();
+        println!("SAFE SAMPLE {safe:?}");
+
         assert!(!repos.is_empty(), "expected repos under ~/code");
         // The main checkout of every repo must be classified as such --
         // deleting one would destroy the repository.

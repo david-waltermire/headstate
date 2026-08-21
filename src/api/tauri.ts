@@ -8,6 +8,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Worktree,
+  WorktreeRepo,
   CycleTrend,
   History,
   MergedDetail,
@@ -33,6 +35,16 @@ export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 /// `Stats.merged_week`/`merged_month` are real; the other five fields
 /// always come back zero today. Does not persist to SQLite.
 export const getStats = () => invoke<Stats>("get_stats");
+
+/// Repos and their worktrees, WITHOUT safety classification.
+///
+/// ~800ms for 37 repos and 295 worktrees; safe to block a view on.
+export const listWorktrees = () => invoke<WorktreeRepo[]>("list_worktrees");
+
+/// Classify one repo's worktrees. Four git calls each, ~16s across all
+/// 295 -- so this is per repo, filling in as results arrive.
+export const classifyWorktrees = (repoPath: string) =>
+  invoke<Worktree[]>("classify_worktrees", { repoPath });
 
 /// Directories scanned for git checkouts. Defaults to `~/code`.
 export const getWorktreeDirs = () => invoke<string[]>("get_worktree_dirs");

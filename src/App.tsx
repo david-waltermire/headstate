@@ -13,6 +13,8 @@ import { PrioritiesStrip } from "./components/PrioritiesStrip";
 import { PrList } from "./components/PrList";
 import { ReviewChips } from "./components/ReviewChips";
 import { TriageChips } from "./components/TriageChips";
+import { WorktreeSidebar } from "./components/WorktreeSidebar";
+import { WorktreesPage } from "./components/WorktreesPage";
 import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
 import { StatusBar } from "./components/StatusBar";
@@ -102,7 +104,11 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3]">
       <div className="flex min-h-0 flex-1">
-      <RepoSidebar prs={source} viewCounts={{ "to-review": reviewing.length }} />
+      {view === "worktrees" ? (
+        <WorktreeSidebar viewCounts={{ "to-review": reviewing.length }} />
+      ) : (
+        <RepoSidebar prs={source} viewCounts={{ "to-review": reviewing.length }} />
+      )}
       <main className="flex-1 overflow-auto">
         <header className="flex items-center gap-2 border-b border-[#30363d] px-4 py-3">
           {/* View selection lives in the sidebar ("Stats", pinned to its
@@ -127,11 +133,7 @@ export default function App() {
 
         {view === "worktrees" ? (
           <div className="p-4">
-            {/* Placeholder until #150. Says what it is rather than
-                rendering blank, which would read as a bug. */}
-            <div className="rounded-md border border-[#30363d] px-4 py-12 text-center text-sm text-[#8b949e]">
-              Local worktrees will appear here.
-            </div>
+            <WorktreesPage />
           </div>
         ) : panel === "stats" ? (
           <div className="p-4">
