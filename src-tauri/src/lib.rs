@@ -63,6 +63,7 @@ pub fn run() {
             commands::get_history,
             commands::get_periods,
             commands::get_reviewing,
+            commands::get_pr_detail,
             commands::get_poll_interval,
             commands::set_poll_interval,
             commands::get_worktree_dirs,

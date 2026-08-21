@@ -131,10 +131,25 @@ function prState(pr: PullRequest): { className: string; label: string } {
   return { className: "text-[#3fb950]", label: "Open" };
 }
 
-export function PrRow({ pr }: { pr: PullRequest }) {
+export function PrRow({ pr, onOpen }: { pr: PullRequest; onOpen?: () => void }) {
   const state = prState(pr);
   return (
-    <div className="flex gap-3 border-b border-[#30363d] px-4 py-3 last:border-b-0 hover:bg-[#161b22]">
+    // The row opens the detail view; the title anchor still opens GitHub,
+    // and stops propagation so a deliberate click on it is not hijacked.
+    <div
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (onOpen && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className={`flex gap-3 border-b border-[#30363d] px-4 py-3 last:border-b-0 hover:bg-[#161b22] ${
+        onOpen ? "cursor-pointer" : ""
+      }`}
+    >
       <GitPullRequest
         className={`mt-0.5 h-4 w-4 shrink-0 ${state.className}`}
         aria-label={state.label}
@@ -145,6 +160,7 @@ export function PrRow({ pr }: { pr: PullRequest }) {
             href={pr.url}
             target="_blank"
             rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
             className="font-semibold text-[#e6edf3] hover:text-[#4493f8]"
           >
             {pr.title}

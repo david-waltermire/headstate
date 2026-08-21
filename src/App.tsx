@@ -11,6 +11,7 @@ import {
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
+import { PrDetailView } from "./components/PrDetailView";
 import { PrList } from "./components/PrList";
 import { ReviewChips } from "./components/ReviewChips";
 import { TriageChips } from "./components/TriageChips";
@@ -38,7 +39,7 @@ export default function App() {
     dataUpdatedAt,
   } = usePullRequests();
   const filters = useActiveFilters();
-  const { view, panel } = useFilters();
+  const { view, panel, selectedPr, selectPr } = useFilters();
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
   // is what actually makes it do anything (see the hook's own comment).
@@ -137,7 +138,15 @@ export default function App() {
           </div>
         </header>
 
-        {view === "worktrees" ? (
+        {selectedPr && view !== "worktrees" ? (
+          <div className="p-4">
+            <PrDetailView
+              repo={selectedPr.repo}
+              number={selectedPr.number}
+              onBack={() => selectPr(null)}
+            />
+          </div>
+        ) : view === "worktrees" ? (
           <div className="p-4">
             <WorktreesPage />
           </div>
@@ -189,6 +198,7 @@ export default function App() {
                 prs={visible}
                 hasFilters={hasActiveFilters(filters)}
                 total={view === "my-prs" ? (truncatedTotal ?? undefined) : undefined}
+                onOpen={(pr) => selectPr({ repo: pr.repo, number: pr.number })}
               />
             )}
           </div>

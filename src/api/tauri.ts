@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  PrDetail,
   Worktree,
   WorktreeRepo,
   CycleTrend,
@@ -45,6 +46,10 @@ export const listWorktrees = () => invoke<WorktreeRepo[]>("list_worktrees");
 /// 295 -- so this is per repo, filling in as results arrive.
 export const classifyWorktrees = (repoPath: string) =>
   invoke<Worktree[]>("classify_worktrees", { repoPath });
+
+/// Everything the detail view shows for one pull request. Cost 1.
+export const getPrDetail = (repo: string, number: number) =>
+  invoke<PrDetail>("get_pr_detail", { repo, number });
 
 /// Disk sizes for one repo's worktrees, as `[path, bytes]` pairs.
 ///

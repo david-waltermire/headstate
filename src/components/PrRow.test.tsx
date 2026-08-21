@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { PullRequest } from "@/types/pr";
 import { PR_FIXTURES } from "@/fixtures/prs";
 import { PrRow } from "./PrRow";
@@ -238,5 +238,39 @@ describe("PrRow merge-state nuance", () => {
       <PrRow pr={pr({ ci: "success", merge: "mergeable", merge_status: "clean" })} />,
     );
     expect(screen.getByLabelText("Open")).toBeTruthy();
+  });
+});
+
+describe("PrRow click-through", () => {
+  it("opens the detail view when the row is clicked", () => {
+    const onOpen = vi.fn();
+    const { container } = render(<PrRow pr={pr()} onOpen={onOpen} />);
+    fireEvent.click(container.querySelector('[role="button"]') as Element);
+    expect(onOpen).toHaveBeenCalled();
+  });
+
+  // The title still goes to GitHub; clicking it must not be hijacked
+  // into opening the in-app view instead.
+  it("lets the title link through to GitHub without opening the detail", () => {
+    const onOpen = vi.fn();
+    render(<PrRow pr={pr()} onOpen={onOpen} />);
+    fireEvent.click(screen.getByRole("link", { name: pr().title }));
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("is keyboard reachable", () => {
+    const onOpen = vi.fn();
+    const { container } = render(<PrRow pr={pr()} onOpen={onOpen} />);
+    const row = container.querySelector('[role="button"]') as Element;
+    expect(row.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onOpen).toHaveBeenCalled();
+  });
+
+  // Rows are not clickable everywhere, and a bare div must not claim a
+  // button role it cannot fulfil.
+  it("is not interactive without a handler", () => {
+    const { container } = render(<PrRow pr={pr()} />);
+    expect(container.querySelector('[role="button"]')).toBeNull();
   });
 });

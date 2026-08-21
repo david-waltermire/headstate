@@ -89,6 +89,19 @@ make build            # or: yarn tauri build
 — it's specifically *building the app bundle* that needs to go through
 `tauri build`, since only that path runs `beforeBuildCommand`.
 
+## Two lints that keep catching people
+
+**`items_after_test_module`.** Appending a new function or constant to the
+end of a Rust file puts it *after* `#[cfg(test)] mod tests`, which clippy
+rejects. It compiles and the tests pass, so it only fails at `make lint` —
+and it has caught this project three times. Insert new items **before** the
+test module, not at the end of the file.
+
+**Your local Rust may be older than CI's.** `clippy::unnecessary_sort_by`
+fired on CI's 1.98 while passing locally on 1.93.1. A clean local `make
+lint` is necessary but not sufficient; if CI disagrees, check
+`rustc --version` before assuming a flake.
+
 ## Cutting a release
 
 Releases are driven entirely by tags. There is nothing to click and no

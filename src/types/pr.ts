@@ -181,3 +181,33 @@ export interface WorktreeRepo {
   path: string;
   worktrees: Worktree[];
 }
+
+/// Everything the detail view renders.
+///
+/// Separate from `PullRequest`, which is a list row fetched 100 at a time
+/// on a poll loop -- carrying a body and comments there would make every
+/// tick haul data almost no row needs.
+export interface PrDetail {
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  is_draft: boolean;
+  body: string;
+  author: string;
+  repo: string;
+  head_ref: string;
+  base_ref: string;
+  merge_status: string;
+  review: string;
+  additions: number;
+  deletions: number;
+  changed_files: number;
+  unresolved_threads: number;
+  comment_count: number;
+  comments: { author: string; created_at: string; body: string }[];
+  /// `state` is `success`, `failure`, `pending`, `skipped`, or a raw
+  /// GitHub value when unmodelled -- never coerced to success. Inlined
+  /// rather than exported types, since nothing imports the names.
+  checks: { name: string; state: string; url: string }[];
+}

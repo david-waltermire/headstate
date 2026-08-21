@@ -3,7 +3,9 @@
 //! [`crate::poll`] emits in the background.
 
 use crate::github::client::GitHubClient;
-use crate::github::model::{CycleTrend, History, MergedDetail, Periods, PullRequest, Stats};
+use crate::github::model::{
+    CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats,
+};
 use crate::store::{load_snapshot, open_db, settings};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
@@ -82,6 +84,23 @@ pub async fn get_cycle_trend(client: State<'_, GhClient>) -> Result<CycleTrend, 
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
     client
         .fetch_cycle_trend(chrono::Utc::now())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Everything the detail view shows for one pull request.
+///
+/// Fetched on open rather than in the poll loop: it is per-PR and only
+/// needed while the view is on screen.
+#[tauri::command]
+pub async fn get_pr_detail(
+    client: State<'_, GhClient>,
+    repo: String,
+    number: u64,
+) -> Result<PrDetail, String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    client
+        .fetch_pr_detail(&repo, number)
         .await
         .map_err(|e| e.to_string())
 }

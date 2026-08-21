@@ -4,13 +4,13 @@
 //! Read-only: every query here is a `search`, never a mutation.
 
 use super::map::{
-    map_cycle_trend, map_history, map_list, map_merged_detail, map_rate_limit, map_search,
-    map_total,
+    map_cycle_trend, map_detail, map_history, map_list, map_merged_detail, map_rate_limit,
+    map_search, map_total,
 };
-use super::model::{CycleTrend, History, MergedDetail, Periods, PullRequest, Stats};
+use super::model::{CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats};
 use super::query::{
     cycle_trend_query, history_query_range, history_query_range_with_periods, periods_query,
-    HISTORY_CHUNK_DAYS, MERGED_DETAIL_QUERY, PRS_QUERY, STATS_QUERY,
+    HISTORY_CHUNK_DAYS, MERGED_DETAIL_QUERY, PRS_QUERY, PR_DETAIL_QUERY, STATS_QUERY,
 };
 use chrono::{DateTime, Duration, Utc};
 use octocrab::Octocrab;
@@ -121,6 +121,23 @@ impl GitHubClient {
             .graphql_partial_ok(&json!({ "query": cycle_trend_query(now) }))
             .await?;
         Ok(map_cycle_trend(&v))
+    }
+
+    /// Everything the detail view needs, in one request at cost 1.
+    ///
+    /// `repo` is `owner/name`; it is split here rather than by the caller
+    /// so a malformed value fails in one place with a clear message.
+    pub async fn fetch_pr_detail(&self, repo: &str, number: u64) -> Result<PrDetail, ClientError> {
+        let (owner, name) = repo
+            .split_once('/')
+            .ok_or_else(|| ClientError::Graphql(format!("malformed repository: {repo}")))?;
+        let v = self
+            .graphql_partial_ok(&json!({
+                "query": PR_DETAIL_QUERY,
+                "variables": { "owner": owner, "repo": name, "number": number }
+            }))
+            .await?;
+        Ok(map_detail(&v, repo))
     }
 
     /// The PR list together with GitHub's own match count.
@@ -597,6 +614,21 @@ mod tests {
         );
 
         let t0 = std::time::Instant::now();
+        // The detail view's payload, through the real client.
+        if let Ok(d) = c.fetch_pr_detail("pktstorm/headstate", 165).await {
+            println!(
+                "DETAIL #{} \"{}\" checks={} comments={} body={}b status={:?}",
+                d.number,
+                &d.title[..d.title.len().min(30)],
+                d.checks.len(),
+                d.comments.len(),
+                d.body.len(),
+                d.merge_status
+            );
+            assert!(!d.title.is_empty(), "title must be populated");
+            assert!(!d.checks.is_empty(), "checks must be populated");
+        }
+
         let (authored, reviewing) = c.fetch_prs_and_reviewing().await.unwrap();
         println!("AUTHORED={} REVIEWING={}", authored.len(), reviewing.len());
         {

@@ -54,12 +54,15 @@ pub enum MergeState {
     Checking,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewState {
     Approved,
     ChangesRequested,
     ReviewRequired,
+    /// No verdict. The default, so a partially-built value never claims
+    /// an approval that does not exist.
+    #[default]
     None,
 }
 
@@ -203,6 +206,52 @@ impl PullRequest {
 /// How many PRs are blocked on the author. Feeds the tray badge.
 pub fn needs_attention_count(prs: &[PullRequest]) -> u64 {
     prs.iter().filter(|p| p.needs_attention()).count() as u64
+}
+
+/// One CI check on a pull request.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CheckRun {
+    pub name: String,
+    /// `success`, `failure`, `pending`, or the raw value when unmodelled.
+    pub state: String,
+    /// Where to see the run itself. Empty when GitHub gives none.
+    pub url: String,
+}
+
+/// One comment on a pull request.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PrComment {
+    pub author: String,
+    pub created_at: String,
+    pub body: String,
+}
+
+/// Everything the detail view renders.
+///
+/// A separate type from `PullRequest`: that one is a LIST row fetched 100
+/// at a time on a 2-minute loop, and adding a body and comments to it
+/// would make every poll carry data almost none of the rows need.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PrDetail {
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub state: String,
+    pub is_draft: bool,
+    pub body: String,
+    pub author: String,
+    pub repo: String,
+    pub head_ref: String,
+    pub base_ref: String,
+    pub merge_status: MergeStateStatus,
+    pub review: ReviewState,
+    pub additions: u64,
+    pub deletions: u64,
+    pub changed_files: u64,
+    pub unresolved_threads: u64,
+    pub comment_count: u64,
+    pub comments: Vec<PrComment>,
+    pub checks: Vec<CheckRun>,
 }
 
 #[cfg(test)]

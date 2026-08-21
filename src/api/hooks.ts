@@ -9,6 +9,7 @@ import {
   getCycleTrend,
   getPeriods,
   getPollInterval,
+  getPrDetail,
   getWorktreeDirs,
   classifyWorktrees,
   listWorktrees,
@@ -261,6 +262,20 @@ export function useViewCadence(view: string): void {
     // the page.
     void setViewNeedsGithub(view !== "worktrees").catch(() => {});
   }, [view]);
+}
+
+/// One pull request's detail, fetched when the view opens.
+///
+/// Not part of the poll loop: it is per-PR and only wanted while on
+/// screen. Kept briefly so reopening the same PR is instant, but short
+/// enough that CI state is not stale on return.
+export function usePrDetail(repo: string | undefined, number: number | undefined) {
+  return useQuery({
+    queryKey: ["pr-detail", repo, number],
+    queryFn: () => getPrDetail(repo as string, number as number),
+    enabled: Boolean(repo && number),
+    staleTime: 30_000,
+  });
 }
 
 /// Repos with worktrees. Listing only -- see `useWorktreeSafety`.

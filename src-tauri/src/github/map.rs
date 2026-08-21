@@ -1,8 +1,8 @@
 //! Mapping from the raw GraphQL JSON to typed `PullRequest`s.
 
 use super::model::{
-    CiState, CycleTrend, HistoryPoint, Label, MergeState, MergeStateStatus, MergedDetail, MergedPr,
-    PullRequest, RepoCount, ReviewState,
+    CheckRun, CiState, CycleTrend, HistoryPoint, Label, MergeState, MergeStateStatus, MergedDetail,
+    MergedPr, PrComment, PrDetail, PullRequest, RepoCount, ReviewState,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
@@ -19,6 +19,88 @@ fn ci_state(node: &Value) -> CiState {
         Some("PENDING") | Some("EXPECTED") => CiState::Pending,
         // No rollup at all means the repo runs no checks on this PR.
         _ => CiState::None,
+    }
+}
+
+/// One check's outcome, normalised.
+///
+/// CheckRun reports `conclusion` (SUCCESS/FAILURE/...) while
+/// StatusContext reports `state` (SUCCESS/PENDING/...). Both shapes reach
+/// here, and a null conclusion means the run has not finished.
+fn check_state(node: &Value) -> String {
+    let raw = node["conclusion"]
+        .as_str()
+        .or_else(|| node["state"].as_str())
+        .unwrap_or("PENDING");
+    match raw {
+        "SUCCESS" => "success",
+        "FAILURE" | "ERROR" | "TIMED_OUT" | "CANCELLED" | "STARTUP_FAILURE" => "failure",
+        "PENDING" | "IN_PROGRESS" | "QUEUED" | "WAITING" | "EXPECTED" => "pending",
+        "NEUTRAL" | "SKIPPED" => "skipped",
+        other => other,
+    }
+    .to_string()
+}
+
+/// The detail payload for one pull request.
+pub fn map_detail(v: &Value, repo: &str) -> PrDetail {
+    let pr = &v["repository"]["pullRequest"];
+    let empty = vec![];
+
+    let checks = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .map(|c| CheckRun {
+            // CheckRun uses `name`, StatusContext uses `context`.
+            name: c["name"]
+                .as_str()
+                .or_else(|| c["context"].as_str())
+                .unwrap_or("check")
+                .to_string(),
+            state: check_state(c),
+            url: c["detailsUrl"]
+                .as_str()
+                .or_else(|| c["targetUrl"].as_str())
+                .unwrap_or_default()
+                .to_string(),
+        })
+        .collect();
+
+    let comments = pr["comments"]["nodes"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .map(|c| PrComment {
+            author: c["author"]["login"].as_str().unwrap_or("ghost").to_string(),
+            created_at: c["createdAt"].as_str().unwrap_or_default().to_string(),
+            body: c["body"].as_str().unwrap_or_default().to_string(),
+        })
+        .collect();
+
+    PrDetail {
+        number: pr["number"].as_u64().unwrap_or(0),
+        title: pr["title"].as_str().unwrap_or_default().to_string(),
+        url: pr["url"].as_str().unwrap_or_default().to_string(),
+        state: pr["state"].as_str().unwrap_or("OPEN").to_lowercase(),
+        is_draft: pr["isDraft"].as_bool().unwrap_or(false),
+        body: pr["body"].as_str().unwrap_or_default().to_string(),
+        author: pr["author"]["login"]
+            .as_str()
+            .unwrap_or("ghost")
+            .to_string(),
+        repo: repo.to_string(),
+        head_ref: pr["headRefName"].as_str().unwrap_or_default().to_string(),
+        base_ref: pr["baseRefName"].as_str().unwrap_or_default().to_string(),
+        merge_status: merge_status(pr),
+        review: review_state(pr),
+        additions: pr["additions"].as_u64().unwrap_or(0),
+        deletions: pr["deletions"].as_u64().unwrap_or(0),
+        changed_files: pr["changedFiles"].as_u64().unwrap_or(0),
+        unresolved_threads: unresolved_threads(pr),
+        comment_count: pr["comments"]["totalCount"].as_u64().unwrap_or(0),
+        comments,
+        checks,
     }
 }
 
@@ -403,6 +485,79 @@ mod tests {
             "labels": {"nodes": []}, "commits": {"nodes": []}
         }]}});
         assert_eq!(map_search(&v)[0].unresolved_threads, 0);
+    }
+
+    #[test]
+    fn normalises_both_check_shapes() {
+        // CheckRun reports `conclusion`; StatusContext reports `state`.
+        assert_eq!(check_state(&json!({"conclusion": "SUCCESS"})), "success");
+        assert_eq!(check_state(&json!({"state": "SUCCESS"})), "success");
+        assert_eq!(check_state(&json!({"conclusion": "TIMED_OUT"})), "failure");
+        assert_eq!(check_state(&json!({"state": "PENDING"})), "pending");
+        assert_eq!(check_state(&json!({"conclusion": "SKIPPED"})), "skipped");
+        // A null conclusion means the run has not finished.
+        assert_eq!(check_state(&json!({"conclusion": null})), "pending");
+    }
+
+    /// An unmodelled value passes through rather than being coerced into
+    /// "success", which would claim a green check that does not exist.
+    #[test]
+    fn an_unknown_check_state_is_never_success() {
+        assert_eq!(
+            check_state(&json!({"conclusion": "ACTION_REQUIRED"})),
+            "ACTION_REQUIRED"
+        );
+    }
+
+    #[test]
+    fn maps_a_detail_payload() {
+        let v = json!({"repository": {"pullRequest": {
+            "number": 42, "title": "Add retry", "url": "u", "state": "OPEN",
+            "isDraft": false, "body": "the description",
+            "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "additions": 100, "deletions": 20, "changedFiles": 3,
+            "headRefName": "feature", "baseRefName": "main",
+            "author": {"login": "octocat"},
+            "comments": {"totalCount": 2, "nodes": [
+                {"author": {"login": "octocat"}, "createdAt": "2026-08-20T10:00:00Z", "body": "hi"}
+            ]},
+            "reviewThreads": {"nodes": [
+                {"isResolved": false, "isOutdated": false},
+                {"isResolved": true, "isOutdated": false}
+            ]},
+            "commits": {"nodes": [{"commit": {"statusCheckRollup": {
+                "state": "SUCCESS",
+                "contexts": {"nodes": [
+                    {"name": "build", "conclusion": "SUCCESS", "detailsUrl": "b"},
+                    {"context": "legacy", "state": "FAILURE", "targetUrl": "l"}
+                ]}
+            }}}]}
+        }}});
+        let d = map_detail(&v, "octocat/hello-world");
+        assert_eq!(d.number, 42);
+        assert_eq!(d.repo, "octocat/hello-world");
+        assert_eq!(d.body, "the description");
+        assert_eq!(d.state, "open");
+        assert_eq!(d.merge_status, MergeStateStatus::Clean);
+        assert_eq!(d.unresolved_threads, 1, "resolved threads must not count");
+        assert_eq!(d.checks.len(), 2);
+        assert_eq!(d.checks[0].name, "build");
+        assert_eq!(d.checks[1].name, "legacy", "StatusContext uses `context`");
+        assert_eq!(d.checks[1].state, "failure");
+        assert_eq!(d.comments[0].author, "octocat");
+    }
+
+    /// A PR with no checks, no comments and a null author must not panic:
+    /// the mapper's rule is that one odd payload never blanks the view.
+    #[test]
+    fn a_sparse_detail_payload_is_survivable() {
+        let v = json!({"repository": {"pullRequest": {"number": 1}}});
+        let d = map_detail(&v, "octocat/hello-world");
+        assert_eq!(d.number, 1);
+        assert_eq!(d.author, "ghost");
+        assert!(d.checks.is_empty());
+        assert!(d.comments.is_empty());
     }
 
     #[test]

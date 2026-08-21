@@ -26,6 +26,12 @@ interface FilterStore {
   applyPreset: (filters: Filters) => void;
   setView: (view: View) => void;
   setPanel: (panel: "list" | "stats") => void;
+  /// The PR the detail view is showing, or null for the list.
+  ///
+  /// Deliberately NOT persisted: reopening the app on a detail page for a
+  /// PR that has since merged is worse than landing on the list.
+  selectedPr: { repo: string; number: number } | null;
+  selectPr: (pr: { repo: string; number: number } | null) => void;
   reset: () => void;
 }
 
@@ -67,8 +73,10 @@ export const useFilters = create<FilterStore>()(
           filtersByView: { ...s.filtersByView, [s.view]: filters },
           panel: "list",
         })),
-      setView: (view) => set({ view }),
+      setView: (view) => set({ view, selectedPr: null }),
       setPanel: (panel) => set({ panel }),
+      selectedPr: null,
+      selectPr: (selectedPr) => set({ selectedPr }),
       // `repo` is sidebar NAVIGATION, not a filter chip -- it decides
       // which page you are on, scopes the priorities strip, and
       // pre-answers the wizard's repo step. Clearing it navigated the user

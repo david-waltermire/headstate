@@ -14,12 +14,15 @@ export function PrList({
   prs,
   hasFilters = false,
   total,
+  onOpen,
 }: {
   prs: PullRequest[];
   hasFilters?: boolean;
   /// GitHub's true match count when it exceeds the page size, else
   /// undefined. Shown so a truncated list never passes for a complete one.
   total?: number;
+  /// Called with the clicked PR. Omitted where rows are not clickable.
+  onOpen?: (pr: PullRequest) => void;
 }) {
   return (
     <div className="rounded-md border border-[#30363d]">
@@ -46,7 +49,13 @@ export function PrList({
           )}
         </div>
       ) : (
-        prs.map((pr) => <PrRow key={`${pr.repo}#${pr.number}`} pr={pr} />)
+        prs.map((pr) => (
+          <PrRow
+            key={`${pr.repo}#${pr.number}`}
+            pr={pr}
+            onOpen={onOpen ? () => onOpen(pr) : undefined}
+          />
+        ))
       )}
     </div>
   );
