@@ -228,23 +228,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
+          # Not `dist`: that is Vite's build output, which `tauri build`
+          # has already populated in this very job. Collecting into it
+          # would mix the web bundle in with the installers.
+          mkdir -p release-assets
           BASE=src-tauri/target
           if [ -n "${{ matrix.target }}" ]; then BASE="$BASE/${{ matrix.target }}"; fi
           find "$BASE/release/bundle" -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \
                -o -name '*.deb' -o -name '*.AppImage' \) \
-            -exec cp {} dist/ \;
-          cp Headstate-*.app.tar.gz dist/ 2>/dev/null || true
-          ls -la dist
+            -exec cp {} release-assets/ \;
+          cp Headstate-*.app.tar.gz release-assets/ 2>/dev/null || true
+          ls -la release-assets
           # A platform that builds but produces nothing must fail here,
           # not silently contribute zero assets to the release.
-          [ -n "$(ls -A dist)" ] || { echo "no artifacts produced" >&2; exit 1; }
+          [ -n "$(ls -A release-assets)" ] || { echo "no artifacts produced" >&2; exit 1; }
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bundle-${{ matrix.os }}
-          path: dist/*
+          path: release-assets/*
           if-no-files-found: error
 
   # One job creates the release, after every platform has succeeded.
@@ -269,7 +272,10 @@ jobs:
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: dist
+          # NOT `dist`: that is Vite's build output directory, and this job
+          # checks the repo out. `dist/*` then globbed Vite's `assets/`
+          # directory and gh refused it with "is a directory".
+          path: release-assets
           merge-multiple: true
 
       - name: Publish release
@@ -279,7 +285,20 @@ jobs:
           NOTARIZED: ${{ secrets.APPLE_ID != '' && 'true' || 'false' }}
         run: |
           set -euo pipefail
-          ls -la dist
+          ls -la release-assets
+
+          # Only regular files. gh refuses a directory with "is a
+          # directory" and fails the whole upload, which is how the first
+          # v2.0.1 attempt created a release with zero assets.
+          # A plain array rather than mapfile: mapfile is bash 4+, and
+          # macOS ships bash 3.2 -- so this stays runnable by hand on a
+          # dev machine, not only on the runner's bash 5.
+          ASSETS=()
+          while IFS= read -r f; do ASSETS+=("$f"); done < <(
+            find release-assets -maxdepth 1 -type f | sort
+          )
+          [ ${#ASSETS[@]} -gt 0 ] || { echo "no assets to publish" >&2; exit 1; }
+          printf 'publishing %s\n' "${ASSETS[@]}"
 
           # --generate-notes prepends --notes ahead of the auto-generated
           # changelog, so this reaches every release. Each platform gets
@@ -316,11 +335,11 @@ jobs:
           # release rather than failing on "already exists".
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release exists; uploading assets to it."
-            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release upload "$GITHUB_REF_NAME" "${ASSETS[@]}" --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
               --title "Headstate ${GITHUB_REF_NAME}" \
               --notes "$NOTES" \
               --generate-notes \
-              dist/*
+              "${ASSETS[@]}"
           fi
