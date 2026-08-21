@@ -76,6 +76,14 @@ pub struct Label {
 pub struct PullRequest {
     /// GraphQL node ID, so a row can act without first opening the
     /// detail view. Rides along in the list query at no extra cost.
+    ///
+    /// `#[serde(default)]` here and on the fields below is about the
+    /// SNAPSHOT CACHE, not the wire: these were added after v1.0.1, and a
+    /// cache written by that version has no such key. Without a default,
+    /// serde fails the whole payload and every pull request vanishes on
+    /// upgrade -- which is what shipped in v2.0.0. An empty id means
+    /// "cannot act on this row", and the next poll replaces it wholesale.
+    #[serde(default)]
     pub id: String,
     pub number: u64,
     pub title: String,
@@ -91,6 +99,7 @@ pub struct PullRequest {
     pub head_ref: String,
     /// The head commit, so an "update branch" click can tell GitHub which
     /// commit the user was actually looking at.
+    #[serde(default)]
     pub head_oid: String,
     pub base_ref: String,
     pub created_at: DateTime<Utc>,
@@ -98,6 +107,9 @@ pub struct PullRequest {
     pub ci: CiState,
     pub merge: MergeState,
     /// GitHub's own merge-readiness summary. See `MergeStateStatus`.
+    // Defaults to Unknown, never Clean: a merge button enabled on data the
+    // app never fetched is the one wrong answer that costs something.
+    #[serde(default)]
     pub merge_status: MergeStateStatus,
     pub review: ReviewState,
     pub in_merge_queue: bool,
@@ -113,6 +125,7 @@ pub struct PullRequest {
     /// is blocked: whether a repo REQUIRES resolution before merging lives
     /// in `requiresConversationResolution`, which needs admin access on
     /// that repository and is unreadable for most of them.
+    #[serde(default)]
     pub unresolved_threads: u64,
 }
 
@@ -253,13 +266,18 @@ pub struct PrDetail {
     pub head_ref: String,
     /// The head commit, so an "update branch" click can tell GitHub which
     /// commit the user was actually looking at.
+    #[serde(default)]
     pub head_oid: String,
     pub base_ref: String,
+    // Defaults to Unknown, never Clean: a merge button enabled on data the
+    // app never fetched is the one wrong answer that costs something.
+    #[serde(default)]
     pub merge_status: MergeStateStatus,
     pub review: ReviewState,
     pub additions: u64,
     pub deletions: u64,
     pub changed_files: u64,
+    #[serde(default)]
     pub unresolved_threads: u64,
     pub comment_count: u64,
     pub comments: Vec<PrComment>,
