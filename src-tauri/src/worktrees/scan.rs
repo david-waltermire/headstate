@@ -1109,6 +1109,65 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
         assert_eq!(upstream_state(&repo), Upstream::Detached);
     }
 
+    /// The macOS case that motivated canonicalising at all: /var is a
+    /// symlink to /private/var, so git reports a path the caller never
+    /// typed and a raw string compare fails.
+    #[test]
+    fn two_spellings_of_one_directory_compare_equal() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let real = tmp.path().join("wt");
+        std::fs::create_dir_all(&real).unwrap();
+
+        // TempDir on macOS lives under /var, which resolves to
+        // /private/var -- so these two differ as strings but name one
+        // directory. On Linux they are already identical, which is fine:
+        // the assertion is that the KEY matches, not that the inputs did.
+        let canon = std::fs::canonicalize(&real).unwrap();
+        assert_eq!(canonical_key(&real), canonical_key(&canon));
+    }
+
+    /// A path that cannot be canonicalised still yields a comparable key
+    /// rather than erroring -- `remove_worktree` needs to look up a target
+    /// that may already be gone.
+    #[test]
+    fn a_missing_path_still_produces_a_key() {
+        let missing = Path::new("/definitely/not/here/at/all");
+        assert_eq!(canonical_key(missing), missing.to_string_lossy());
+    }
+
+    /// Different directories must not collide. Case folding and separator
+    /// normalisation make the key looser on Windows, and a key that maps
+    /// two real directories together would delete the wrong one.
+    #[test]
+    fn different_directories_get_different_keys() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let a = tmp.path().join("alpha");
+        let b = tmp.path().join("beta");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        assert_ne!(canonical_key(&a), canonical_key(&b));
+    }
+
+    /// On Windows the key must be case-folded and slash-normalised, since
+    /// git reports `C:/code/proj` where canonicalize returns
+    /// `\\?\C:\Code\Proj` for the same place. Inert on Unix, where
+    /// case and separator are both significant.
+    #[test]
+    #[cfg(windows)]
+    fn windows_keys_ignore_case_and_separator() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dir = tmp.path().join("MixedCase");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let key = canonical_key(&dir);
+        assert!(!key.contains('\\'), "separators must be normalised: {key}");
+        assert!(
+            !key.starts_with(r"\\?\"),
+            "UNC prefix must be stripped: {key}"
+        );
+        assert_eq!(key, key.to_lowercase(), "key must be case-folded: {key}");
+    }
+
     /// The bug this fixes. A squash-merged branch is fully merged, but
     /// its tip is not an ancestor of main -- squash replays the work as
     /// a new commit with a new SHA. Ancestry alone therefore reports
@@ -1372,6 +1431,39 @@ mod live {
 
 /// Remove a worktree, refusing anything not provably safe.
 ///
+/// A path reduced to something two spellings of the same location share.
+///
+/// Three platform differences all land on this one comparison, and it
+/// decides which directory `remove_worktree` deletes:
+///
+/// - macOS resolves `/var` to `/private/var`, so a raw string compare
+///   fails for anything under a temp directory.
+/// - Windows `canonicalize` returns a UNC extended-length path
+///   (`\\?\C:\...`) while git reports `C:/...`, so canonicalising only
+///   one side guarantees a mismatch.
+/// - Windows paths are case-insensitive and git may report either
+///   separator, so `C:\Code\Proj` and `c:/code/proj` are the same place.
+///
+/// Canonicalising both sides handles the first two; the UNC prefix is
+/// stripped and the result lowercased on Windows for the third. A path
+/// that cannot be canonicalised falls back to its raw form rather than
+/// erroring, so a missing target stays comparable.
+fn canonical_key(p: &Path) -> String {
+    let resolved = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let s = resolved.to_string_lossy().into_owned();
+
+    if cfg!(windows) {
+        // Strip the extended-length prefix git never uses, normalise the
+        // separator, and fold case -- Windows filesystems are
+        // case-insensitive, so differing case is the same directory.
+        s.trim_start_matches(r"\\?\")
+            .replace('\\', "/")
+            .to_lowercase()
+    } else {
+        s
+    }
+}
+
 /// **The only destructive operation Headstate performs on local disk.**
 /// It deletes files that may be the only copy of work, so the bar is
 /// higher than for the GitHub mutations: the safety gate is RE-EVALUATED
@@ -1396,11 +1488,10 @@ pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> Result<(), Strin
     // compare fails for anything under a temp directory. Falling back to
     // the raw path keeps a non-existent target comparable rather than
     // erroring here.
-    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let target_canon = canon(target);
+    let target_canon = canonical_key(target);
     let wt = known
         .iter()
-        .find(|w| canon(Path::new(&w.path)) == target_canon)
+        .find(|w| canonical_key(Path::new(&w.path)) == target_canon)
         .ok_or_else(|| "not a worktree of this repository".to_string())?;
 
     if wt.is_main {

@@ -35,6 +35,17 @@ export function safetyReason(s: Safety): string {
   }
 }
 
+/// The final component of a path, whichever separator it uses.
+///
+/// `split("/")` returns the whole string unchanged on a Windows path, so
+/// every row would show `C:\Users\me\code\proj-feature` instead of
+/// `proj-feature`. Splitting on both separators is enough here: a
+/// directory name cannot itself contain either one.
+export function pathBasename(path: string): string {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
+
 /// Whether a row is still waiting on its safety check.
 ///
 /// The fast listing lands in ~2.6s and classification takes up to ~57s,

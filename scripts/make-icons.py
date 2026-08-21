@@ -32,7 +32,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
 ICONS = ROOT / "src-tauri" / "icons"
@@ -137,6 +137,54 @@ def make_tray_icons(glyph: Image.Image) -> None:
         print(f"wrote {ICONS / name} ({size}x{size})")
 
 
+def make_desktop_tray_icons(glyph: Image.Image) -> None:
+    """Tray icon for Windows and Linux, where nothing inverts it for you.
+
+    macOS renders a template image (pure black + alpha) and inverts it per
+    menu-bar theme. Windows and Linux do no such thing: they draw the
+    artwork as-is, so the macOS asset is a black glyph on a dark taskbar --
+    invisible. (Verified on the shipped file: 90 opaque pixels, 0 of them
+    non-black.)
+
+    One asset has to work on both light and dark panels, and neither
+    platform tells us which we are on at build time. A white glyph with a
+    dark halo is the standard answer: the halo separates it from a light
+    panel, the white body from a dark one.
+
+    Sizes follow Windows' tray convention (16/24/32/48) rather than macOS'
+    22pt @1x/@2x/@3x.
+    """
+    for size in (16, 24, 32, 48):
+        g = glyph.copy().convert("RGBA")
+        # Leave room for the halo so it is not clipped at the edges.
+        inner = size - 4
+        g.thumbnail((inner, inner), Image.LANCZOS)
+
+        mask = Image.new("L", (size, size), 0)
+        mask.paste(g.split()[3], ((size - g.width) // 2, (size - g.height) // 2))
+
+        # The halo is a soft dark shadow OUTSIDE the silhouette; the body
+        # is the silhouette in white on top.
+        #
+        # A dilate-then-blur swallowed the glyph at these sizes: at 32px a
+        # one-pixel dilation is most of the shape, leaving a dark blob with
+        # a few white specks. Blurring the mask alone spreads the shadow
+        # without eating into the body, and halving its alpha keeps it a
+        # rim rather than a second glyph.
+        shadow = mask.filter(ImageFilter.GaussianBlur(size / 24))
+        shadow = shadow.point(lambda v: int(v * 0.55))
+
+        halo = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        halo.putalpha(shadow)
+
+        body = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+        body.putalpha(mask)
+
+        out = Image.alpha_composite(halo, body)
+        out.save(ICONS / f"tray-{size}.png")
+        print(f"wrote {ICONS / f'tray-{size}.png'} ({size}x{size}) -- non-template, for Windows/Linux")
+
+
 def icns_unpack(path: Path, dest: Path) -> None:
     subprocess.run(
         ["iconutil", "-c", "iconset", "-o", str(dest), str(path)],
@@ -203,6 +251,7 @@ def main() -> int:
     glyph = crop_glyph(splash)
     make_app_icon(glyph)
     make_tray_icons(glyph)
+    make_desktop_tray_icons(glyph)
     print(
         "\nNow run: yarn tauri icon src-tauri/icons/icon.png"
         "\nThen restore the 1024 master: cp src-tauri/icons/icon-master.png "

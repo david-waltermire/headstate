@@ -17,6 +17,27 @@ use tauri::{AppHandle, Emitter, Manager};
 /// The id `setup_tray` builds the icon with, so the poll loop can find it.
 pub const TRAY_ID: &str = "main";
 
+/// The tray glyph for this platform.
+///
+/// macOS gets the template image -- pure black plus alpha -- which the OS
+/// inverts for light and dark menu bars. Windows and Linux do no such
+/// inversion, so they get a white glyph with a soft dark rim: the rim
+/// separates it from a light panel, the white body from a dark one.
+///
+/// Verified on the shipped macOS asset: 90 opaque pixels, 0 of them
+/// non-black. That is correct as a template and unreadable as anything
+/// else.
+fn tray_icon() -> tauri::Result<tauri::image::Image<'static>> {
+    #[cfg(target_os = "macos")]
+    let bytes = include_bytes!("../icons/trayTemplate@2x.png").as_slice();
+    // 32px rather than 16: both platforms scale down cleanly and the
+    // larger source survives a HiDPI panel.
+    #[cfg(not(target_os = "macos"))]
+    let bytes = include_bytes!("../icons/tray-32.png").as_slice();
+
+    tauri::image::Image::from_bytes(bytes)
+}
+
 pub fn badge_text(needs_attention: u64) -> Option<String> {
     match needs_attention {
         0 => None,
@@ -48,10 +69,13 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     app.manage(CountItem(count));
 
     TrayIconBuilder::with_id(TRAY_ID)
-        .icon(tauri::image::Image::from_bytes(include_bytes!(
-            "../icons/trayTemplate@2x.png"
-        ))?)
-        .icon_as_template(true)
+        .icon(tray_icon()?)
+        // Template inversion is a macOS concept: the OS renders a
+        // pure-black-plus-alpha image against the menu bar and inverts it
+        // per theme. Setting it elsewhere is a no-op, and the asset it
+        // implies -- an all-black glyph -- is invisible on a dark Windows
+        // taskbar or GNOME panel.
+        .icon_as_template(cfg!(target_os = "macos"))
         .menu(&menu)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => {
@@ -223,6 +247,74 @@ mod tests {
         assert!(
             count >= 4,
             "icon.ico has only {count} size(s); Windows scales what it lacks"
+        );
+    }
+
+    /// Both tray assets must decode. `Image::from_bytes` is what the app
+    /// itself calls, so this fails for the same reason the app would.
+    #[test]
+    fn both_tray_assets_decode() {
+        for (name, bytes) in [
+            (
+                "trayTemplate@2x.png",
+                include_bytes!("../icons/trayTemplate@2x.png").as_slice(),
+            ),
+            (
+                "tray-32.png",
+                include_bytes!("../icons/tray-32.png").as_slice(),
+            ),
+        ] {
+            let img = tauri::image::Image::from_bytes(bytes)
+                .unwrap_or_else(|e| panic!("{name} does not decode: {e}"));
+            assert!(img.width() > 0 && img.height() > 0, "{name} is empty");
+        }
+    }
+
+    /// The Windows/Linux asset must not be a template image.
+    ///
+    /// Neither platform inverts anything, so an all-black glyph is
+    /// invisible on a dark taskbar -- which is what shipped before #186
+    /// (verified on the macOS asset: 90 opaque pixels, 0 non-black).
+    /// `Image::from_bytes` hands back RGBA, so the check is direct.
+    #[test]
+    fn the_desktop_tray_icon_is_visible_on_a_dark_panel() {
+        let img = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-32.png")).unwrap();
+        let rgba = img.rgba();
+
+        let opaque: Vec<&[u8]> = rgba.chunks(4).filter(|p| p[3] > 0).collect();
+        assert!(!opaque.is_empty(), "no opaque pixels at all");
+
+        let bright = opaque
+            .iter()
+            .filter(|p| p[..3].iter().any(|&c| c > 200))
+            .count();
+        assert!(
+            bright > 0,
+            "every opaque pixel is dark; this would be invisible on a dark panel"
+        );
+        // A handful of light pixels would pass while still reading as a
+        // dark blob, so the body has to be a real share of the glyph.
+        assert!(
+            bright * 10 > opaque.len(),
+            "only {bright} of {} opaque pixels are light; the glyph would read as a smudge",
+            opaque.len()
+        );
+    }
+
+    /// And the macOS asset must STAY a template image: pure black plus
+    /// alpha is what makes the OS invert it per menu-bar theme.
+    #[test]
+    fn the_macos_tray_icon_is_still_a_template_image() {
+        let img = tauri::image::Image::from_bytes(include_bytes!("../icons/trayTemplate@2x.png"))
+            .unwrap();
+        let rgba = img.rgba();
+        let coloured = rgba
+            .chunks(4)
+            .filter(|p| p[3] > 0 && p[..3].iter().any(|&c| c >= 40))
+            .count();
+        assert_eq!(
+            coloured, 0,
+            "a template image must be pure black; {coloured} pixels are not"
         );
     }
 }

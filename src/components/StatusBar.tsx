@@ -1,5 +1,6 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { Settings } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { usePollError, usePollInterval, usePollState } from "../api/hooks";
 import { relativeTime } from "../lib/time";
 import { SettingsDialog } from "./SettingsDialog";
@@ -55,6 +56,24 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
   const { seconds, set } = usePollInterval();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // From the built binary, not package.json: the release workflow stamps
+  // the version from the git tag at build time and never commits it, so
+  // the repo reads 0.1.0 while a release reads 2.0.1. Asking Tauri gets
+  // the number the user actually installed -- which is the whole point of
+  // showing it, since it is what they would quote in a bug report.
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    getVersion().then(
+      (v) => live && setVersion(v),
+      // Non-fatal: a missing version line is better than a broken bar.
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+
   return (
     <div className="flex shrink-0 items-center gap-3 border-t border-[#30363d] bg-[#0d1117] px-4 py-1.5 text-xs text-[#8b949e]">
       <span className="flex items-center gap-1.5">
@@ -85,6 +104,16 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
           ))}
         </select>
       </label>
+
+      {/* Beside the settings button rather than next to the poll state:
+          this is an identity, not a status, and it is what a user quotes
+          in a bug report. Rendered only once known, so the bar does not
+          flash a placeholder on every launch. */}
+      {version ? (
+        <span className="tabular-nums" title={`Headstate ${version}`}>
+          v{version}
+        </span>
+      ) : null}
 
       <button
         type="button"

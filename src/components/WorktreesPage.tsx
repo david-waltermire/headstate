@@ -9,6 +9,7 @@ import {
   formatSize,
   isPending,
   isSafe,
+  pathBasename,
   safetyReason,
   safetyTone,
   upstreamReason,
@@ -58,7 +59,7 @@ function Row({
   return (
     <div className="flex items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">
       <span className="min-w-0 flex-1 truncate font-mono text-[#e6edf3]">
-        {wt.path.split("/").pop()}
+        {pathBasename(wt.path)}
         {wt.branch ? (
           <span className="ml-2 text-xs text-[#8b949e]">{wt.branch}</span>
         ) : (
@@ -255,7 +256,7 @@ export function WorktreesPage() {
           onCancel={() => setPending(null)}
           onConfirm={() => {
             const target = pending;
-            const name = target.path.split("/").pop() ?? target.path;
+            const name = pathBasename(target.path);
             setPending(null);
             remove(selected?.path ?? "", target.path).then(
               () => toast.success(`Removed ${name}`),

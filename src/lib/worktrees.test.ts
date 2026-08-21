@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Safety } from "@/types/pr";
-import { formatSize, isSafe, safetyReason, safetyTone } from "./worktrees";
+import { formatSize, isSafe, pathBasename, safetyReason, safetyTone } from "./worktrees";
 
 describe("isSafe", () => {
   // Only `safe` is deletable. Everything else is disabled rather than
@@ -60,5 +60,32 @@ describe("formatSize", () => {
   it("shows a dash rather than claiming zero", () => {
     expect(formatSize(null)).toBe("—");
     expect(formatSize(0)).toBe("0 B");
+  });
+});
+
+describe("pathBasename", () => {
+  // The bug: split("/") returns the whole string unchanged on a Windows
+  // path, so every row would show the full path instead of the directory.
+  it("finds the last component of a Windows path", () => {
+    expect(pathBasename("C:\\Users\\me\\code\\proj-feature")).toBe("proj-feature");
+  });
+
+  it("finds the last component of a Unix path", () => {
+    expect(pathBasename("/Users/me/code/proj-feature")).toBe("proj-feature");
+  });
+
+  // Git on Windows often reports forward slashes even for Windows paths,
+  // so both must work regardless of which platform produced them.
+  it("handles a Windows drive with forward slashes", () => {
+    expect(pathBasename("C:/Users/me/code/proj")).toBe("proj");
+  });
+
+  it("ignores a trailing separator rather than returning empty", () => {
+    expect(pathBasename("/code/proj/")).toBe("proj");
+    expect(pathBasename("C:\\code\\proj\\")).toBe("proj");
+  });
+
+  it("returns the input when there is no separator at all", () => {
+    expect(pathBasename("proj")).toBe("proj");
   });
 });

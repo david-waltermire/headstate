@@ -7,6 +7,14 @@ const state = vi.hoisted(() => ({
 }));
 const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
 
+const version = vi.hoisted(() => ({ value: "2.0.2" as string | null }));
+vi.mock("@tauri-apps/api/app", () => ({
+  getVersion: () =>
+    version.value === null
+      ? Promise.reject(new Error("no tauri bridge"))
+      : Promise.resolve(version.value),
+}));
+
 vi.mock("../api/hooks", () => ({
   usePollState: () => state.current,
   usePollError: () => state.error,
@@ -109,6 +117,28 @@ describe("StatusBar", () => {
       unmount();
       state.current = "idle";
       state.error = null;
+    });
+  });
+
+  // The version is what a user quotes in a bug report, and the repo's own
+  // package.json reads 0.1.0 -- the release workflow stamps the real
+  // number at build time. So this must come from the built binary.
+  describe("version", () => {
+    it("shows the version the binary was built with", async () => {
+      version.value = "2.0.2";
+      render(<StatusBar updatedAt={Date.now()} />);
+      expect(await screen.findByText("v2.0.2")).toBeTruthy();
+    });
+
+    // A missing version line is better than a broken status bar: outside
+    // a Tauri window there is no bridge to ask.
+    it("stays quiet when the version cannot be read", async () => {
+      version.value = null;
+      const { unmount } = render(<StatusBar updatedAt={Date.now()} />);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText(/^v\d/)).toBeNull();
+      unmount();
+      version.value = "2.0.2";
     });
   });
 });
