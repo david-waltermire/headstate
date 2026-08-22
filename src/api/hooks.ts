@@ -18,6 +18,7 @@ import {
   classifyWorktrees,
   listWorktrees,
   removeWorktree,
+  removeWorktrees,
   sizeWorktrees,
   getReviewing,
   getStats,
@@ -403,6 +404,27 @@ export function useRemoveWorktree() {
       // The repo listing IS invalidated: it is cheap, and a repo that
       // just lost its last worktree should leave the sidebar.
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
+    });
+}
+
+/// Remove every safe worktree in a repo.
+///
+/// Drops the successful paths from the cache rather than invalidating,
+/// for the same reason a single removal does: re-classifying 146
+/// worktrees takes ~51s, and removing worktrees cannot change any other
+/// worktree's safety.
+export function useRemoveWorktrees() {
+  const qc = useQueryClient();
+  return (repoPath: string, worktreePaths: string[]) =>
+    removeWorktrees(repoPath, worktreePaths).then((outcomes) => {
+      const removed = new Set(
+        outcomes.filter((o) => o.error === null).map((o) => o.path),
+      );
+      qc.setQueryData<Worktree[]>(["worktree-safety", repoPath], (old) =>
+        old?.filter((w) => !removed.has(w.path)),
+      );
+      void qc.invalidateQueries({ queryKey: ["worktrees"] });
+      return outcomes;
     });
 }
 

@@ -17,4 +17,6 @@ mod scan;
 
 pub use assess::assess;
 pub use model::{Repo, Worktree};
-pub use scan::{classify_repo, remove_worktree, scan_dirs_fast, size_repo};
+pub use scan::{
+    classify_repo, remove_worktree, remove_worktrees, scan_dirs_fast, size_repo, RemovalOutcome,
+};

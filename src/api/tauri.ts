@@ -58,6 +58,18 @@ export const actOnPr = (
   action: PrActionName,
 ) => invoke<void>("act_on_pr", { id, repo, number, action });
 
+/// One worktree's outcome in a bulk removal. `error` is null on success.
+export interface RemovalOutcome {
+  path: string;
+  error: string | null;
+}
+
+/// Remove several worktrees, each safety-checked independently at delete
+/// time. Resolves with an outcome per worktree rather than throwing on
+/// the first refusal: partial failure is the normal case.
+export const removeWorktrees = (repoPath: string, worktreePaths: string[]) =>
+  invoke<RemovalOutcome[]>("remove_worktrees", { repoPath, worktreePaths });
+
 /// The clipboard payload for Claudify, plus whether Claude Code was
 /// found. `claude_installed` is advisory: the command is returned either
 /// way, since a user may paste it on another machine.

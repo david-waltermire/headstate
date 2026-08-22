@@ -29,10 +29,17 @@ vi.mock("../api/hooks", () => ({
   }),
   useWorktreeSafety: () => ({ data: state.classified, isLoading: state.classifying }),
   useRemoveWorktree: () => removeFn,
+  useRemoveWorktrees: () => removeManyFn,
   useWorktreeSizes: () => ({ data: state.sizes, isLoading: state.sizing }),
 }));
 
 const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+type Outcome = { path: string; error: string | null };
+const removeManyFn = vi.hoisted(() =>
+  vi.fn<(repo: string, paths: string[]) => Promise<Outcome[]>>((_r, paths) =>
+    Promise.resolve(paths.map((p) => ({ path: p, error: null }))),
+  ),
+);
 
 const claudify = vi.hoisted(() =>
   vi.fn(() =>
@@ -528,6 +535,87 @@ describe("WorktreesPage", () => {
       const body = document.body.textContent ?? "";
       expect(body).toContain("merged 2026-08-01");
       expect(body).toContain("3 months ago");
+    });
+  });
+
+  // 106 of 268 worktrees are safe on a real machine, mostly concentrated
+  // in a few repos. Clicking each adds no safety, only clicks.
+  describe("bulk removal", () => {
+    const threeSafe = () => [
+      wt({ path: "/code/a", safety: { kind: "safe" }, size_bytes: 1024 }),
+      wt({ path: "/code/b", safety: { kind: "safe" }, size_bytes: 2048 }),
+      wt({ path: "/code/c", safety: { kind: "never_pushed" } }),
+    ];
+
+    it("counts only the safe rows, in the label", () => {
+      state.classified = threeSafe();
+      render(<WorktreesPage />);
+      expect(screen.getByRole("button", { name: /remove 2 safe worktrees/i })).toBeTruthy();
+    });
+
+    it("lists every path in the confirmation, not just a count", () => {
+      state.classified = threeSafe();
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      const dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByText("/code/a")).toBeTruthy();
+      expect(within(dialog).getByText("/code/b")).toBeTruthy();
+      // The unsafe one must not be in the list at all.
+      expect(within(dialog).queryByText("/code/c")).toBeNull();
+      expect(removeManyFn).not.toHaveBeenCalled();
+    });
+
+    // Never unmerged, never_pushed, dirty, or unpushed -- regardless of
+    // what any assessment said. Bulk is for the provably-safe set only.
+    it("never submits a worktree that is not safe", async () => {
+      state.classified = threeSafe();
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /remove 2 worktrees/i }),
+      );
+      await waitFor(() => expect(removeManyFn).toHaveBeenCalled());
+      // Sorted by size for display, so compare the set rather than the
+      // order -- what matters is which worktrees were submitted.
+      expect([...removeManyFn.mock.calls[0][1]].sort()).toEqual(["/code/a", "/code/b"]);
+    });
+
+    // Partial failure is the normal case: safety is re-checked at delete
+    // time, so a worktree that went dirty since the scan is refused.
+    it("reports partial failure rather than a bare success", async () => {
+      removeManyFn.mockResolvedValueOnce([
+        { path: "/code/a", error: null },
+        { path: "/code/b", error: "not safe to remove: 2 uncommitted files" },
+      ]);
+      state.classified = threeSafe();
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /remove 2 worktrees/i }),
+      );
+
+      await waitFor(() => expect(toastError).toHaveBeenCalled());
+      expect(toastSuccess).not.toHaveBeenCalled();
+      const [title, opts] = toastError.mock.calls[0] as [string, { description: string }];
+      expect(title).toMatch(/1 of 2/);
+      expect(opts.description).toContain("uncommitted");
+    });
+
+    it("does not offer the button while rows are still being classified", () => {
+      state.classified = threeSafe();
+      state.classifying = true;
+      const r = render(<WorktreesPage />);
+      expect(screen.queryByRole("button", { name: /remove 2 safe/i })).toBeNull();
+      r.unmount();
+      state.classifying = false;
+    });
+
+    // One safe row is a single click already; a bulk affordance for it
+    // is noise.
+    it("does not offer the button for a single safe worktree", () => {
+      state.classified = [wt({ safety: { kind: "safe" } })];
+      render(<WorktreesPage />);
+      expect(screen.queryByRole("button", { name: /safe worktree/i })).toBeNull();
     });
   });
 });

@@ -1172,6 +1172,44 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
         assert_eq!(key, key.to_lowercase(), "key must be case-folded: {key}");
     }
 
+    /// Bulk removal must re-check safety PER worktree, not once for the
+    /// batch. A bulk button that evaluates safety once and then deletes
+    /// N directories is a different, much more dangerous thing.
+    #[test]
+    fn bulk_removal_refuses_anything_not_provably_safe() {
+        let (_t, repo, wt) = squash_merged_fixture(false);
+        let repo_s = repo.to_str().unwrap();
+
+        // The fixture's branch is genuinely unmerged, so a bulk call
+        // naming it must refuse rather than delete.
+        let outcomes = remove_worktrees(repo_s, &[wt.to_string_lossy().into_owned()]);
+        assert_eq!(outcomes.len(), 1);
+        assert!(
+            outcomes[0].error.is_some(),
+            "an unmerged worktree must not be removed in bulk"
+        );
+        assert!(wt.is_dir(), "the directory must still exist");
+    }
+
+    /// One refusal must not abort the rest: partial failure is the normal
+    /// case, since safety is re-checked at delete time and a worktree may
+    /// have gone dirty since the scan.
+    #[test]
+    fn one_refusal_does_not_stop_the_batch() {
+        let (_t, repo, wt) = squash_merged_fixture(false);
+        let repo_s = repo.to_str().unwrap();
+
+        let outcomes = remove_worktrees(
+            repo_s,
+            &[
+                "/nonexistent/path".to_string(),
+                wt.to_string_lossy().into_owned(),
+            ],
+        );
+        assert_eq!(outcomes.len(), 2, "every input must get an outcome");
+        assert!(outcomes.iter().all(|o| o.error.is_some()));
+    }
+
     /// Every row needs ahead/behind now, not just the main checkout.
     ///
     /// That restriction made sense when a row's only action was Remove:
@@ -1471,6 +1509,40 @@ mod live {
 
 /// Remove a worktree, refusing anything not provably safe.
 ///
+/// One worktree's outcome in a bulk removal.
+///
+/// Every input gets an outcome. Partial failure is the normal case here,
+/// not the exception: safety is re-checked at delete time, so a worktree
+/// that went dirty since the scan is refused mid-batch, and a single
+/// verdict would hide that.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct RemovalOutcome {
+    pub path: String,
+    pub error: Option<String>,
+}
+
+/// Remove several worktrees, reporting each independently.
+///
+/// Deliberately a loop over `remove_worktree` rather than a bulk git
+/// call: that keeps the per-worktree safety gate exactly as it is. A
+/// bulk path that evaluated safety once and then deleted N directories
+/// would be a different and much more dangerous thing than N safe
+/// deletions.
+///
+/// Sequential rather than concurrent. `git worktree remove` mutates the
+/// repository's administrative files, so parallel removals in one repo
+/// contend on the same lock -- and at a few hundred milliseconds each
+/// the wall-clock saving would not repay the risk of interleaved writes.
+pub fn remove_worktrees(repo_path: &str, worktree_paths: &[String]) -> Vec<RemovalOutcome> {
+    worktree_paths
+        .iter()
+        .map(|p| RemovalOutcome {
+            path: p.clone(),
+            error: remove_worktree(repo_path, p).err(),
+        })
+        .collect()
+}
+
 /// A path reduced to something two spellings of the same location share.
 ///
 /// Three platform differences all land on this one comparison, and it

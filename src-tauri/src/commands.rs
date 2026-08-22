@@ -363,6 +363,27 @@ pub fn default_worktree_dirs() -> Vec<String> {
 /// Non-existent paths are rejected rather than stored: a typo should fail
 /// visibly here, not silently produce an empty worktrees view later.
 #[tauri::command]
+/// Remove several worktrees, reporting each one's outcome.
+///
+/// The per-worktree safety gate is unchanged: this is N safe deletions,
+/// not one bulk deletion. Each is re-checked at delete time, so a
+/// worktree that went dirty since the scan is refused while the rest
+/// proceed.
+pub async fn remove_worktrees(
+    repo_path: String,
+    worktree_paths: Vec<String>,
+) -> Result<Vec<crate::worktrees::RemovalOutcome>, String> {
+    let outcomes = crate::worktrees::remove_worktrees(&repo_path, &worktree_paths);
+    let failed = outcomes.iter().filter(|o| o.error.is_some()).count();
+    log::info!(
+        "bulk removal: {} of {} removed",
+        outcomes.len() - failed,
+        outcomes.len()
+    );
+    Ok(outcomes)
+}
+
+#[tauri::command]
 /// The shell command that hands a worktree to Claude Code.
 ///
 /// Returns text for the clipboard rather than spawning anything.

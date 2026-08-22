@@ -2,6 +2,7 @@ import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import {
   useRemoveWorktree,
+  useRemoveWorktrees,
   useWorktreeSafety,
   useWorktreeSizes,
   useWorktrees,
@@ -245,6 +246,9 @@ export function WorktreesPage() {
   /// The path currently being removed, or null. A path rather than a
   /// boolean so only the clicked row goes busy.
   const [removing, setRemoving] = useState<string | null>(null);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const removeMany = useRemoveWorktrees();
 
   if (isLoading) {
     return (
@@ -309,6 +313,23 @@ export function WorktreesPage() {
         {!classifying && sizing ? (
           <span className="text-xs text-[#8b949e]">measuring sizes…</span>
         ) : null}
+        {/* The count is in the label, so the scope is legible before
+            clicking rather than only in the dialog. 106 of 268 worktrees
+            are safe on a real machine, mostly in a few repos -- clicking
+            those one at a time adds no safety, only clicks. */}
+        {safeCount > 1 && !classifying ? (
+          <button
+            type="button"
+            disabled={bulkBusy}
+            onClick={() => setBulkOpen(true)}
+            className="rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10 disabled:opacity-50"
+          >
+            {bulkBusy
+              ? "Removing…"
+              : `Remove ${safeCount} safe worktree${safeCount === 1 ? "" : "s"}`}
+          </button>
+        ) : null}
+
         <button
           type="button"
           onClick={() => setFilter("repo", undefined)}
@@ -350,6 +371,83 @@ export function WorktreesPage() {
             );
           }}
         />
+      ) : null}
+
+      {bulkOpen ? (
+        <Dialog open onOpenChange={(o) => !o && setBulkOpen(false)}>
+          <DialogContent className="max-w-2xl">
+            <DialogTitle>
+              Remove {safeCount} safe worktree{safeCount === 1 ? "" : "s"}?
+            </DialogTitle>
+            <p className="mt-2 text-sm text-[#8b949e]">
+              {/* Sizes are already computed, and reclaimed space is the
+                  number that makes this decision -- it is why the view
+                  exists. */}
+              Reclaims {formatSize(
+                shown
+                  .filter((w) => isSafe(w.safety))
+                  .reduce((n, w) => n + (w.size_bytes ?? 0), 0) || null,
+              )}
+              . Each is re-checked before deletion, so anything that changed
+              since the scan is skipped.
+            </p>
+            {/* Every path, not a count: these are directories on disk. */}
+            <ul className="mt-3 max-h-64 overflow-y-auto font-mono text-xs text-[#8b949e]">
+              {shown
+                .filter((w) => isSafe(w.safety))
+                .map((w) => (
+                  <li key={w.path} className="py-0.5">
+                    {w.path}
+                  </li>
+                ))}
+            </ul>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setBulkOpen(false)}
+                className="rounded border border-[#30363d] px-3 py-1.5 text-sm hover:bg-[#21262d]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const targets = shown.filter((w) => isSafe(w.safety)).map((w) => w.path);
+                  setBulkOpen(false);
+                  setBulkBusy(true);
+                  removeMany(selected?.path ?? "", targets).then(
+                    (outcomes) => {
+                      setBulkBusy(false);
+                      const failed = outcomes.filter((o) => o.error !== null);
+                      const ok = outcomes.length - failed.length;
+                      // Never a bare "done": a worktree that went dirty
+                      // since the scan is refused, and hiding that would
+                      // misreport what is still on disk.
+                      if (failed.length === 0) {
+                        toast.success(`Removed ${ok} worktree${ok === 1 ? "" : "s"}`);
+                      } else {
+                        toast.error(`${failed.length} of ${outcomes.length} could not be removed`, {
+                          description: failed
+                            .map((f) => `${pathBasename(f.path)}: ${f.error}`)
+                            .join("\n"),
+                        });
+                      }
+                    },
+                    (e: unknown) => {
+                      setBulkBusy(false);
+                      toast.error("The bulk removal could not run", {
+                        description: typeof e === "string" ? e : undefined,
+                      });
+                    },
+                  );
+                }}
+                className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149]"
+              >
+                Remove {safeCount} worktree{safeCount === 1 ? "" : "s"}
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
       ) : null}
 
       <div className="rounded-md border border-[#30363d]">
