@@ -354,9 +354,8 @@ pub fn get_worktree_dirs(app: AppHandle) -> Vec<String> {
 /// Returning a path that does not exist would make the worktrees view
 /// report "no repos found" for a directory the user never chose.
 pub fn default_worktree_dirs() -> Vec<String> {
-    std::env::var("HOME")
-        .ok()
-        .map(|h| std::path::PathBuf::from(h).join("code"))
+    crate::auth::home_dir()
+        .map(|h| h.join("code"))
         .filter(|p| p.is_dir())
         .map(|p| vec![p.to_string_lossy().into_owned()])
         .unwrap_or_default()

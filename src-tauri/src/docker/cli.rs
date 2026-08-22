@@ -132,12 +132,23 @@ pub fn state() -> DockerState {
         // answered but the daemon did not.
         Ok(_) => DockerState::NotRunning,
         Err(e) if is_daemon_down(&e) => DockerState::NotRunning,
+        // The single most common Linux Docker failure: the user is not in
+        // the `docker` group. It used to fall through to Unknown, which
+        // the UI rendered as "not running" with a Start button that
+        // cannot help -- and the actionable fix was never surfaced.
+        Err(e) if is_permission_denied(&e) => DockerState::PermissionDenied,
         Err(e) => DockerState::Unknown(e),
     }
 }
 
 /// Whether an error means "the daemon is not up" rather than something
 /// the user should chase.
+/// Whether the daemon refused us rather than being absent.
+fn is_permission_denied(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("permission denied") && e.contains("docker")
+}
+
 fn is_daemon_down(err: &str) -> bool {
     let e = err.to_ascii_lowercase();
     e.contains("cannot connect to the docker daemon")
@@ -240,6 +251,18 @@ mod tests {
         ] {
             assert!(!is_daemon_down(msg), "should not be a down-daemon: {msg}");
         }
+    }
+
+    /// The most common Linux failure gets its own state, because its fix
+    /// -- joining the docker group -- is nothing like "start Docker".
+    #[test]
+    fn a_permissions_failure_is_its_own_state() {
+        assert!(is_permission_denied(
+            "permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock"
+        ));
+        // Not every permission error is Docker's.
+        assert!(!is_permission_denied("permission denied: /etc/shadow"));
+        assert!(!is_permission_denied("invalid reference format"));
     }
 }
 

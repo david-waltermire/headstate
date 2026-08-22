@@ -386,6 +386,28 @@ async fn graphql_partial_ok(
     let data = raw.get("data").filter(|d| !d.is_null());
 
     match (data, errors) {
+        (Some(d), Some(errs)) if !errs.is_empty() => {
+            // Keeping `data` is right -- one repository's failed resolver
+            // must not blank the whole list. Throwing the errors away was
+            // not: this is exactly the shape of a FORBIDDEN or SAML-SSO
+            // problem (HTTP 200, partial data, an org silently missing),
+            // and the result was a short list under a green "Up to date"
+            // with nothing in the log either.
+            //
+            // Logged by TYPE and count, never by repository name: this is
+            // a public repo and the privacy rule applies to logs too.
+            let types: Vec<&str> = errs
+                .iter()
+                .filter_map(|e| e.get("type").and_then(|t| t.as_str()))
+                .collect();
+            log::warn!(
+                "GraphQL returned {} error(s) alongside usable data; \
+                 some results may be missing. Types: {:?}",
+                errs.len(),
+                types
+            );
+            Ok(d.clone())
+        }
         (Some(d), _) => Ok(d.clone()),
         (None, Some(errs)) if !errs.is_empty() => {
             let msg = errs
@@ -631,6 +653,40 @@ mod tests {
         let prs = client_for(&server).await.fetch_prs().await.unwrap();
         assert_eq!(prs.len(), 3, "a partial success must not blank the list");
         assert_eq!(prs[0].number, 42);
+    }
+
+    /// A partial success keeps its data AND surfaces the errors.
+    ///
+    /// This is the FORBIDDEN / SAML-SSO shape: HTTP 200, `data` present,
+    /// some nodes null, and an `errors` array. Keeping the data is
+    /// correct; discarding the errors meant an org's pull requests went
+    /// missing under a green "Up to date", with nothing in the log
+    /// either -- the one failure that was completely invisible.
+    #[tokio::test]
+    async fn partial_success_keeps_data_and_does_not_hide_the_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "authored": { "nodes": [] } },
+                "errors": [{
+                    "type": "FORBIDDEN",
+                    "message": "Resource not accessible by personal access token"
+                }]
+            })))
+            .mount(&server)
+            .await;
+
+        let octo = octocrab::Octocrab::builder()
+            .base_uri(server.uri())
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let out = graphql_partial_ok(&octo, &serde_json::json!({"query": "{ x }"}))
+            .await
+            .expect("partial data must still be returned");
+        assert!(out.get("authored").is_some(), "the usable data survives");
     }
 
     /// Errors are still fatal when nothing usable came back, and the

@@ -157,6 +157,19 @@ export function DockerPage() {
     // permission-denied socket, a broken context -- and used to fall
     // into the "not running" branch, discarding the detail and offering
     // a Start button that cannot help because Docker is already running.
+    // Its fix is nothing like "start Docker", so it gets its own screen
+    // rather than a Start button that cannot help.
+    if (state.kind === "permission_denied") {
+      return (
+        <div className="rounded-md border border-[#30363d] px-4 py-12 text-center">
+          <p className="text-sm font-semibold text-[#e6edf3]">Docker refused the connection</p>
+          <p className="mx-auto mt-2 max-w-md text-sm text-[#8b949e]">
+            Your user is probably not in the <code>docker</code> group. Run{" "}
+            <code>sudo usermod -aG docker $USER</code>, then log out and back in.
+          </p>
+        </div>
+      );
+    }
     if (state.kind === "unknown") {
       return (
         <div className="rounded-md border border-[#30363d] px-4 py-12 text-center">

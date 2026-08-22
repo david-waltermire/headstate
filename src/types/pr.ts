@@ -284,6 +284,7 @@ export interface DockerDiskUsage {
 export type DockerState =
   | { kind: "running" }
   | { kind: "not_running" }
+  | { kind: "permission_denied" }
   | { kind: "not_installed" }
   | { kind: "unknown"; detail: string };
 

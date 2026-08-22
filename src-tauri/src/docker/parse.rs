@@ -73,10 +73,21 @@ fn parse_created(s: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    // Drop the trailing zone abbreviation, which chrono cannot parse and
-    // which duplicates the numeric offset immediately before it.
+    // Try the string as-is FIRST. Docker prints a trailing zone
+    // abbreviation on a machine with a zone database -- "2026-08-21
+    // 21:39:15 -0400 EDT" -- but with TZ=UTC or on a minimal Linux
+    // install or container it emits "... +0000" with none. Stripping the
+    // last token unconditionally then removed the OFFSET, parsing failed,
+    // and an empty date broke the sort that drives supersession, which
+    // decides what gets deleted.
+    if let Ok(d) = chrono::DateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S %z") {
+        return d.to_rfc3339();
+    }
+    // Only then drop a trailing ALPHABETIC token, which is what a zone
+    // abbreviation looks like. A numeric offset is never stripped.
     let without_abbrev = trimmed
         .rsplit_once(' ')
+        .filter(|(_, tail)| !tail.is_empty() && tail.chars().all(char::is_alphabetic))
         .map(|(head, _)| head)
         .unwrap_or(trimmed);
     chrono::DateTime::parse_from_str(without_abbrev, "%Y-%m-%d %H:%M:%S %z")
@@ -218,6 +229,24 @@ mod tests {
                 "not RFC 3339: {:?} for {:?}",
                 img.created,
                 img.tags
+            );
+        }
+    }
+
+    /// Docker omits the zone abbreviation with TZ=UTC or on a minimal
+    /// install. Stripping the last token unconditionally then removed the
+    /// OFFSET, and an empty date breaks the sort that drives supersession.
+    #[test]
+    fn created_parses_with_and_without_a_zone_abbreviation() {
+        let with = r#"{"ID":"a","Repository":"r","Tag":"t","CreatedAt":"2026-08-21 21:39:15 -0400 EDT","Size":"1GB"}"#;
+        let without = r#"{"ID":"b","Repository":"r","Tag":"t","CreatedAt":"2026-08-21 21:39:15 +0000","Size":"1GB"}"#;
+        for (label, line) in [("with abbrev", with), ("without abbrev", without)] {
+            let imgs = images(line);
+            assert_eq!(imgs.len(), 1, "{label}");
+            assert!(
+                imgs[0].created.starts_with("2026-08-21"),
+                "{label}: got {:?}",
+                imgs[0].created
             );
         }
     }

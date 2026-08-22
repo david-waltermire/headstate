@@ -112,6 +112,10 @@ pub enum DockerState {
     Running,
     /// The CLI exists but the daemon is not up.
     NotRunning,
+    /// The daemon is there and refused us -- on Linux, almost always
+    /// because the user is not in the `docker` group. A distinct state
+    /// because its fix is nothing like "start Docker".
+    PermissionDenied,
     /// No `docker` binary was found.
     NotInstalled,
     /// Something else went wrong; carries the message.

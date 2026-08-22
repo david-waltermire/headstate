@@ -63,6 +63,20 @@ fn searched_locations() -> String {
 /// winget and Scoop install under the user's profile, so the path depends
 /// on who is logged in. Empty on non-Windows, where the constants above
 /// already cover the realistic locations.
+/// The user's home directory.
+///
+/// Windows sets `USERPROFILE`, not `HOME` -- only Git-Bash and MSYS
+/// shells set the latter, and a GUI-launched app is not started from
+/// one. Extracted so the two callers cannot drift: `default_worktree_dirs`
+/// read `HOME` unconditionally, which left a first-run Windows user with
+/// an empty worktrees view AND cost the Docker page its provenance,
+/// since image origins resolve against those same directories.
+pub fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .ok()
+        .map(std::path::PathBuf::from)
+}
+
 fn user_fallback_dirs() -> Vec<String> {
     if !cfg!(windows) {
         return Vec::new();
@@ -139,7 +153,8 @@ const GH_FALLBACK_DIRS: &[&str] = &[
 /// `command not found` after pasting.
 fn claude_fallback_dirs() -> Vec<String> {
     let mut dirs = Vec::new();
-    if let Ok(home) = std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" }) {
+    if let Some(home) = home_dir() {
+        let home = home.to_string_lossy();
         dirs.push(format!("{home}/.local/bin"));
         dirs.push(format!("{home}/.claude/local"));
         if cfg!(windows) {

@@ -130,12 +130,40 @@ pub fn parse_reclaimed(out: &str) -> u64 {
 /// image, and if the graceful restart fails, saying so is more useful
 /// than escalating automatically.
 pub fn restart_engine() -> Result<(), String> {
-    docker(&["desktop", "restart"]).map(|_| ())
+    engine_command("restart")
+}
+
+/// Whether `docker desktop` exists on this machine.
+///
+/// It is a Docker DESKTOP CLI plugin, not part of the Docker CLI. On
+/// Linux, Docker is overwhelmingly the docker-ce daemon under systemd
+/// with no `desktop` subcommand at all -- so the one platform where a
+/// stopped daemon is most common is the one where the button could not
+/// work. The original comment claimed the subcommand was "verified
+/// present"; it was verified on macOS.
+pub fn has_desktop_cli() -> bool {
+    docker(&["desktop", "status"]).is_ok()
+}
+
+/// Start or restart the engine, however this machine runs it.
+fn engine_command(action: &str) -> Result<(), String> {
+    if has_desktop_cli() {
+        return docker(&["desktop", action]).map(|_| ());
+    }
+
+    // No Desktop CLI. Rather than firing a command that cannot work,
+    // say what to run -- the user knows their own init system better
+    // than a guess would, and a wrong `sudo systemctl` is worse than a
+    // sentence.
+    Err(format!(
+        "Docker Desktop's CLI is not available on this machine. \
+         To {action} the daemon, run: sudo systemctl {action} docker"
+    ))
 }
 
 /// Start a stopped engine.
 pub fn start_engine() -> Result<(), String> {
-    docker(&["desktop", "start"]).map(|_| ())
+    engine_command("start")
 }
 
 /// Containers currently running, so a restart can name what it will stop.
