@@ -143,12 +143,21 @@ pub struct Worktree {
     pub safety: Safety,
     /// True for the repository's own checkout.
     pub is_main: bool,
-    /// How this checkout stands against its upstream. Only computed for
-    /// the main checkout today -- the other rows already answer the
-    /// question that matters for them (may I delete this?), and one git
-    /// call per worktree for a question nobody asked is not worth the
-    /// scan time.
+    /// How this checkout stands against its upstream.
+    ///
+    /// Computed for EVERY worktree, not just the main checkout. That
+    /// restriction was right when a row's only action was Remove and the
+    /// safety verdict answered the only question; Claudify changed it,
+    /// and "3 commits ahead" is the evidence for whether there is
+    /// anything worth keeping.
     pub upstream: Option<Upstream>,
+    /// RFC 3339 timestamp of the branch tip's own commit.
+    ///
+    /// NOT `merged_at`, which is when the work reached the default
+    /// branch. A branch written in March and merged in August has both,
+    /// and they answer different questions: this one says how stale the
+    /// work is, that one says whether it is already accounted for.
+    pub last_commit: Option<String>,
     /// `YYYY-MM-DD` when this branch landed in the default branch.
     ///
     /// The date the work reached the default branch, NOT the branch tip's

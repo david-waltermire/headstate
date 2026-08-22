@@ -193,9 +193,11 @@ export interface Worktree {
   /// the branch tip's own commit date -- those diverge for a branch
   /// written weeks before it merged.
   merged_at: string | null;
-  /// Only populated for the main checkout: the other rows already answer
-  /// the question that matters for them (may I delete this?).
+  /// How this checkout stands against its upstream, for every row.
   upstream: Upstream | null;
+  /// RFC 3339 timestamp of the branch tip's own commit. Not `merged_at`,
+  /// which is when the work reached the default branch.
+  last_commit: string | null;
 }
 
 export interface WorktreeRepo {

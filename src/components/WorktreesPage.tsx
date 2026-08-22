@@ -15,9 +15,11 @@ import {
   safetyReason,
   safetyTone,
   upstreamReason,
+  upstreamShort,
   upstreamTone,
 } from "../lib/worktrees";
 import { claudifyCommand } from "../api/tauri";
+import { relativeTime } from "../lib/time";
 import { useActiveFilters, useFilters } from "../store/filters";
 import type { Worktree } from "../types/pr";
 import { toast } from "sonner";
@@ -91,11 +93,25 @@ function Row({
         {/* The main checkout's row said only what it was, while every
             other row earned its space. "Behind by 40" is also what
             explains why the worktrees below it are stale. */}
-        {wt.upstream ? (
+        {/* The main checkout gets the long prose -- it is the only thing
+            that line says. Every other row gets the compact arrow form,
+            since it already carries name, branch, safety, and size. */}
+        {wt.upstream && wt.is_main ? (
           <span className={upstreamTone(wt.upstream)}>
             {" · "}
             {upstreamReason(wt.upstream)}
           </span>
+        ) : null}
+        {wt.upstream && !wt.is_main && upstreamShort(wt.upstream) ? (
+          <span className={upstreamTone(wt.upstream)}>
+            {" · "}
+            {upstreamShort(wt.upstream)}
+          </span>
+        ) : null}
+        {/* How stale the work is -- distinct from merged_at, which says
+            whether it is already accounted for. */}
+        {wt.last_commit && !wt.is_main ? (
+          <span className="text-[#8b949e]"> · {relativeTime(wt.last_commit)}</span>
         ) : null}
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums text-xs text-[#8b949e]">

@@ -307,12 +307,16 @@ pub fn size_repo(repo_path: &str) -> Vec<(String, u64)> {
 /// merge date to one silently left the other behind.
 fn classify(w: &mut Worktree, repo: &Path, default_branch: &str) {
     w.safety = worktree_safety(w, default_branch);
-    // Only the main checkout: the other rows are answering "may I delete
-    // this?", and an extra git call each for a question nobody asked
-    // would cost scan time for nothing.
-    if w.is_main {
-        w.upstream = Some(upstream_state(Path::new(&w.path)));
-    }
+    // Every row, not just the main checkout. Measured cost: two extra
+    // git calls per worktree, ~4.5s across the 146-worktree repo -- and
+    // rows already stream in progressively, so this fills in per row
+    // rather than blocking the page.
+    let dir = Path::new(&w.path);
+    w.upstream = Some(upstream_state(dir));
+    w.last_commit = git(dir, &["log", "-1", "--format=%cI"])
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     // Only for merged branches: an extra git call, and the date is
     // meaningless for anything else. 283 of 296 here are not merged.
     if w.safety.is_safe() {
@@ -1166,6 +1170,42 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
             "UNC prefix must be stripped: {key}"
         );
         assert_eq!(key, key.to_lowercase(), "key must be case-folded: {key}");
+    }
+
+    /// Every row needs ahead/behind now, not just the main checkout.
+    ///
+    /// That restriction made sense when a row's only action was Remove:
+    /// the safety verdict answered the only question. Claudify (#198)
+    /// changed it -- the row now also answers "is there anything worth
+    /// keeping in here?", and how much work is in the branch is that
+    /// question's evidence.
+    #[test]
+    fn every_worktree_gets_its_upstream_state() {
+        let (_t, repo, _wt) = squash_merged_fixture(false);
+        let wts = classify_repo(repo.to_str().unwrap());
+
+        for w in &wts {
+            assert!(w.upstream.is_some(), "{} has no upstream state", w.path);
+        }
+    }
+
+    /// The branch tip's own commit date, which is NOT the merge date.
+    /// A branch written in March and merged in August has both, and they
+    /// answer different questions.
+    #[test]
+    fn every_worktree_carries_its_last_commit_date() {
+        let (_t, repo, _wt) = squash_merged_fixture(false);
+        let wts = classify_repo(repo.to_str().unwrap());
+
+        for w in &wts {
+            let d = w
+                .last_commit
+                .as_ref()
+                .unwrap_or_else(|| panic!("{} has no last commit date", w.path));
+            // RFC 3339, so the UI can render it relatively.
+            assert!(d.starts_with("20"), "not a date: {d}");
+            assert!(d.contains('T'), "not RFC 3339: {d}");
+        }
     }
 
     /// The bug this fixes. A squash-merged branch is fully merged, but

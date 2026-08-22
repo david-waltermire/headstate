@@ -103,6 +103,32 @@ export function upstreamReason(u: Upstream): string {
   }
 }
 
+/// A compact ahead/behind for a dense worktree row.
+///
+/// The long form ("3 commits behind upstream (as of last fetch)") is
+/// right for the main checkout's own line, where it is the only thing
+/// said. A row already carries name, branch, safety, date, and size, so
+/// this is the arrow notation git users already read.
+///
+/// Returns null when there is nothing worth saying: an up-to-date branch
+/// adds noise, not information.
+export function upstreamShort(u: Upstream): string | null {
+  switch (u.kind) {
+    case "ahead":
+      return `↑${u.n}`;
+    case "behind":
+      return `↓${u.n}`;
+    case "diverged":
+      return `↑${u.n[0]} ↓${u.n[1]}`;
+    // Local-only is worth saying: it is the difference between "this is
+    // redundant" and "this is the only copy".
+    case "untracked":
+      return "local only";
+    default:
+      return null;
+  }
+}
+
 /// Tailwind colour for an upstream state.
 ///
 /// Green only for genuinely current. Amber where action might be wanted,

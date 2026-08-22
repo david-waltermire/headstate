@@ -248,6 +248,7 @@ describe("useRemoveWorktree", () => {
     is_main: false,
     merged_at: null,
     upstream: null,
+    last_commit: null,
   });
 
   /// Re-classifying after a removal costs ~0.35s per worktree,

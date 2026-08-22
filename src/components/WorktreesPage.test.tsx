@@ -52,6 +52,7 @@ const wt = (over: Partial<Worktree>): Worktree => ({
   is_main: false,
   merged_at: null,
   upstream: null,
+  last_commit: null,
   ...over,
 });
 
@@ -472,6 +473,61 @@ describe("WorktreesPage", () => {
       expect((others[0] as HTMLButtonElement).disabled).toBe(false);
 
       release();
+    });
+  });
+
+  // How much work is in a branch and how stale it is are the two facts
+  // that decide what to do with a worktree you do not recognise.
+  describe("row facts", () => {
+    it("shows ahead and behind compactly", () => {
+      state.classified = [
+        wt({ path: "/code/a", upstream: { kind: "ahead", n: 3 } }),
+        wt({ path: "/code/b", upstream: { kind: "behind", n: 7 } }),
+        wt({ path: "/code/c", upstream: { kind: "diverged", n: [2, 5] } }),
+      ];
+      render(<WorktreesPage />);
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("↑3");
+      expect(text).toContain("↓7");
+      expect(text).toContain("↑2 ↓5");
+    });
+
+    // The difference between "this is redundant" and "this is the only
+    // copy" is worth a word, where "up to date" is just noise.
+    it("names a local-only branch but stays quiet when up to date", () => {
+      state.classified = [wt({ upstream: { kind: "untracked" } })];
+      const r = render(<WorktreesPage />);
+      expect(document.body.textContent).toContain("local only");
+      r.unmount();
+
+      state.classified = [wt({ upstream: { kind: "current" } })];
+      render(<WorktreesPage />);
+      expect(document.body.textContent).not.toContain("up to date");
+    });
+
+    it("shows how stale the work is, relatively", () => {
+      // relativeTime has no weeks tier -- days up to 30, then months.
+      const twoWeeks = new Date(Date.now() - 14 * 864e5).toISOString();
+      state.classified = [wt({ last_commit: twoWeeks })];
+      render(<WorktreesPage />);
+      expect(document.body.textContent).toContain("14 days ago");
+    });
+
+    // merged_at says whether the work is accounted for; last_commit says
+    // how old it is. A branch written in March and merged in August has
+    // both, and showing one for the other misleads.
+    it("does not confuse the last commit date with the merge date", () => {
+      state.classified = [
+        wt({
+          safety: { kind: "safe" },
+          merged_at: "2026-08-01",
+          last_commit: new Date(Date.now() - 90 * 864e5).toISOString(),
+        }),
+      ];
+      render(<WorktreesPage />);
+      const body = document.body.textContent ?? "";
+      expect(body).toContain("merged 2026-08-01");
+      expect(body).toContain("3 months ago");
     });
   });
 });
