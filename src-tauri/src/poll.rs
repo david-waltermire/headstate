@@ -306,6 +306,27 @@ pub struct PollInterval(pub Arc<AtomicU64>);
 /// polling lives in Rust at all.
 pub struct ViewNeedsGithub(pub Arc<AtomicBool>);
 
+/// How many consecutive transient failures before the banner appears.
+///
+/// Measured on a real log: 5 of 164 polls failed with a transport error
+/// and every one recovered on the very next tick. One blip is weather;
+/// two in a row is a problem worth naming.
+///
+/// Deliberately small. This delays a real outage's banner by one poll,
+/// which is a fair price for not alarming a user about something that
+/// fixed itself before they finished reading it.
+const FAILURES_BEFORE_BANNER: u32 = 2;
+
+/// Whether a failure is worth interrupting the user for.
+///
+/// Actionable failures -- a dead token, an exhausted rate limit, a
+/// malformed query -- surface immediately, because the next tick will
+/// fail identically and waiting cannot help. Transient ones wait for a
+/// second opinion.
+fn should_surface(e: &ClientError, consecutive: u32) -> bool {
+    !e.is_transient() || consecutive >= FAILURES_BEFORE_BANNER
+}
+
 pub fn spawn(
     app: AppHandle,
     client: Arc<GitHubClient>,
@@ -316,6 +337,10 @@ pub fn spawn(
 ) {
     tauri::async_runtime::spawn(async move {
         let mut previous: Vec<PullRequest> = Vec::new();
+        // Consecutive failures, reset by any success. Transient failures
+        // are not surfaced until this crosses the threshold -- see
+        // `should_surface`.
+        let mut consecutive_failures: u32 = 0;
         loop {
             // `timeout` collapses a hang into the Err arm the loop already
             // handles, so a wedged request costs one tick instead of the
@@ -354,6 +379,7 @@ pub fn spawn(
                         prs.len(),
                         needs_attention_count(&prs)
                     );
+                    consecutive_failures = 0;
                     persist_and_emit(&app, &prs);
                     if has_checking(&prs) {
                         spawn_recheck(app.clone(), client.clone(), prs);
@@ -363,8 +389,16 @@ pub fn spawn(
                 // than blanking the UI; the next tick retries.
                 Err(e) => {
                     log::warn!("poll failed: {e}");
-                    if let Err(emit_err) = app.emit("poll-error", e.to_string()) {
-                        log::warn!("failed to emit poll-error: {emit_err}");
+                    consecutive_failures += 1;
+                    if should_surface(&e, consecutive_failures) {
+                        if let Err(emit_err) = app.emit("poll-error", e.to_string()) {
+                            log::warn!("failed to emit poll-error: {emit_err}");
+                        }
+                    } else {
+                        log::info!(
+                            "not surfacing a transient failure ({consecutive_failures} in a row); \
+                             the next tick should recover"
+                        );
                     }
                 }
             }
@@ -396,6 +430,79 @@ pub fn spawn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The reported bug. A single transport blip painted a red banner
+    /// that stayed for a full poll interval -- for something that fixed
+    /// itself on the next tick.
+    ///
+    /// Real numbers from the log that prompted this: 5 failures in 164
+    /// polls, every one followed immediately by a success.
+    #[test]
+    fn one_transient_failure_does_not_surface() {
+        let e = ClientError::Timeout(90);
+        assert!(e.is_transient());
+        assert!(!should_surface(&e, 1), "one blip must stay quiet");
+    }
+
+    /// But a real outage must not be hidden. Two in a row stops being
+    /// weather.
+    #[test]
+    fn repeated_transient_failures_do_surface() {
+        let e = ClientError::Timeout(90);
+        assert!(should_surface(&e, FAILURES_BEFORE_BANNER));
+        assert!(should_surface(&e, FAILURES_BEFORE_BANNER + 5));
+    }
+
+    /// Waiting cannot fix a rate limit or a malformed query, so those
+    /// surface on the first failure -- the next tick fails identically.
+    #[test]
+    fn actionable_failures_surface_immediately() {
+        for e in [
+            ClientError::RateLimited("resets in 12m".into()),
+            ClientError::Graphql("field 'nope' does not exist".into()),
+            ClientError::Join("task panicked".into()),
+        ] {
+            assert!(!e.is_transient(), "{e} should not be transient");
+            assert!(
+                should_surface(&e, 1),
+                "{e} must surface on the first failure"
+            );
+        }
+    }
+
+    /// The counter must reset on success, or a machine that blips once
+    /// an hour would eventually cross the threshold and show a banner
+    /// for a network that is fine. Models the loop's own sequence, since
+    /// the counter lives in a spawned task the tests cannot reach.
+    #[test]
+    fn a_success_resets_the_failure_count() {
+        let e = ClientError::Timeout(90);
+        let mut consecutive: u32 = 0;
+
+        // blip, recover, blip, recover -- the pattern from the real log.
+        for _ in 0..5 {
+            consecutive += 1;
+            assert!(
+                !should_surface(&e, consecutive),
+                "an isolated blip must never surface"
+            );
+            consecutive = 0; // the success arm
+        }
+
+        // Two back to back, with no success between them, does surface.
+        consecutive += 1;
+        assert!(!should_surface(&e, consecutive));
+        consecutive += 1;
+        assert!(should_surface(&e, consecutive));
+    }
+
+    /// A timeout is transient by definition: the request was still in
+    /// flight when the ceiling hit, which says nothing about whether the
+    /// next one will succeed.
+    #[test]
+    fn a_timeout_is_transient() {
+        assert!(ClientError::Timeout(90).is_transient());
+    }
     use crate::github::model::MergeStateStatus;
 
     /// `notify_one` stores a permit when nobody is waiting, so a refresh

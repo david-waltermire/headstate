@@ -40,6 +40,53 @@ pub enum ClientError {
     RateLimited(String),
 }
 
+impl ClientError {
+    /// Whether waiting is likely to fix this on its own.
+    ///
+    /// Transport failures are the common case and almost always recover:
+    /// measured on a real log, 5 of 164 polls failed with SendRequest and
+    /// EVERY one succeeded on the next tick. A Wi-Fi hiccup, a DNS blip,
+    /// a laptop waking up.
+    ///
+    /// Auth and rate limits are the opposite: the next tick will fail the
+    /// same way, so the user needs to know now. Rate limiting is listed
+    /// as NOT transient for that reason -- it resolves eventually, but
+    /// not within a poll or two, and its message tells the user to wait
+    /// rather than chase a network fault.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            // The request never reached GitHub, or the response never
+            // came back. Retrying is exactly the right response.
+            ClientError::Timeout(_) => true,
+            ClientError::Api(e) => is_transport_error(e),
+            // A panicked chunk task is a bug, not weather.
+            ClientError::Join(_) => false,
+            // GraphQL errors mean the server answered and objected: a
+            // malformed query, a missing field, a permissions problem.
+            // The next identical request objects identically.
+            ClientError::Graphql(_) => false,
+            ClientError::RateLimited(_) => false,
+        }
+    }
+}
+
+/// Whether an octocrab error is a transport failure rather than a reply.
+///
+/// Octocrab wraps hyper/reqwest failures in `Service`, which is what a
+/// dropped connection surfaces as -- the "client error (SendRequest)"
+/// the banner was showing. An HTTP status means GitHub answered, which is
+/// a different situation even when the status is a server error.
+fn is_transport_error(e: &octocrab::Error) -> bool {
+    match e {
+        octocrab::Error::Service { .. } | octocrab::Error::Hyper { .. } => true,
+        // 5xx is the server having a bad time, which the next tick may
+        // well survive. 4xx is us being wrong, and repeating will not
+        // help.
+        octocrab::Error::GitHub { source, .. } => source.status_code.is_server_error(),
+        _ => false,
+    }
+}
+
 pub struct GitHubClient {
     octocrab: Octocrab,
 }
