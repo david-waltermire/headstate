@@ -3,6 +3,14 @@ use serde::{Deserialize, Serialize};
 /// A checkout with worktrees hanging off it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Repo {
+    /// `owner/repo` from the git remote, when it can be established.
+    ///
+    /// From the REMOTE, never the directory name -- this app's own
+    /// directory is `ghstat` while its repository is
+    /// `pktstorm/headstate`. Used to pair a worktree with its pull
+    /// request; None means no pairing rather than a fuzzy one.
+    #[serde(default)]
+    pub identity: Option<String>,
     /// Directory name, e.g. `enc-api`.
     pub name: String,
     /// Absolute path to the main checkout.

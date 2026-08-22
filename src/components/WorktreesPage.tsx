@@ -3,6 +3,7 @@ import { useState } from "react";
 import {
   useRemoveWorktree,
   useAssessed,
+  usePullRequests,
   useRemoveWorktreeForced,
   useRemoveWorktrees,
   useWorktreeSafety,
@@ -15,6 +16,7 @@ import {
   isPending,
   isSafe,
   pathBasename,
+  prForWorktree,
   safetyReason,
   safetyTone,
   upstreamReason,
@@ -24,7 +26,7 @@ import {
 import { claudifyCommand } from "../api/tauri";
 import { relativeTime } from "../lib/time";
 import { useActiveFilters, useFilters } from "../store/filters";
-import type { Worktree } from "../types/pr";
+import type { PullRequest, Worktree } from "../types/pr";
 import { toast } from "sonner";
 import { QueryError, errorMessage } from "./QueryError";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -53,6 +55,7 @@ function Skeleton({ className = "" }: { className?: string }) {
 
 function Row({
   wt,
+  pr,
   onRemove,
   onClaudify,
   sizePending,
@@ -61,6 +64,9 @@ function Row({
   onForce,
 }: {
   wt: Worktree;
+  /// The open pull request for this worktree, when there is one.
+  /// DISPLAY ONLY -- it never feeds a safety gate.
+  pr?: PullRequest | null;
   onRemove: (wt: Worktree) => void;
   onClaudify: (wt: Worktree) => void;
   /// This row's removal is in flight. Per row, not per page: with 100+
@@ -119,6 +125,20 @@ function Row({
         ) : null}
         {/* How stale the work is -- distinct from merged_at, which says
             whether it is already accounted for. */}
+        {/* The app already holds GitHub's answer for this branch and
+            never showed it here. Display only: a wrong pairing must not
+            be able to authorise a deletion. */}
+        {pr ? (
+          <a
+            href={pr.url}
+            target="_blank"
+            rel="noreferrer noopener"
+            onClick={(e) => e.stopPropagation()}
+            className="text-[#58a6ff] hover:underline"
+          >
+            {" · "}#{pr.number}
+          </a>
+        ) : null}
         {wt.last_commit && !wt.is_main ? (
           <span className="text-[#8b949e]"> · {relativeTime(wt.last_commit)}</span>
         ) : null}
@@ -276,6 +296,7 @@ export function WorktreesPage() {
   const removeMany = useRemoveWorktrees();
   const forceRemove = useRemoveWorktreeForced();
   const { data: assessedPaths } = useAssessed();
+  const { data: prs = [] } = usePullRequests();
   const assessed = new Set(assessedPaths ?? []);
   const [forcing, setForcing] = useState<Worktree | null>(null);
 
@@ -567,6 +588,7 @@ export function WorktreesPage() {
             <Row
               key={wt.path}
               wt={wt}
+              pr={prForWorktree(prs, selected?.identity ?? null, wt.branch)}
               assessed={assessed.has(wt.path)}
               onForce={setForcing}
               onRemove={setPending}

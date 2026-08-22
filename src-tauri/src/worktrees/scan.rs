@@ -63,6 +63,35 @@ pub(super) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// `owner/repo` from a git remote URL.
+///
+/// From the REMOTE, never the directory name. This repository is the
+/// proof: its directory is `ghstat` and its repository is
+/// `pktstorm/headstate`. Since a match here decides whether GitHub's
+/// "merged" verdict is shown against a worktree, a wrong pairing would
+/// attach an authoritative-looking answer to the wrong directory.
+///
+/// Returns None for anything unrecognisable rather than guessing.
+pub fn parse_owner_repo(url: &str) -> Option<String> {
+    let url = url.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    // Everything after the host, whichever form the URL takes:
+    //   git@host:owner/repo   https://host/owner/repo   ssh://git@host/owner/repo
+    let tail = url.rsplit_once(':').map_or(url, |(_, t)| t);
+    let mut parts = tail.rsplit('/');
+    let repo = parts.next()?;
+    let owner = parts.next()?;
+    (!owner.is_empty() && !repo.is_empty() && !owner.contains(' ') && !repo.contains(' '))
+        .then(|| format!("{owner}/{repo}"))
+}
+
+/// The `owner/repo` a checkout belongs to, or None.
+pub fn repo_identity(repo_path: &str) -> Option<String> {
+    git(Path::new(repo_path), &["remote", "get-url", "origin"])
+        .ok()
+        .and_then(|u| parse_owner_repo(&u))
+}
+
 /// Whether a ref can be passed to git without being read as a flag.
 ///
 /// Git ref names may legitimately begin with `-` -- `git branch` refuses
@@ -535,6 +564,7 @@ fn collect_inner(dir: &Path, depth: usize, out: &mut Vec<Repo>, with_safety: boo
                 })
                 .collect();
             out.push(Repo {
+                identity: repo_identity(&dir.to_string_lossy()),
                 name: dir
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -979,6 +1009,7 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
     #[test]
     fn repos_sort_by_worktree_count_not_name() {
         let mk = |name: &str, n: usize| Repo {
+            identity: None,
             name: name.into(),
             path: format!("/tmp/{name}"),
             worktrees: vec![Worktree::default(); n],
@@ -996,6 +1027,7 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
     #[test]
     fn equal_counts_break_ties_by_name() {
         let mk = |name: &str, n: usize| Repo {
+            identity: None,
             name: name.into(),
             path: format!("/tmp/{name}"),
             worktrees: vec![Worktree::default(); n],
@@ -1012,6 +1044,7 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
     #[test]
     fn sorting_uses_the_count_the_sidebar_displays() {
         let mk = |name: &str, n: usize| Repo {
+            identity: None,
             name: name.into(),
             path: format!("/tmp/{name}"),
             worktrees: vec![Worktree::default(); n],
@@ -1423,6 +1456,40 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
             assert!(d.starts_with("20"), "not a date: {d}");
             assert!(d.contains('T'), "not RFC 3339: {d}");
         }
+    }
+
+    /// Repo identity must come from the REMOTE, never the directory
+    /// name. This very repository proves why: the directory is `ghstat`
+    /// and the repository is `pktstorm/headstate`. Matching on directory
+    /// name would silently pair a pull request with the wrong worktree,
+    /// and "GitHub says this merged" is a verdict that authorises
+    /// deletion.
+    #[test]
+    fn repo_identity_comes_from_the_remote_url_not_the_path() {
+        for (url, want) in [
+            (
+                "git@github.com:pktstorm/headstate.git",
+                "pktstorm/headstate",
+            ),
+            (
+                "https://github.com/pktstorm/headstate.git",
+                "pktstorm/headstate",
+            ),
+            (
+                "https://github.com/pktstorm/headstate",
+                "pktstorm/headstate",
+            ),
+            (
+                "ssh://git@github.com/octocat/hello-world.git",
+                "octocat/hello-world",
+            ),
+        ] {
+            assert_eq!(parse_owner_repo(url).as_deref(), Some(want), "{url}");
+        }
+        // Anything unrecognisable yields None rather than a guess: a
+        // fuzzy match here pairs a PR with the wrong directory.
+        assert_eq!(parse_owner_repo("not a url"), None);
+        assert_eq!(parse_owner_repo(""), None);
     }
 
     /// A ref beginning with `-` is a valid git ref name but reads as a

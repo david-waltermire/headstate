@@ -1,4 +1,4 @@
-import type { Safety, Upstream } from "@/types/pr";
+import type { PullRequest, Safety, Upstream } from "@/types/pr";
 
 /// Only `safe` may be deleted.
 ///
@@ -33,6 +33,27 @@ export function safetyReason(s: Safety): string {
     default:
       return `could not determine: ${s.detail}`;
   }
+}
+
+/// The open pull request for a worktree, if there is one.
+///
+/// Keyed on repo AND branch, never branch alone: branch names are not
+/// unique across repositories -- this account has `feat/egr33-*` in two
+/// of them -- and repo identity comes from the git remote rather than
+/// the directory name.
+///
+/// DISPLAY ONLY. This must never widen a safety gate: a wrong pairing
+/// would attach GitHub's authoritative-looking "merged" to the wrong
+/// directory, and deletion is the one unrecoverable action here.
+export function prForWorktree(
+  prs: PullRequest[],
+  repoIdentity: string | null,
+  branch: string,
+): PullRequest | null {
+  if (!repoIdentity || !branch) return null;
+  return (
+    prs.find((p) => p.repo === repoIdentity && p.head_ref === branch) ?? null
+  );
 }
 
 /// Whether this row can be handed to a coding agent.

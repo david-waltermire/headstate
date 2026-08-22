@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Safety } from "@/types/pr";
-import { formatSize, isSafe, pathBasename, safetyReason, safetyTone } from "./worktrees";
+import {
+  formatSize,
+  isSafe,
+  pathBasename,
+  prForWorktree,
+  safetyReason,
+  safetyTone,
+} from "./worktrees";
 
 describe("isSafe", () => {
   // Only `safe` is deletable. Everything else is disabled rather than
@@ -87,5 +94,44 @@ describe("pathBasename", () => {
 
   it("returns the input when there is no separator at all", () => {
     expect(pathBasename("proj")).toBe("proj");
+  });
+});
+
+describe("prForWorktree", () => {
+  const pr = (repo: string, head: string, number: number) =>
+    ({ repo, head_ref: head, number } as unknown as import("@/types/pr").PullRequest);
+
+  it("pairs a worktree with its pull request", () => {
+    const prs = [pr("octocat/api", "feat/x", 1)];
+    expect(prForWorktree(prs, "octocat/api", "feat/x")?.number).toBe(1);
+  });
+
+  // THE trap. Branch names are not unique across repositories -- this
+  // account has feat/egr33-* in two of them -- and a wrong pairing would
+  // attach GitHub's authoritative-looking "merged" to the wrong
+  // directory.
+  it("never matches the same branch in a different repository", () => {
+    const prs = [pr("octocat/api", "feat/shared", 1)];
+    expect(prForWorktree(prs, "octocat/worker", "feat/shared")).toBeNull();
+  });
+
+  // A repo with no remote resolves to null identity, which must mean
+  // "no pairing" rather than "match anything".
+  //
+  // The PR fixture below carries repo=null so that a comparison-only
+  // implementation WOULD match it -- without that, the guard could be
+  // deleted and this test would still pass, since `repo === null` never
+  // equals a real repo name.
+  it("makes no match when the repository cannot be identified", () => {
+    const prs = [
+      { repo: null, head_ref: "feat/x", number: 9 } as unknown as
+        import("@/types/pr").PullRequest,
+    ];
+    expect(prForWorktree(prs, null, "feat/x")).toBeNull();
+  });
+
+  it("makes no match for a detached worktree", () => {
+    const prs = [pr("octocat/api", "feat/x", 1)];
+    expect(prForWorktree(prs, "octocat/api", "")).toBeNull();
   });
 });

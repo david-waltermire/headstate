@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   classified: undefined as Worktree[] | undefined,
   classifying: false,
   assessed: [] as string[],
+  prs: [] as import("@/types/pr").PullRequest[],
   sizes: undefined as Map<string, number> | undefined,
   sizing: false,
 }));
@@ -33,6 +34,7 @@ vi.mock("../api/hooks", () => ({
   useRemoveWorktrees: () => removeManyFn,
   useRemoveWorktreeForced: () => forceFn,
   useAssessed: () => ({ data: state.assessed }),
+  usePullRequests: () => ({ data: state.prs }),
   useWorktreeSizes: () => ({ data: state.sizes, isLoading: state.sizing }),
 }));
 
@@ -72,7 +74,7 @@ const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } as co
 describe("WorktreesPage", () => {
   beforeEach(() => {
     Object.assign(state, {
-      repos: [{ name: "proj", path: "/code/proj", worktrees: [wt({})] }],
+      repos: [{ identity: null, name: "proj", path: "/code/proj", worktrees: [wt({})] }],
       isLoading: false,
       isError: false,
       classified: undefined,
@@ -80,6 +82,7 @@ describe("WorktreesPage", () => {
       sizes: undefined,
       sizing: false,
       assessed: [],
+      prs: [],
     });
     useFilters.setState({ filtersByView: { ...EMPTY }, view: "worktrees", panel: "list" });
     // Calls leak between tests otherwise, which makes "was not called"
@@ -233,7 +236,7 @@ describe("WorktreesPage", () => {
   it("shows a skeleton, not a failure, while a row is still being checked", () => {
     Object.assign(state, {
       repos: [
-        { name: "proj", path: "/code/proj", worktrees: [wt({ safety: { kind: "pending" } })] },
+        { identity: null, name: "proj", path: "/code/proj", worktrees: [wt({ safety: { kind: "pending" } })] },
       ],
       classifying: true,
     });
@@ -249,6 +252,7 @@ describe("WorktreesPage", () => {
     Object.assign(state, {
       repos: [
         {
+          identity: null,
           name: "proj",
           path: "/code/proj",
           worktrees: [wt({ path: "/code/proj-a" }), wt({ path: "/code/proj-b" })],
@@ -271,6 +275,7 @@ describe("WorktreesPage", () => {
     Object.assign(state, {
       repos: [
         {
+          identity: null,
           name: "proj",
           path: "/code/proj",
           worktrees: [wt({ size_bytes: null, safety: { kind: "safe" } })],
@@ -288,6 +293,7 @@ describe("WorktreesPage", () => {
     Object.assign(state, {
       repos: [
         {
+          identity: null,
           name: "proj",
           path: "/code/proj",
           worktrees: [wt({ size_bytes: null, safety: { kind: "safe" } })],
@@ -304,6 +310,7 @@ describe("WorktreesPage", () => {
     Object.assign(state, {
       repos: [
         {
+          identity: null,
           name: "proj",
           path: "/code/proj",
           worktrees: [
@@ -325,6 +332,7 @@ describe("WorktreesPage", () => {
     Object.assign(state, {
       repos: [
         {
+          identity: null,
           name: "proj",
           path: "/code/proj",
           worktrees: [
@@ -345,7 +353,7 @@ describe("WorktreesPage", () => {
   it("refuses to offer removal while a row is still being checked", () => {
     Object.assign(state, {
       repos: [
-        { name: "proj", path: "/code/proj", worktrees: [wt({ safety: { kind: "pending" } })] },
+        { identity: null, name: "proj", path: "/code/proj", worktrees: [wt({ safety: { kind: "pending" } })] },
       ],
       classifying: true,
     });
