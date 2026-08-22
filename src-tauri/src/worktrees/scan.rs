@@ -3,17 +3,63 @@ use std::path::Path;
 use std::process::Command;
 
 /// Run a git command in a directory, returning stdout on success.
+/// Git calls are bounded, like the Docker ones.
+///
+/// Every subcommand here is local-only -- cherry, log, rev-list,
+/// rev-parse, worktree list -- so this is not about a network call. The
+/// risk is a stalled FILESYSTEM: an unresponsive network mount, a stale
+/// index.lock, a disk that stops answering.
+///
+/// The consequence justified the bound: `output()` blocks forever, and
+/// this runs inside spawn_blocking, so a hung call permanently consumes
+/// a pool thread. Repeated across a scan that exhausts the pool and
+/// wedges every worktree operation until restart, with no in-app
+/// recovery. A timeout maps onto the existing `Safety::Unknown` arm,
+/// which already treats a git failure as "cannot say", never "safe".
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub(super) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let child = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+
+    // A thread that BLOCKS on the child, rather than polling it. Polling
+    // was measurably wrong here: a flat 20ms interval took the full scan
+    // from 35s to 71s, and even 1ms-with-backoff left it at 48s, because
+    // several thousand calls each paid up to an interval of dead time.
+    // Blocking costs nothing on the common path and still bounds the
+    // pathological one.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let result = child.wait_with_output();
+        // The receiver is gone on timeout; that is expected, not an error.
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(GIT_TIMEOUT) {
+        Ok(Ok(out)) => {
+            let _ = handle.join();
+            if out.status.success() {
+                Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+            }
+        }
+        Ok(Err(e)) => Err(e.to_string()),
+        // The thread is left running rather than detached-and-killed:
+        // `wait_with_output` owns the child, so there is no handle here
+        // to kill it with. It exits when git does, and the scan moves on
+        // treating this worktree as Unknown -- which is the honest
+        // answer for a call that never came back.
+        Err(_) => Err(format!(
+            "git did not respond within {}s",
+            GIT_TIMEOUT.as_secs()
+        )),
     }
 }
 

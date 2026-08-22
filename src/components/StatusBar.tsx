@@ -38,11 +38,18 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
       : ("failed" as const)
     : state === "fetching"
       ? ("fetching" as const)
-      : ("ok" as const);
+      // A suppressed transient failure emits neither poll-error nor
+      // prs-updated, so without this the bar showed a green "Up to date"
+      // beside a stale timestamp -- the exact bug #191 was written to
+      // eliminate, at smaller scale.
+      : state === "retrying"
+        ? ("retrying" as const)
+        : ("ok" as const);
 
   const DOT = {
     fetching: "bg-[#58a6ff]",
     ok: "bg-[#3fb950]",
+    retrying: "bg-[#d29922]",
     stale: "bg-[#d29922]",
     failed: "bg-[#f85149]",
   } as const;
@@ -50,6 +57,7 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
   const TEXT = {
     fetching: "Checking GitHub…",
     ok: "Up to date",
+    retrying: "Retrying…",
     stale: "Could not refresh",
     failed: "Could not reach GitHub",
   } as const;

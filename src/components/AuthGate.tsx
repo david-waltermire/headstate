@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, type ReactNode } from "react";
-import { usePollError } from "../api/hooks";
+import { clearPollError, usePollError, useStoreError } from "../api/hooks";
 import { getAuthState } from "../api/tauri";
 import { dismissSplash } from "../splash";
 
@@ -20,6 +20,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     staleTime: Infinity,
   });
   const pollError = usePollError();
+  const storeError = useStoreError();
 
   // Dismissal belongs HERE, not in `App`, and keys off the auth check
   // having SETTLED rather than succeeded.
@@ -38,11 +39,35 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (data?.ok) {
     return (
       <>
+        {/* Its own banner, on its own channel. A store failure describes
+            a condition a later successful poll did not fix, so it must
+            not be cleared by one -- which is what sharing `poll-error`
+            did, microseconds after it appeared. */}
+        {storeError.message !== null && (
+          <div
+            role="alert"
+            className="flex items-start gap-2 border-b border-[#d29922]/30 bg-[#d29922]/10 px-4 py-2 text-sm text-[#d29922]"
+          >
+            <span className="flex-1">
+              {storeError.message} Your pull requests are still live; only the local
+              cache is affected.
+            </span>
+            <button
+              type="button"
+              onClick={storeError.dismiss}
+              aria-label="Dismiss"
+              className="shrink-0 rounded px-1 hover:bg-[#d29922]/20"
+            >
+              ×
+            </button>
+          </div>
+        )}
         {pollError !== null && (
           <div
             role="alert"
-            className="border-b border-[#f85149]/30 bg-[#f85149]/10 px-4 py-2 text-sm text-[#f85149]"
+            className="flex items-start gap-2 border-b border-[#f85149]/30 bg-[#f85149]/10 px-4 py-2 text-sm text-[#f85149]"
           >
+            <span className="flex-1">
             Background refresh failed: {pollError}
             {/* The token is read once at startup and held for the process
                 lifetime, so a revoked or expired one 401s forever with the
@@ -55,6 +80,18 @@ export function AuthGate({ children }: { children: ReactNode }) {
                 restart Headstate.
               </span>
             ) : null}
+            </span>
+            {/* Dismissable: a rate limit the user has read is not
+                information worth pinning for an hour, and its own text
+                says polling resumes automatically. */}
+            <button
+              type="button"
+              onClick={clearPollError}
+              aria-label="Dismiss"
+              className="shrink-0 rounded px-1 hover:bg-[#f85149]/20"
+            >
+              ×
+            </button>
           </div>
         )}
         {children}

@@ -186,7 +186,14 @@ fn merge_by_identity(base: &[PullRequest], updates: &[PullRequest]) -> Vec<PullR
 /// gone, which the user should know about even though the live list is
 /// unaffected.
 fn emit_store_error(app: &AppHandle, msg: String) {
-    if let Err(e) = app.emit("poll-error", msg) {
+    // Its OWN channel, not `poll-error`. Sharing it meant this banner was
+    // destroyed microseconds after it appeared: persist_and_emit emits
+    // the error and then UNCONDITIONALLY emits `prs-updated`, which the
+    // frontend uses to clear poll errors. A full disk was invisible.
+    //
+    // A store failure also describes a condition the successful poll did
+    // NOT fix, so a later success must not clear it.
+    if let Err(e) = app.emit("store-error", msg) {
         log::warn!("failed to emit store error: {e}");
     }
 }
@@ -399,6 +406,11 @@ pub fn spawn(
                             "not surfacing a transient failure ({consecutive_failures} in a row); \
                              the next tick should recover"
                         );
+                        // The bar has nothing else to go on: no
+                        // poll-error and no prs-updated on a suppressed
+                        // failure, so it would otherwise show a green
+                        // "Up to date" while the data is stale.
+                        let _ = app.emit("poll-state", "retrying");
                     }
                 }
             }

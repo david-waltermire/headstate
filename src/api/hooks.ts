@@ -241,14 +241,20 @@ export function useCycleTrend() {
 /// Emitted by the Rust loop rather than inferred from `isFetching`: the
 /// tray refresh path calls `refreshNow` outside the queryFn, so the query
 /// flag never flips for it. The loop that knows is the one that says.
-export function usePollState(): "idle" | "fetching" {
-  const [state, setState] = useState<"idle" | "fetching">("idle");
+export function usePollState(): "idle" | "fetching" | "retrying" {
+  const [state, setState] = useState<"idle" | "fetching" | "retrying">("idle");
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let cancelled = false;
     listen<string>("poll-state", (e) => {
-      setState(e.payload === "fetching" ? "fetching" : "idle");
+      setState(
+        e.payload === "fetching"
+          ? "fetching"
+          : e.payload === "retrying"
+            ? "retrying"
+            : "idle",
+      );
     }).then(
       (fn) => {
         if (cancelled) fn();
@@ -463,6 +469,34 @@ export function useRemoveWorktreeForced() {
       void qc.invalidateQueries({ queryKey: ["assessed-worktrees"] });
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
     });
+}
+
+/// A local-store failure: a full disk, a locked database.
+///
+/// Its own channel, deliberately. It used to share `poll-error`, which
+/// `prs-updated` clears -- and `persist_and_emit` emits the error then
+/// unconditionally emits `prs-updated`, so the banner was destroyed
+/// microseconds after it appeared. A store failure also describes a
+/// condition a later successful poll did not fix, so nothing clears it
+/// but the user.
+export function useStoreError(): { message: string | null; dismiss: () => void } {
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<string>("store-error", (e) => setMsg(e.payload)).then(
+      (fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+  return { message: msg, dismiss: () => setMsg(null) };
 }
 
 /// --- Docker -------------------------------------------------------

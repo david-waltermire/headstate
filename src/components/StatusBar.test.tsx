@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
-  current: "idle" as "idle" | "fetching",
+  current: "idle" as "idle" | "fetching" | "retrying",
   error: null as string | null,
 }));
 const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
@@ -140,5 +140,18 @@ describe("StatusBar", () => {
       unmount();
       version.value = "2.0.2";
     });
+  });
+
+  // A suppressed transient failure emits neither poll-error nor
+  // prs-updated, so the bar had nothing to go on and showed a green
+  // "Up to date" beside a stale timestamp.
+  it("shows a distinct retrying state rather than claiming success", () => {
+    state.current = "retrying";
+    state.error = null;
+    const { container } = render(<StatusBar updatedAt={Date.now() - 300_000} />);
+    expect(screen.getByText(/retrying/i)).toBeTruthy();
+    expect(screen.queryByText(/up to date/i)).toBeNull();
+    expect(container.querySelector(".bg-\\[\\#3fb950\\]")).toBeNull();
+    state.current = "idle";
   });
 });

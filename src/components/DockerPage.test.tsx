@@ -254,4 +254,27 @@ describe("DockerPage", () => {
     render(<DockerPage />);
     expect(screen.getByRole("button", { name: /remove 1 stale image/i })).toBeTruthy();
   });
+
+  // Unknown carries the real message and used to be rendered as "not
+  // running" with a Start button that cannot help.
+  it("shows the real reason when Docker cannot be reached", () => {
+    state.docker = {
+      kind: "unknown",
+      detail: "permission denied while trying to connect to the Docker daemon socket",
+    } as DockerState;
+    render(<DockerPage />);
+    expect(screen.getByText(/could not talk to docker/i)).toBeTruthy();
+    expect(screen.getByText(/permission denied/i)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /start docker/i })).toBeNull();
+  });
+
+  // The actionable remedy for the most common Linux Docker failure.
+  it("names the docker group fix for a permission error", () => {
+    state.docker = {
+      kind: "unknown",
+      detail: "permission denied while trying to connect to the Docker daemon socket",
+    } as DockerState;
+    render(<DockerPage />);
+    expect(screen.getByText(/usermod -aG docker/)).toBeTruthy();
+  });
 });

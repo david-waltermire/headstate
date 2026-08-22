@@ -317,7 +317,7 @@ pub fn map_merged_detail(v: &Value) -> MergedDetail {
             });
         }
     }
-    d.cycle_time_hours.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    d.cycle_time_hours.sort_by(|a, b| a.total_cmp(b));
     d.pr_sizes.sort_unstable();
 
     // The outliers the scalar figures describe, so a striking number is a
@@ -325,9 +325,13 @@ pub fn map_merged_detail(v: &Value) -> MergedDetail {
     // order between refreshes.
     let mut by_time = merged_prs.clone();
     by_time.sort_by(|a, b| {
+        // total_cmp, not partial_cmp().unwrap(). A panic inside a Tauri
+        // command aborts the WHOLE APP, and the invariant that keeps NaN
+        // out of cycle_time_hours lives in a guard forty lines away --
+        // implicit, undocumented, and one edit from turning a stats
+        // refresh into a crash. total_cmp is total over floats and free.
         b.cycle_time_hours
-            .partial_cmp(&a.cycle_time_hours)
-            .unwrap()
+            .total_cmp(&a.cycle_time_hours)
             .then(a.number.cmp(&b.number))
     });
     d.slowest = by_time.into_iter().take(5).collect();
@@ -365,7 +369,7 @@ fn median_hours(nodes: &Value) -> f64 {
     if hours.is_empty() {
         return 0.0;
     }
-    hours.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    hours.sort_by(|a, b| a.total_cmp(b));
     let idx = ((hours.len() as f64 * 0.5).ceil() as usize).saturating_sub(1);
     hours[idx.min(hours.len() - 1)]
 }
