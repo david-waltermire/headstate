@@ -52,6 +52,23 @@ if [ -n "$untracked" ]; then
   exit 2
 fi
 
+# Commit MESSAGES, which `git grep` cannot see -- it searches blobs only.
+# A private repository name in a commit subject is exactly as permanently
+# public as one in a file, and this history is full of "(#221)"-style
+# subjects, which is a natural place to paste one.
+scan_log() {
+  local out status
+  set +e
+  out=$(git log --format='%s%n%b' | grep -hoIE "$1")
+  status=$?
+  set -e
+  if [ "$status" -gt 1 ]; then
+    echo "ERROR: scanning commit messages failed (exit $status)." >&2
+    exit 2
+  fi
+  printf '%s' "$out"
+}
+
 scan() {
   local out status
   set +e
@@ -92,8 +109,14 @@ ssh_scp=$(scan 'git@[A-Za-z0-9][-A-Za-z0-9.]*\.[a-z]{2,}:[A-Za-z0-9][-A-Za-z0-9_
 ssh=$(scan 'git@github\.com:[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+' \
       | sed -E 's#.*github\.com:##')
 
-refs=$(scan '[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+#[0-9]+' \
-       | sed -E 's/#[0-9]+$//')
+# `owner/repo#123` in FILES and in COMMIT MESSAGES. The message half is
+# the leak-prone one: a subject like "port the fix from acme/private#4"
+# is as permanently public as a file, and `git grep` cannot see it.
+refs=$(printf '%s\n%s\n' \
+       "$(scan '[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+#[0-9]+')" \
+       "$(scan_log '[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]+#[0-9]+')" \
+       | grep -vE '^[[:space:]]*$' \
+       | sed -E 's/#[0-9]+$//' || true)
 
 # GitHub Enterprise Server: same path shape as github.com, different host.
 # Anchored on the literal "github." host prefix so it can't match arbitrary

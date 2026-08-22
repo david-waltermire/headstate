@@ -13,6 +13,19 @@ use serde_json::json;
 
 /// The "Update branch" mutation, hoisted so its test asserts on the
 /// document actually sent rather than a copy that could drift from it.
+/// Enable "merge when green".
+///
+/// Takes `expectedHeadOid` for the same reason update-branch does, and it
+/// matters MORE here: auto-merge is a DEFERRED write that fires later,
+/// unattended, when the user is not looking. Without the guard, a push
+/// after enabling would auto-merge a commit they never saw.
+const ENABLE_AUTO_MERGE_DOC: &str = "mutation($id: ID!, $oid: GitObjectID!) { \
+     enablePullRequestAutoMerge(input: { pullRequestId: $id, expectedHeadOid: $oid, \
+     mergeMethod: SQUASH }) { clientMutationId } }";
+
+const DISABLE_AUTO_MERGE_DOC: &str = "mutation($id: ID!) { \
+     disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }";
+
 const UPDATE_BRANCH_DOC: &str = "mutation($id: ID!, $oid: GitObjectID!) { \
      updatePullRequestBranch(input: { pullRequestId: $id, expectedHeadOid: $oid }) \
      { clientMutationId } }";
@@ -98,6 +111,33 @@ impl GitHubClient {
     /// never looked at. The issue this implements calls out exactly that
     /// race ("the base moved between the check and the click"), and the
     /// argument is how GitHub lets us lose it rather than paper over it.
+    /// Merge this pull request as soon as its checks pass.
+    ///
+    /// The answer to the most common blocked state: on a real account 6
+    /// of 24 open PRs are UNSTABLE -- checks still running -- which is
+    /// precisely "I would merge this the moment CI goes green", and the
+    /// only way to say so was to leave the app.
+    pub async fn enable_auto_merge(
+        &self,
+        id: &str,
+        expected_head: &str,
+    ) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": ENABLE_AUTO_MERGE_DOC,
+            "variables": { "id": id, "oid": expected_head }
+        }))
+        .await
+    }
+
+    /// Cancel it, mirroring the enqueue/dequeue pair.
+    pub async fn disable_auto_merge(&self, id: &str) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": DISABLE_AUTO_MERGE_DOC,
+            "variables": { "id": id }
+        }))
+        .await
+    }
+
     pub async fn update_pr_branch(&self, id: &str, expected_head: &str) -> Result<(), ClientError> {
         self.graphql_mutation(&json!({
             "query": UPDATE_BRANCH_DOC,
@@ -145,6 +185,24 @@ mod tests {
         ] {
             assert!(!a.is_destructive(), "{a:?} should not need confirmation");
         }
+    }
+
+    /// Auto-merge is a DEFERRED write: it fires later, unattended, when
+    /// nobody is looking. That is categorically different from the
+    /// immediate actions whose safety comes from the button being
+    /// enabled only on CLEAN, so the mutation pins expectedHeadOid --
+    /// without it, a push after enabling auto-merges a commit the user
+    /// never saw.
+    #[test]
+    fn auto_merge_pins_the_head_it_was_enabled_on() {
+        assert!(
+            ENABLE_AUTO_MERGE_DOC.contains("$oid: GitObjectID!"),
+            "the OID must be non-null or it can be silently omitted"
+        );
+        assert!(ENABLE_AUTO_MERGE_DOC.contains("expectedHeadOid: $oid"));
+        assert!(ENABLE_AUTO_MERGE_DOC.contains("enablePullRequestAutoMerge"));
+        // Disabling needs no OID: cancelling is safe whatever the head is.
+        assert!(!DISABLE_AUTO_MERGE_DOC.contains("expectedHeadOid"));
     }
 
     /// Descriptions are logged and shown in errors, so they must read as

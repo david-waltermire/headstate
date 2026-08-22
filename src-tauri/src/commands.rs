@@ -257,6 +257,45 @@ pub async fn update_pr_branch(
 }
 
 #[tauri::command]
+/// Merge this pull request when its checks pass.
+///
+/// Takes the head OID the row was rendered from. Auto-merge is a
+/// DEFERRED write -- it fires unattended, later -- so without the guard
+/// a push after enabling would merge a commit the user never saw.
+/// Verified live: a stale OID is refused with "expected head oid does
+/// not match the current head oid".
+pub async fn set_auto_merge(
+    client: State<'_, GhClient>,
+    waker: State<'_, crate::poll::Waker>,
+    id: String,
+    repo: String,
+    number: u64,
+    expected_head: String,
+    enable: bool,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    let result = if enable {
+        client.enable_auto_merge(&id, &expected_head).await
+    } else {
+        client.disable_auto_merge(&id).await
+    };
+    match result {
+        Ok(()) => {
+            log::info!(
+                "{repo}#{number} auto-merge {}",
+                if enable { "enabled" } else { "disabled" }
+            );
+            waker.0.notify_one();
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} auto-merge change refused: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn get_pr_detail(
     client: State<'_, GhClient>,
     repo: String,

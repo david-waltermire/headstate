@@ -10,8 +10,12 @@ type Act = (id: string, repo: string, number: number, action: PrActionName) => P
 const act = vi.fn<Act>(() => Promise.resolve());
 type Upd = (id: string, repo: string, number: number, head: string) => Promise<void>;
 const update = vi.fn<Upd>(() => Promise.resolve());
+const setAuto = vi.fn<
+  (id: string, repo: string, n: number, head: string, enable: boolean) => Promise<void>
+>(() => Promise.resolve());
 vi.mock("@/api/hooks", () => ({
   useActOnPr: () => act,
+  useSetAutoMerge: () => setAuto,
   useUpdatePrBranch: () => update,
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -30,6 +34,7 @@ const open = () => fireEvent.click(screen.getByRole("button", { name: /Actions f
 
 beforeEach(() => {
   act.mockClear();
+  setAuto.mockClear();
   update.mockClear();
 });
 
@@ -187,5 +192,45 @@ describe("PrKebab", () => {
     );
     open();
     expect(onRowClick).not.toHaveBeenCalled();
+  });
+
+  // UNSTABLE means checks are still running, not that merging is
+  // impossible -- exactly "I would merge this the moment CI goes green",
+  // and 6 of 24 open PRs are in that state on a real account.
+  describe("merge when green", () => {
+    it("is offered for a PR whose checks are still running", () => {
+      render(<PrKebab pr={pr({ merge_status: "unstable" })} />);
+      open();
+      expect(screen.getByRole("menuitem", { name: /merge when green/i })).toBeTruthy();
+    });
+
+    it("is not offered where an immediate merge already applies", () => {
+      render(<PrKebab pr={pr({ merge_status: "clean" })} />);
+      open();
+      expect(screen.queryByRole("menuitem", { name: /merge when green/i })).toBeNull();
+    });
+
+    it("is not offered on a draft", () => {
+      render(<PrKebab pr={pr({ merge_status: "unstable", is_draft: true })} />);
+      open();
+      expect(screen.queryByRole("menuitem", { name: /merge when green/i })).toBeNull();
+    });
+
+    // The OID keeps a DEFERRED write honest: it fires later, unattended,
+    // so without it a push after enabling merges a commit never seen.
+    it("pins the head the row was rendered from", async () => {
+      render(<PrKebab pr={pr({ merge_status: "unstable", head_oid: "abc123" })} />);
+      open();
+      fireEvent.click(screen.getByRole("menuitem", { name: /merge when green/i }));
+      await waitFor(() => expect(setAuto).toHaveBeenCalled());
+      expect(setAuto.mock.calls[0][3]).toBe("abc123");
+      expect(setAuto.mock.calls[0][4]).toBe(true);
+    });
+
+    it("is not offered on a PR the user does not own", () => {
+      render(<PrKebab pr={pr({ merge_status: "unstable" })} canWrite={false} />);
+      open();
+      expect(screen.queryByRole("menuitem", { name: /merge when green/i })).toBeNull();
+    });
   });
 });

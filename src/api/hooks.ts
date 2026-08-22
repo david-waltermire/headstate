@@ -29,6 +29,7 @@ import {
   dockerRemoveVolume,
   dockerState,
   removeWorktreeForced,
+  setAutoMerge,
   removeWorktrees,
   sizeWorktrees,
   getReviewing,
@@ -337,6 +338,16 @@ export function useActOnPrs() {
       void qc.invalidateQueries({ queryKey: ["prs"] });
       void qc.invalidateQueries({ queryKey: ["reviewing"] });
       return outcomes;
+    });
+}
+
+/// Enable or cancel "merge when green".
+export function useSetAutoMerge() {
+  const qc = useQueryClient();
+  return (id: string, repo: string, number: number, expectedHead: string, enable: boolean) =>
+    setAutoMerge(id, repo, number, expectedHead, enable).then(() => {
+      void qc.invalidateQueries({ queryKey: ["prs"] });
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
     });
 }
 

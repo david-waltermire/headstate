@@ -125,6 +125,19 @@ export interface ClaudifyCommand {
 export const claudifyCommand = (repoPath: string, worktreePath: string, branch: string) =>
   invoke<ClaudifyCommand>("claudify_command", { repoPath, worktreePath, branch });
 
+/// Merge a pull request when its checks pass, or cancel that.
+///
+/// Takes the head OID the row was rendered from: auto-merge fires later
+/// and unattended, so without the guard a push after enabling would
+/// merge a commit the user never saw.
+export const setAutoMerge = (
+  id: string,
+  repo: string,
+  number: number,
+  expectedHead: string,
+  enable: boolean,
+) => invoke<void>("set_auto_merge", { id, repo, number, expectedHead, enable });
+
 /// Merge the base branch into a pull request's head -- GitHub's "Update
 /// branch" button.
 ///

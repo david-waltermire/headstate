@@ -1,7 +1,7 @@
 import { Bot, Copy, ExternalLink, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useActOnPr, useUpdatePrBranch } from "../api/hooks";
+import { useActOnPr, useSetAutoMerge, useUpdatePrBranch } from "../api/hooks";
 import type { PrActionName } from "../api/tauri";
 import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
 import type { PullRequest } from "../types/pr";
@@ -56,6 +56,7 @@ const LABEL: Record<PrActionName, string> = {
 export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: boolean }) {
   const act = useActOnPr();
   const updateBranch = useUpdatePrBranch();
+  const setAuto = useSetAutoMerge();
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<PrActionName | null>(null);
   const ref = useRef<HTMLDivElement>(null);
@@ -140,6 +141,30 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
               produces a conflicted merge commit, and an action that cannot
               work should not be offered at all -- unlike Merge, where the
               disabled-with-a-reason form teaches something. */}
+          {/* The answer to the most common blocked state. On a real
+              account 6 of 24 open PRs are UNSTABLE -- checks still
+              running -- which is exactly "merge it the moment CI is
+              green", and the only way to say so was to leave the app. */}
+          {canWrite && pr.merge_status === "unstable" && !pr.is_draft ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                setAuto(pr.id, pr.repo, pr.number, pr.head_oid, true).then(
+                  () => toast.success(`${pr.repo}#${pr.number} will merge when green`),
+                  (e: unknown) =>
+                    toast.error(`Could not enable auto-merge on #${pr.number}`, {
+                      description: typeof e === "string" ? e : undefined,
+                    }),
+                );
+              }}
+              className="flex w-full items-center rounded px-2 py-1.5 text-left text-sm text-[#e6edf3] hover:bg-[#21262d]"
+            >
+              Merge when green
+            </button>
+          ) : null}
+
           {canWrite && pr.merge_status === "behind" ? (
             <button
               type="button"

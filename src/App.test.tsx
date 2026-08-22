@@ -13,6 +13,7 @@ vi.mock("./api/hooks", () => ({
   useActOnPr: () => () => Promise.resolve(),
   useUpdatePrBranch: () => () => Promise.resolve(),
   useActOnPrs: () => () => Promise.resolve([]),
+  useSetAutoMerge: () => () => Promise.resolve(),
   usePullRequests: () => ({ data: mockPrs(), isSuccess: true, isLoading: false }),
   usePollError: () => null,
   useRefreshRequested: () => undefined,
