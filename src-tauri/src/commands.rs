@@ -290,9 +290,13 @@ pub async fn list_worktrees(app: AppHandle) -> Result<Vec<crate::worktrees::Repo
 pub async fn classify_worktrees(
     repo_path: String,
 ) -> Result<Vec<crate::worktrees::Worktree>, String> {
+    // Two failure modes, both real: the join can fail if the blocking
+    // task panicked, and classification itself can fail if git refuses.
+    // Flattened rather than swallowed, so an unreadable repo surfaces as
+    // an error instead of as zero worktrees.
     tauri::async_runtime::spawn_blocking(move || crate::worktrees::classify_repo(&repo_path))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
 }
 
 /// Disk sizes for one repo's worktrees, as `(path, bytes)` pairs.
@@ -304,7 +308,7 @@ pub async fn classify_worktrees(
 pub async fn size_worktrees(repo_path: String) -> Result<Vec<(String, u64)>, String> {
     tauri::async_runtime::spawn_blocking(move || crate::worktrees::size_repo(&repo_path))
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?
 }
 
 /// Remove a worktree, refusing anything not provably safe.
@@ -453,7 +457,7 @@ pub fn docker_prune_cache(until: Option<String>) -> Result<u64, String> {
 
 #[tauri::command]
 /// Containers a restart would stop, so the confirmation can name them.
-pub fn docker_running_containers() -> Vec<String> {
+pub fn docker_running_containers() -> Result<Vec<String>, String> {
     crate::docker::running_containers()
 }
 

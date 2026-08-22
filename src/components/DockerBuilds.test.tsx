@@ -3,13 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DockerBuild, DockerImage } from "@/types/pr";
 
 const state = vi.hoisted(() => ({
+  dockerState: { kind: "running" } as { kind: string },
   builds: [] as DockerBuild[],
   detail: null as DockerBuild | null,
   images: [] as DockerImage[],
 }));
 
 vi.mock("../api/hooks", () => ({
-  useDockerBuilds: () => ({ data: state.builds, isLoading: false }),
+  useDockerState: () => ({ data: state.dockerState }),
+  useDockerBuilds: () => ({ data: state.builds, isLoading: false, isError: false }),
   useDockerBuildDetail: () => ({ data: state.detail }),
   useDockerImages: () => ({ data: state.images, isLoading: false }),
 }));
@@ -30,6 +32,7 @@ const build = (over: Partial<DockerBuild> = {}): DockerBuild => ({
 });
 
 beforeEach(() => {
+  state.dockerState = { kind: "running" };
   state.builds = [];
   state.detail = null;
   state.images = [];

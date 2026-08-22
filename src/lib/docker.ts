@@ -32,12 +32,15 @@ export function formatDockerSize(bytes: number | null): string {
 /// sent over the wire for the same reason `safetyReason` is: the wire
 /// carries data, the UI decides what to say about it.
 export function isStale(img: DockerImage): boolean {
-  return img.superseded && !img.in_use && img.origin?.merged === true;
+  // Only a KNOWN-unused image. `null` -- we could not ask -- stays out
+  // of the bulk set, the same rule the Rust side applies.
+  return img.superseded && img.in_use === false && img.origin?.merged === true;
 }
 
 /// What the row says about an image's standing.
 export function imageState(img: DockerImage): string {
-  if (img.in_use) return "in use by a running container";
+  if (img.in_use === true) return "in use by a running container";
+  if (img.in_use === null) return "cannot tell if it is in use";
   if (!img.superseded) return "current";
   if (img.origin?.merged) return "superseded — branch merged";
   if (img.origin) return "superseded — branch still open";
@@ -50,7 +53,7 @@ export function imageState(img: DockerImage): string {
 /// removable), amber for superseded-but-live, red for provably dead --
 /// the thing the user came to delete.
 export function imageTone(img: DockerImage): string {
-  if (img.in_use) return "text-[#8b949e]";
+  if (img.in_use !== false) return "text-[#8b949e]";
   if (!img.superseded) return "text-[#3fb950]";
   if (img.origin?.merged) return "text-[#f85149]";
   return "text-[#d29922]";

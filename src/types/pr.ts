@@ -265,7 +265,9 @@ export interface DockerImage {
   created: string;
   size_bytes: number;
   origin: DockerOrigin | null;
-  in_use: boolean;
+  /// `null` means we could not ask -- NOT "nothing is using it". An
+  /// unknown answer renders as not-removable.
+  in_use: boolean | null;
   superseded: boolean;
 }
 

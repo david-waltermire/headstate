@@ -19,16 +19,20 @@ pub fn classify(repos: &[PathBuf]) -> Result<Vec<Image>, String> {
     let raw = docker(&["images", "--format", "{{json .}}"])?;
     let mut imgs = images(&raw);
 
-    let in_use = images_in_use();
+    // A failed `docker ps` yields None, which propagates to every image
+    // as "unknown" rather than "not in use". The gate fails CLOSED.
+    let in_use = images_in_use().ok();
     for img in imgs.iter_mut() {
         // `docker ps` reports whatever reference the container was
         // started with -- a tag, or an ID. Match either.
-        img.in_use = in_use.iter().any(|r| {
-            r.starts_with(&img.id)
-                || img
-                    .tags
-                    .iter()
-                    .any(|t| r == &format!("{}:{}", img.repository, t))
+        img.in_use = in_use.as_ref().map(|running| {
+            running.iter().any(|r| {
+                r.starts_with(&img.id)
+                    || img
+                        .tags
+                        .iter()
+                        .any(|t| r == &format!("{}:{}", img.repository, t))
+            })
         });
 
         img.origin = img
@@ -86,7 +90,11 @@ pub struct RemovalOutcome {
 /// A container may have started since -- the same reasoning as
 /// re-checking worktree safety at delete time rather than at scan time.
 pub fn remove_image(id: &str) -> Result<(), String> {
-    if images_in_use().iter().any(|r| r.starts_with(id)) {
+    // A failed check REFUSES rather than proceeding. This is the
+    // delete-time gate; letting it fail open was the bug.
+    let running =
+        images_in_use().map_err(|e| format!("could not check whether the image is in use: {e}"))?;
+    if running.iter().any(|r| r.starts_with(id)) {
         return Err("a running container is using this image".into());
     }
     // No `--force`. A refusal means something depends on it, and forcing

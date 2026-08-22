@@ -233,7 +233,13 @@ export function WorktreesPage() {
   const { setFilter } = useFilters();
 
   const selected = repos?.find((r) => r.path === filters.repo) ?? repos?.[0];
-  const { data: classified, isLoading: classifying } = useWorktreeSafety(selected?.path);
+  const {
+    data: classified,
+    isLoading: classifying,
+    isError: classifyFailed,
+    error: classifyError,
+    refetch: retryClassify,
+  } = useWorktreeSafety(selected?.path);
   const { data: sizes, isLoading: sizing } = useWorktreeSizes(selected?.path);
   const remove = useRemoveWorktree();
 
@@ -324,6 +330,10 @@ export function WorktreesPage() {
         : (b.size_bytes ?? 0) - (a.size_bytes ?? 0);
     });
 
+  // Withheld unless classification actually SUCCEEDED. A failed pass
+  // used to resolve as an empty success, so rows sat on "checking..."
+  // forever while this read a confident "0 safe to remove".
+  const safeKnown = !classifying && !classifyFailed;
   const safeCount = shown.filter((w) => isSafe(w.safety)).length;
 
   return (
@@ -338,6 +348,15 @@ export function WorktreesPage() {
             acting on a figure that was never the answer. */}
         {classifying ? (
           <span className="text-xs text-[#58a6ff]">checking what is safe to remove…</span>
+        ) : classifyFailed ? (
+          <button
+            type="button"
+            onClick={() => void retryClassify()}
+            className="text-xs text-[#f85149] hover:underline"
+            title={errorMessage(classifyError)}
+          >
+            could not check what is safe — retry
+          </button>
         ) : (
           <span className="text-xs text-[#3fb950]">{safeCount} safe to remove</span>
         )}
@@ -348,7 +367,7 @@ export function WorktreesPage() {
             clicking rather than only in the dialog. 106 of 268 worktrees
             are safe on a real machine, mostly in a few repos -- clicking
             those one at a time adds no safety, only clicks. */}
-        {safeCount > 1 && !classifying ? (
+        {safeCount > 1 && safeKnown ? (
           <button
             type="button"
             disabled={bulkBusy}

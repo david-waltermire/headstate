@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { useDockerBuildDetail, useDockerBuilds, useDockerImages } from "../api/hooks";
+import {
+  useDockerBuildDetail,
+  useDockerBuilds,
+  useDockerImages,
+  useDockerState,
+} from "../api/hooks";
+import { QueryError, errorMessage } from "./QueryError";
 import { formatDockerSize } from "../lib/docker";
 import { relativeTime } from "../lib/time";
 import type { DockerBuild } from "../types/pr";
@@ -87,8 +93,34 @@ function BuildDetail({ build }: { build: DockerBuild }) {
 }
 
 export function DockerBuildsPage() {
-  const { data: builds, isLoading } = useDockerBuilds(true);
+  // Gated on the daemon being up, like every sibling on the Images tab.
+  // Hardcoding `true` made a missing Docker render "No builds in
+  // history" -- an empty answer to a question we could not ask.
+  const { data: state } = useDockerState();
+  const up = state?.kind === "running";
+  const { data: builds, isLoading, isError, error, refetch } = useDockerBuilds(up);
   const [selected, setSelected] = useState<string | null>(null);
+
+  if (state && !up) {
+    return (
+      <div className="rounded-md border border-[#30363d] px-4 py-12 text-center text-sm text-[#8b949e]">
+        {state.kind === "not_installed"
+          ? "Docker was not found."
+          : "Docker is not running."}{" "}
+        Build history is unavailable.
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <QueryError
+        title="Could not read build history"
+        message={errorMessage(error)}
+        onRetry={() => void refetch()}
+      />
+    );
+  }
 
   if (isLoading) {
     return (

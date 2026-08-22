@@ -114,16 +114,17 @@ pub fn start_engine() -> Result<(), String> {
 ///
 /// A user may have a database up that they would otherwise notice the
 /// hard way.
-pub fn running_containers() -> Vec<String> {
-    docker(&["ps", "--format", "{{.Names}}"])
-        .map(|s| {
-            s.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+pub fn running_containers() -> Result<Vec<String>, String> {
+    // Propagates rather than defaulting: the restart dialog saying "no
+    // containers are running" when it could not ask is false
+    // reassurance about work the restart is going to kill.
+    docker(&["ps", "--format", "{{.Names}}"]).map(|s| {
+        s.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
 }
 
 #[cfg(test)]

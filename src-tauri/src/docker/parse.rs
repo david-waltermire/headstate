@@ -34,7 +34,7 @@ pub fn images(out: &str) -> Vec<Image> {
             created: parse_created(v["CreatedAt"].as_str().unwrap_or_default()),
             size_bytes: parse_size(v["Size"].as_str().unwrap_or_default()),
             origin: None,
-            in_use: false,
+            in_use: None,
             superseded: false,
         });
         // `<none>` is Docker's placeholder for an untagged image; carrying
@@ -266,6 +266,38 @@ mod tests {
         );
     }
 
+    /// The safety gate must fail CLOSED. A failed `docker ps` used to
+    /// return an empty list via unwrap_or_default(), which reads as
+    /// "nothing is in use" -- un-gating removal on images a running
+    /// container holds, AND defeating remove_image's delete-time
+    /// re-check, since both called the same function.
+    #[test]
+    fn an_unknown_in_use_state_is_never_stale() {
+        use crate::docker::{Origin, OriginSource};
+        let img = Image {
+            id: "i".into(),
+            repository: "r".into(),
+            tags: vec![],
+            created: String::new(),
+            size_bytes: 0,
+            origin: Some(Origin {
+                repo_path: "/code/proj".into(),
+                context: None,
+                commit: "abc".into(),
+                subject: "a change".into(),
+                merged: true,
+                source: OriginSource::TagResolution,
+            }),
+            // We could not ask. NOT "nothing is using it".
+            in_use: None,
+            superseded: true,
+        };
+        assert!(
+            !img.is_stale(),
+            "an image whose in-use state is unknown must not enter the bulk set"
+        );
+    }
+
     /// Stale is narrower than superseded: an image on a live branch may
     /// still be wanted, and only the provably-dead set is bulk-removable.
     #[test]
@@ -281,7 +313,7 @@ mod tests {
                 source: OriginSource::TagResolution,
             })
         };
-        let img = |superseded, in_use, merged| Image {
+        let img = |superseded, in_use: Option<bool>, merged| Image {
             id: "i".into(),
             repository: "r".into(),
             tags: vec![],
@@ -292,20 +324,23 @@ mod tests {
             superseded,
         };
 
-        assert!(img(true, false, true).is_stale());
+        assert!(img(true, Some(false), true).is_stale());
         assert!(
-            !img(false, false, true).is_stale(),
+            !img(false, Some(false), true).is_stale(),
             "current is never stale"
         );
-        assert!(!img(true, true, true).is_stale(), "in use is never stale");
         assert!(
-            !img(true, false, false).is_stale(),
+            !img(true, Some(true), true).is_stale(),
+            "in use is never stale"
+        );
+        assert!(
+            !img(true, Some(false), false).is_stale(),
             "an unmerged branch may still want its image"
         );
 
         // Unknown provenance is not stale: we cannot prove the branch
         // landed, so it does not enter the bulk set.
-        let mut unknown = img(true, false, true);
+        let mut unknown = img(true, Some(false), true);
         unknown.origin = None;
         assert!(!unknown.is_stale());
     }

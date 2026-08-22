@@ -304,18 +304,19 @@ fn dir_size(path: &Path) -> u64 {
 /// A separate pass from classification: ~60ms per worktree, so ~18s
 /// across all 296 here. The UI fills these in after the list and the
 /// safety states are already on screen.
-pub fn size_repo(repo_path: &str) -> Vec<(String, u64)> {
+pub fn size_repo(repo_path: &str) -> Result<Vec<(String, u64)>, String> {
     let dir = Path::new(repo_path);
-    let Ok(list) = git(dir, &["worktree", "list", "--porcelain"]) else {
-        return Vec::new();
-    };
-    parse_porcelain(&list)
+    // An empty vec on git failure resolved as SUCCESS, so the UI could
+    // not tell "this repo has no worktrees" from "we could not look".
+    let list = git(dir, &["worktree", "list", "--porcelain"])
+        .map_err(|e| format!("could not list worktrees: {e}"))?;
+    Ok(parse_porcelain(&list)
         .into_iter()
         .map(|w| {
             let bytes = dir_size(Path::new(&w.path));
             (w.path, bytes)
         })
-        .collect()
+        .collect())
 }
 
 /// When a branch's tip landed in the default branch.
@@ -367,19 +368,22 @@ fn merged_date(repo: &Path, head: &str, default_branch: &str) -> Option<String> 
 
 /// Classify one repo's worktrees. Called per repo so the UI can fill in
 /// results as they arrive rather than waiting for all 37.
-pub fn classify_repo(repo_path: &str) -> Vec<Worktree> {
+pub fn classify_repo(repo_path: &str) -> Result<Vec<Worktree>, String> {
     let dir = Path::new(repo_path);
-    let Ok(list) = git(dir, &["worktree", "list", "--porcelain"]) else {
-        return Vec::new();
-    };
+    // An empty vec on git failure resolved as SUCCESS, which left rows
+    // stuck on "checking..." forever while the header confidently read
+    // "0 safe to remove" -- a definite zero for a question we could not
+    // ask.
+    let list = git(dir, &["worktree", "list", "--porcelain"])
+        .map_err(|e| format!("could not list worktrees: {e}"))?;
     let branch = default_branch(dir);
-    parse_porcelain(&list)
+    Ok(parse_porcelain(&list)
         .into_iter()
         .map(|mut w| {
             classify(&mut w, dir, &branch);
             w
         })
-        .collect()
+        .collect())
 }
 
 /// Every repo with its worktrees fully classified, in one pass.
@@ -1291,7 +1295,7 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
     #[test]
     fn every_worktree_gets_its_upstream_state() {
         let (_t, repo, _wt) = squash_merged_fixture(false);
-        let wts = classify_repo(repo.to_str().unwrap());
+        let wts = classify_repo(repo.to_str().unwrap()).unwrap();
 
         for w in &wts {
             assert!(w.upstream.is_some(), "{} has no upstream state", w.path);
@@ -1304,7 +1308,7 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
     #[test]
     fn every_worktree_carries_its_last_commit_date() {
         let (_t, repo, _wt) = squash_merged_fixture(false);
-        let wts = classify_repo(repo.to_str().unwrap());
+        let wts = classify_repo(repo.to_str().unwrap()).unwrap();
 
         for w in &wts {
             let d = w
@@ -1391,7 +1395,7 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
             "fixture no longer reproduces a squash merge"
         );
 
-        let wts = classify_repo(repo.to_str().unwrap());
+        let wts = classify_repo(repo.to_str().unwrap()).unwrap();
         let found = wts
             .iter()
             .find(|w| w.path.contains("proj-feature"))
@@ -1409,7 +1413,7 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
     #[test]
     fn a_genuinely_unmerged_branch_is_still_unmerged() {
         let (_t, repo, _wt) = squash_merged_fixture(false);
-        let wts = classify_repo(repo.to_str().unwrap());
+        let wts = classify_repo(repo.to_str().unwrap()).unwrap();
         let found = wts
             .iter()
             .find(|w| w.path.contains("proj-feature"))
@@ -1477,7 +1481,7 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
             .iter()
             .find(|r| r.name == "proj")
             .expect("repo not found");
-        let via_classify = classify_repo(repo.to_str().unwrap());
+        let via_classify = classify_repo(repo.to_str().unwrap()).unwrap();
 
         assert_eq!(scanned.worktrees.len(), via_classify.len());
         for (a, b) in scanned.worktrees.iter().zip(via_classify.iter()) {
@@ -1601,7 +1605,7 @@ mod live {
 
         if let Some(r) = repos.iter().max_by_key(|r| r.worktrees.len()) {
             let t = std::time::Instant::now();
-            let sizes = size_repo(&r.path);
+            let sizes = size_repo(&r.path).unwrap();
             let total: u64 = sizes.iter().map(|(_, b)| b).sum();
             println!(
                 "SIZED {} worktrees of {} in {:?}, total {:.1} GB",

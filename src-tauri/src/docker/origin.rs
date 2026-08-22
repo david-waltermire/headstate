@@ -101,16 +101,20 @@ pub fn parse_build_inspect(out: &str) -> Option<(String, String)> {
 /// Read from running containers rather than inferred from tags: an image
 /// in use must never be offered for cleanup, and `docker rmi` would
 /// refuse it anyway -- better to not offer than to offer and fail.
-pub fn images_in_use() -> Vec<String> {
-    docker(&["ps", "--format", "{{.Image}}"])
-        .map(|s| {
-            s.lines()
-                .map(str::trim)
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+pub fn images_in_use() -> Result<Vec<String>, String> {
+    // Deliberately NOT unwrap_or_default(). A failed `docker ps` returning
+    // an empty list is indistinguishable from "no containers are running",
+    // and this function is used TWICE: once to decide whether to offer
+    // removal, and once inside remove_image as the delete-time re-check.
+    // One swallowed error therefore defeated both the offer and the guard,
+    // making the safety gate fail OPEN.
+    docker(&["ps", "--format", "{{.Image}}"]).map(|s| {
+        s.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ import { formatDockerSize, imageState, imageTone, isStale } from "../lib/docker"
 import { relativeTime } from "../lib/time";
 
 import type { DockerImage } from "../types/pr";
+import { QueryError, errorMessage } from "./QueryError";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
 /// One line of the disk summary.
@@ -46,7 +47,16 @@ function UsageRow({
 /// A page that listed only images would leave most of the waste
 /// invisible, so the summary leads.
 function DiskSummary({ onPrune }: { onPrune: () => void }) {
-  const { data: du } = useDockerDiskUsage(true);
+  const { data: du, isError } = useDockerDiskUsage(true);
+  if (isError) {
+    // Vanishing silently is a wrong answer by omission: this panel leads
+    // the page and is the argument for the feature existing.
+    return (
+      <div className="rounded-md border border-[#30363d] p-3 text-xs text-[#8b949e]">
+        Could not read Docker disk usage.
+      </div>
+    );
+  }
   if (!du) return null;
 
   return (
@@ -103,11 +113,17 @@ function ImageRow({
       </span>
       <button
         type="button"
-        disabled={img.in_use || removing}
+        disabled={img.in_use !== false || removing}
         onClick={() => onRemove(img)}
-        title={img.in_use ? "A running container is using this image" : "Remove this image"}
+        title={
+          img.in_use === true
+            ? "A running container is using this image"
+            : img.in_use === null
+              ? "Could not check whether a container is using this image"
+              : "Remove this image"
+        }
         className={`shrink-0 rounded border px-2 py-0.5 text-xs ${
-          img.in_use || removing
+          img.in_use !== false || removing
             ? "border-[#30363d] text-[#8b949e] opacity-50"
             : "border-[#f85149]/40 text-[#f85149] hover:bg-[#f85149]/10"
         }`}
@@ -121,7 +137,7 @@ function ImageRow({
 export function DockerPage() {
   const { data: state } = useDockerState();
   const up = state?.kind === "running";
-  const { data: images, isLoading } = useDockerImages(up);
+  const { data: images, isLoading, isError, error, refetch } = useDockerImages(up);
   const { data: volumes } = useDockerVolumes(up);
   const removeImages = useRemoveImages();
   const removeVolume = useRemoveVolume();
@@ -220,6 +236,15 @@ export function DockerPage() {
       <div className="rounded-md border border-[#30363d]">
         {isLoading ? (
           <div className="px-4 py-12 text-center text-sm text-[#8b949e]">Reading images…</div>
+        ) : isError ? (
+          // NOT an empty list. On a disk-cleanup tool "No images." reads
+          // as "your machine is clean" when the truth is we could not
+          // ask -- the exact pattern this codebase forbids.
+          <QueryError
+            title="Could not read Docker images"
+            message={errorMessage(error)}
+            onRetry={() => void refetch()}
+          />
         ) : shown.length === 0 ? (
           <div className="px-4 py-12 text-center text-sm text-[#8b949e]">No images.</div>
         ) : (

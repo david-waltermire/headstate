@@ -58,7 +58,13 @@ pub struct Image {
     pub origin: Option<Origin>,
     /// A running container holds this image. Never a cleanup candidate,
     /// regardless of everything else.
-    pub in_use: bool,
+    ///
+    /// `None` means we could not ask -- the daemon was mid-restart, or
+    /// the socket refused us. That is NOT "nothing is using it": an
+    /// unknown answer must render as not-removable, since `docker rmi`
+    /// would refuse anyway and offering-then-failing is worse than not
+    /// offering.
+    pub in_use: Option<bool>,
     /// A newer image exists for the same repository.
     pub superseded: bool,
 }
@@ -71,7 +77,11 @@ impl Image {
     /// the bulk path is for the provably-dead set only -- the same rule
     /// the worktrees view applies to `Safety::Safe`.
     pub fn is_stale(&self) -> bool {
-        self.superseded && !self.in_use && self.origin.as_ref().is_some_and(|o| o.merged)
+        self.superseded
+            // Only a KNOWN-unused image is stale. `None` -- we could not
+            // ask -- keeps it out of the bulk set.
+            && self.in_use == Some(false)
+            && self.origin.as_ref().is_some_and(|o| o.merged)
     }
 }
 
