@@ -1,4 +1,4 @@
-import { ChevronDown, Eye, FolderGit2, GitPullRequest } from "lucide-react";
+import { Container, ChevronDown, Eye, FolderGit2, GitPullRequest } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type View, useFilters } from "../store/filters";
 
@@ -6,6 +6,7 @@ const VIEWS: { id: View; label: string; Icon: typeof GitPullRequest }[] = [
   { id: "my-prs", label: "My pull requests", Icon: GitPullRequest },
   { id: "to-review", label: "To review", Icon: Eye },
   { id: "worktrees", label: "Worktrees", Icon: FolderGit2 },
+  { id: "docker", label: "Docker", Icon: Container },
 ];
 
 /// The top-level view control, at the head of the sidebar.

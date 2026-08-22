@@ -67,7 +67,7 @@ const wt = (over: Partial<Worktree>): Worktree => ({
   ...over,
 });
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {} } as const;
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } as const;
 
 describe("WorktreesPage", () => {
   beforeEach(() => {

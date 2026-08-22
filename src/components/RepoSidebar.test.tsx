@@ -83,7 +83,7 @@ describe("RepoSidebar", () => {
   /// the click appears to do nothing, because the stats view ignores the repo
   /// filter entirely.
   it("returns to the list when a repo is chosen from the stats view", () => {
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "stats" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "stats" } as never);
     render(<RepoSidebar prs={PR_FIXTURES} />);
 
     fireEvent.click(screen.getByRole("button", { name: /octocat\/hello-world/ }));

@@ -17,6 +17,7 @@ import { PrList } from "./components/PrList";
 import { ReviewChips } from "./components/ReviewChips";
 import { TriageChips } from "./components/TriageChips";
 import { WorktreeSidebar } from "./components/WorktreeSidebar";
+import { DockerPage } from "./components/DockerPage";
 import { WorktreesPage } from "./components/WorktreesPage";
 import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
@@ -108,7 +109,7 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3]">
       <div className="flex min-h-0 flex-1">
-      {view === "worktrees" ? (
+      {view === "worktrees" || view === "docker" ? (
         <WorktreeSidebar viewCounts={{ "to-review": reviewing.length }} />
       ) : (
         <RepoSidebar prs={source} viewCounts={{ "to-review": reviewing.length }} />
@@ -122,8 +123,10 @@ export default function App() {
           <h1 className="text-sm font-semibold">
             {view === "to-review"
               ? "Pull requests to review"
-              : view === "worktrees"
-                ? "Worktrees"
+              : view === "docker"
+                ? "Docker"
+                : view === "worktrees"
+                  ? "Worktrees"
                 : panel === "stats"
                   ? "Stats"
                   : "Pull requests"}
@@ -146,6 +149,10 @@ export default function App() {
               number={selectedPr.number}
               onBack={() => selectPr(null)}
             />
+          </div>
+        ) : view === "docker" ? (
+          <div className="p-4">
+            <DockerPage />
           </div>
         ) : view === "worktrees" ? (
           <div className="p-4">

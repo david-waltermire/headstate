@@ -10,7 +10,7 @@ import type { Filters } from "../lib/derive";
 /// the list or the stats" were previously one enum, which is what made the
 /// sidebar highlight logic awkward -- `reviewing` and `dashboard` were
 /// peers of `list` despite being different kinds of thing.
-export type View = "my-prs" | "to-review" | "worktrees";
+export type View = "my-prs" | "to-review" | "worktrees" | "docker";
 
 interface FilterStore {
   /// Filters are PER VIEW: a repo selected in My PRs must not leak into
@@ -51,6 +51,7 @@ const EMPTY_FILTERS: Record<View, Filters> = {
   "my-prs": {},
   "to-review": {},
   worktrees: {},
+  docker: {},
 };
 
 /// Filters and view survive a relaunch.

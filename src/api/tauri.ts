@@ -8,15 +8,20 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  PrDetail,
-  Worktree,
-  WorktreeRepo,
   CycleTrend,
+  DanglingVolume,
+  DockerDiskUsage,
+  DockerImage,
+  DockerState,
   History,
+  ImageRemovalOutcome,
   MergedDetail,
   Periods,
+  PrDetail,
   PullRequest,
   Stats,
+  Worktree,
+  WorktreeRepo,
 } from "../types/pr";
 
 export interface AuthState {
@@ -69,6 +74,24 @@ export interface RemovalOutcome {
 /// the first refusal: partial failure is the normal case.
 export const removeWorktrees = (repoPath: string, worktreePaths: string[]) =>
   invoke<RemovalOutcome[]>("remove_worktrees", { repoPath, worktreePaths });
+
+/// --- Docker -------------------------------------------------------
+
+export const dockerState = () => invoke<DockerState>("docker_state");
+export const dockerImages = () => invoke<DockerImage[]>("docker_images");
+export const dockerDiskUsage = () => invoke<DockerDiskUsage>("docker_disk_usage");
+export const dockerRemoveImages = (ids: string[]) =>
+  invoke<ImageRemovalOutcome[]>("docker_remove_images", { ids });
+export const dockerDanglingVolumes = () => invoke<DanglingVolume[]>("docker_dangling_volumes");
+export const dockerRemoveVolume = (name: string) =>
+  invoke<void>("docker_remove_volume", { name });
+/// Returns bytes actually freed, read from the command's own output
+/// rather than echoed from an estimate.
+export const dockerPruneCache = (until?: string) =>
+  invoke<number>("docker_prune_cache", { until });
+export const dockerRunningContainers = () => invoke<string[]>("docker_running_containers");
+export const dockerRestart = () => invoke<void>("docker_restart");
+export const dockerStart = () => invoke<void>("docker_start");
 
 /// Worktrees handed to Claude Code and still at the head they were
 /// assessed at. A branch that has moved since is dropped: the assessment

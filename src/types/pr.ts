@@ -241,3 +241,56 @@ export interface PrDetail {
   /// rather than exported types, since nothing imports the names.
   checks: { name: string; state: string; url: string }[];
 }
+
+/// How an image's provenance was established. A recorded fact and a
+/// resolved guess should not look identical in the UI.
+type OriginSource = "build_history" | "tag_resolution";
+
+interface DockerOrigin {
+  repo_path: string;
+  /// The build context, which for a worktree build IS the worktree.
+  context: string | null;
+  commit: string;
+  subject: string;
+  /// The branch landed, so nothing will ever want this image again.
+  merged: boolean;
+  source: OriginSource;
+}
+
+export interface DockerImage {
+  id: string;
+  repository: string;
+  /// Every tag pointing at this ID -- `latest` and a SHA are one image.
+  tags: string[];
+  created: string;
+  size_bytes: number;
+  origin: DockerOrigin | null;
+  in_use: boolean;
+  superseded: boolean;
+}
+
+export interface DockerDiskUsage {
+  images_bytes: number;
+  images_reclaimable_bytes: number;
+  build_cache_bytes: number;
+  volumes_bytes: number;
+  volumes_reclaimable_bytes: number;
+}
+
+/// Docker is frequently OFF, unlike git. "We could not ask" is not "the
+/// answer is zero".
+export type DockerState =
+  | { kind: "running" }
+  | { kind: "not_running" }
+  | { kind: "not_installed" }
+  | { kind: "unknown"; detail: string };
+
+export interface DanglingVolume {
+  name: string;
+  size_bytes: number;
+}
+
+export interface ImageRemovalOutcome {
+  id: string;
+  error: string | null;
+}

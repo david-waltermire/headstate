@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod commands;
+pub mod docker;
 pub mod github;
 pub mod poll;
 pub mod store;
@@ -75,6 +76,16 @@ pub fn run() {
             commands::classify_worktrees,
             commands::remove_worktree,
             commands::remove_worktrees,
+            commands::docker_state,
+            commands::docker_images,
+            commands::docker_disk_usage,
+            commands::docker_remove_images,
+            commands::docker_dangling_volumes,
+            commands::docker_remove_volume,
+            commands::docker_prune_cache,
+            commands::docker_running_containers,
+            commands::docker_restart,
+            commands::docker_start,
             commands::claudify_command,
             commands::assessed_worktrees,
             commands::remove_worktree_forced,

@@ -363,6 +363,90 @@ pub fn default_worktree_dirs() -> Vec<String> {
 /// Non-existent paths are rejected rather than stored: a typo should fail
 /// visibly here, not silently produce an empty worktrees view later.
 #[tauri::command]
+/// Whether Docker can be talked to.
+///
+/// A stopped daemon is a state, not an error: reporting it as a failure
+/// -- or as an empty image list -- would say the machine is clean when
+/// the truth is that we could not ask.
+pub fn docker_state() -> crate::docker::DockerState {
+    crate::docker::state()
+}
+
+#[tauri::command]
+/// Images with provenance and in-use resolved.
+///
+/// Resolved against the same directories the worktrees view scans, so a
+/// machine configured once works for both.
+pub fn docker_images(app: AppHandle) -> Result<Vec<crate::docker::Image>, String> {
+    let dirs = get_worktree_dirs(app);
+    let repos: Vec<std::path::PathBuf> = dirs.iter().map(std::path::PathBuf::from).collect();
+    crate::docker::classify(&repos)
+}
+
+#[tauri::command]
+/// Where the disk actually went. Images are only part of it.
+pub fn docker_disk_usage() -> Result<crate::docker::DiskUsage, String> {
+    crate::docker::docker(&["system", "df"]).map(|out| crate::docker::disk_usage(&out))
+}
+
+#[tauri::command]
+/// Remove images by ID, reporting each independently.
+///
+/// In-use is re-checked per image at removal time, not trusted from the
+/// listing: a container may have started since.
+pub fn docker_remove_images(ids: Vec<String>) -> Vec<crate::docker::RemovalOutcome> {
+    let outcomes = crate::docker::remove_images(&ids);
+    let failed = outcomes.iter().filter(|o| o.error.is_some()).count();
+    log::info!(
+        "docker: removed {} of {} images",
+        outcomes.len() - failed,
+        outcomes.len()
+    );
+    outcomes
+}
+
+#[tauri::command]
+/// Volumes attached to nothing.
+pub fn docker_dangling_volumes() -> Result<Vec<crate::docker::DanglingVolume>, String> {
+    crate::docker::dangling_volumes()
+}
+
+#[tauri::command]
+/// Remove one volume. Never bulk: a wrongly deleted volume costs data,
+/// where a wrongly deleted image costs a rebuild.
+pub fn docker_remove_volume(name: String) -> Result<(), String> {
+    log::warn!("docker: removing volume {name}");
+    crate::docker::remove_volume(&name)
+}
+
+#[tauri::command]
+/// Clear build cache, returning what was actually freed.
+pub fn docker_prune_cache(until: Option<String>) -> Result<u64, String> {
+    let freed = crate::docker::prune_build_cache(until.as_deref())?;
+    log::info!("docker: build cache prune freed {freed} bytes");
+    Ok(freed)
+}
+
+#[tauri::command]
+/// Containers a restart would stop, so the confirmation can name them.
+pub fn docker_running_containers() -> Vec<String> {
+    crate::docker::running_containers()
+}
+
+#[tauri::command]
+/// Restart the Docker engine.
+pub fn docker_restart() -> Result<(), String> {
+    log::warn!("docker: restarting the engine");
+    crate::docker::restart_engine()
+}
+
+#[tauri::command]
+/// Start a stopped engine.
+pub fn docker_start() -> Result<(), String> {
+    crate::docker::start_engine()
+}
+
+#[tauri::command]
 /// Remove several worktrees, reporting each one's outcome.
 ///
 /// The per-worktree safety gate is unchanged: this is N safe deletions,

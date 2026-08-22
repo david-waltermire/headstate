@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useFilters } from "./filters";
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {} } as const;
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } as const;
 const active = () => {
   const s = useFilters.getState();
   return s.filtersByView[s.view];
@@ -98,7 +98,10 @@ describe("persisted state migration", () => {
   // Every view must exist as a key, or reading the active one is undefined.
   it("always produces a complete filtersByView", () => {
     const out = migrate({ filters: { staleOnly: true }, view: "list" }, 1);
+    // Every view must get an entry, or a v1 store rehydrated into the
+    // current shape throws on first access -- the crash #145 shipped.
     expect(Object.keys(out.filtersByView).sort()).toEqual([
+      "docker",
       "my-prs",
       "to-review",
       "worktrees",

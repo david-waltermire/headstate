@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { PullRequest, Worktree } from "../types/pr";
+import type { DockerImage, PullRequest, Worktree } from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
   getCached,
@@ -19,6 +19,13 @@ import {
   listWorktrees,
   removeWorktree,
   assessedWorktrees,
+  dockerDanglingVolumes,
+  dockerDiskUsage,
+  dockerImages,
+  dockerPruneCache,
+  dockerRemoveImages,
+  dockerRemoveVolume,
+  dockerState,
   removeWorktreeForced,
   removeWorktrees,
   sizeWorktrees,
@@ -453,6 +460,86 @@ export function useRemoveWorktreeForced() {
       );
       void qc.invalidateQueries({ queryKey: ["assessed-worktrees"] });
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
+    });
+}
+
+/// --- Docker -------------------------------------------------------
+
+/// Whether Docker can be talked to. Polled slowly: the daemon starting
+/// or stopping is the kind of thing a user does, so the view should
+/// notice without them reloading.
+export function useDockerState() {
+  return useQuery({
+    queryKey: ["docker-state"],
+    queryFn: dockerState,
+    refetchInterval: 15_000,
+    staleTime: 5_000,
+  });
+}
+
+/// The image list, with provenance. Only fetched when Docker is up --
+/// asking a stopped daemon just produces an error the view already
+/// explains better.
+export function useDockerImages(enabled: boolean) {
+  return useQuery({
+    queryKey: ["docker-images"],
+    queryFn: dockerImages,
+    enabled,
+    staleTime: 10_000,
+  });
+}
+
+export function useDockerDiskUsage(enabled: boolean) {
+  return useQuery({
+    queryKey: ["docker-disk"],
+    queryFn: dockerDiskUsage,
+    enabled,
+    staleTime: 10_000,
+  });
+}
+
+export function useDockerVolumes(enabled: boolean) {
+  return useQuery({
+    queryKey: ["docker-volumes"],
+    queryFn: dockerDanglingVolumes,
+    enabled,
+    staleTime: 10_000,
+  });
+}
+
+/// Remove images, dropping the successful ones from the cache.
+///
+/// Filtered rather than invalidated, for the same reason worktree
+/// removal is: re-resolving provenance means git calls per tag, and
+/// removing an image cannot change any other image's standing.
+export function useRemoveImages() {
+  const qc = useQueryClient();
+  return (ids: string[]) =>
+    dockerRemoveImages(ids).then((outcomes) => {
+      const gone = new Set(outcomes.filter((o) => o.error === null).map((o) => o.id));
+      qc.setQueryData<DockerImage[]>(["docker-images"], (old) =>
+        old?.filter((i) => !gone.has(i.id)),
+      );
+      void qc.invalidateQueries({ queryKey: ["docker-disk"] });
+      return outcomes;
+    });
+}
+
+export function useRemoveVolume() {
+  const qc = useQueryClient();
+  return (name: string) =>
+    dockerRemoveVolume(name).then(() => {
+      void qc.invalidateQueries({ queryKey: ["docker-volumes"] });
+      void qc.invalidateQueries({ queryKey: ["docker-disk"] });
+    });
+}
+
+export function usePruneCache() {
+  const qc = useQueryClient();
+  return (until?: string) =>
+    dockerPruneCache(until).then((freed) => {
+      void qc.invalidateQueries({ queryKey: ["docker-disk"] });
+      return freed;
     });
 }
 

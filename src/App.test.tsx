@@ -73,7 +73,7 @@ function renderApp() {
 
 describe("App — priorities strip scoping", () => {
   afterEach(() => {
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
     vi.clearAllMocks();
   });
 
@@ -93,7 +93,7 @@ describe("App — priorities strip scoping", () => {
     });
     mockPrs.mockReturnValue([here, elsewhere]);
 
-    useFilters.setState({ filtersByView: { "my-prs": { repo: "octocat/hello-world" }, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": { repo: "octocat/hello-world" }, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
 
     // Scope to the strip: the selected repo's PR also appears in the list
@@ -117,7 +117,7 @@ describe("App — priorities strip scoping", () => {
     });
     mockPrs.mockReturnValue([here, elsewhere]);
 
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
 
     expect(screen.getByText(/Needs your attention \(2\)/)).toBeDefined();
@@ -135,7 +135,7 @@ describe("App — priorities strip scoping", () => {
     });
     mockPrs.mockReturnValue([blocked]);
 
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "stats" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "stats" } as never);
     renderApp();
 
     expect(screen.queryByText(/Needs your attention/)).toBeNull();
@@ -156,7 +156,7 @@ describe("App — priorities strip scoping", () => {
     });
     mockPrs.mockReturnValue([blocked, ...PR_FIXTURES]);
 
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} }, view: "my-prs", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
 
     const strip = screen.getByText(/Needs your attention/).closest("section");

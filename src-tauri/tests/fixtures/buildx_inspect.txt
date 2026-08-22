@@ -1,0 +1,8 @@
+Name:		octocat-api/docker
+Context:	/Users/octocat/code/octocat-api
+Dockerfile:	docker/Dockerfile
+VCS Repository:	git@github.com:octocat/octocat-api.git
+VCS Revision:	1390188608bc2fa9566bf50c8a697f1d853dfed3
+Platforms:	linux/amd64
+
+NAMED CONTEXT	VALUE

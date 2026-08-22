@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useFilters } from "../store/filters";
 import { ViewSwitcher } from "./ViewSwitcher";
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {} } as const;
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } as const;
 
 describe("ViewSwitcher", () => {
   beforeEach(() =>
@@ -17,10 +17,14 @@ describe("ViewSwitcher", () => {
     expect(screen.queryByRole("menuitem")).toBeNull();
   });
 
-  it("lists all three views when expanded", () => {
+  // Names rather than a count: a bare length assertion has to be edited
+  // every time a view is added and says nothing about which are missing.
+  it("lists every view when expanded", () => {
     render(<ViewSwitcher />);
     fireEvent.click(screen.getByRole("button", { name: /my pull requests/i }));
-    expect(screen.getAllByRole("menuitem")).toHaveLength(3);
+    for (const label of [/my pull requests/i, /to review/i, /worktrees/i, /docker/i]) {
+      expect(screen.getByRole("menuitem", { name: label })).toBeTruthy();
+    }
   });
 
   it("switches view and closes", () => {
@@ -65,7 +69,7 @@ describe("ViewSwitcher", () => {
   // another, which has an entirely different repo list.
   it("does not leak filters between views", () => {
     useFilters.setState({
-      filtersByView: { "my-prs": { repo: "octocat/hello-world" }, "to-review": {}, worktrees: {} },
+      filtersByView: { "my-prs": { repo: "octocat/hello-world" }, "to-review": {}, worktrees: {}, docker: {} },
       view: "my-prs",
       panel: "list",
     });
