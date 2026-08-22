@@ -147,6 +147,24 @@ export const useFilters = create<FilterStore>()(
           panel,
         } as never;
       },
+      // Stored state is REPLACED into the store, not merged, so adding a
+      // view to the `View` union silently breaks every existing install:
+      // the persisted `filtersByView` has no key for it, and reading
+      // `.sort` off undefined takes down the entire app with a black
+      // window. This happened for real when `worktrees` and `docker`
+      // were added -- both were already version 2, so the migration
+      // above returned the old shape untouched.
+      //
+      // Merging per-view against EMPTY_FILTERS makes the store complete
+      // by construction, for every view that exists now or later.
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<FilterStore>;
+        return {
+          ...current,
+          ...p,
+          filtersByView: { ...EMPTY_FILTERS, ...(p.filtersByView ?? {}) },
+        };
+      },
       partialize: (s) => ({
         // `query` is dropped per view for the same reason as before: a
         // search box restored with yesterday's text renders a filtered
@@ -161,10 +179,24 @@ export const useFilters = create<FilterStore>()(
   ),
 );
 
+/// Shared empty-filter object, so the fallback below is reference-stable.
+const NO_FILTERS: Filters = Object.freeze({});
+
 /// The active view's filters.
 ///
 /// A selector rather than a stored field, so there is exactly one source
 /// of truth and no chance of the two drifting apart.
 export function useActiveFilters(): Filters {
-  return useFilters((s) => s.filtersByView[s.view]);
+  // NO_FILTERS is a module constant, not an inline `?? {}`. zustand
+  // compares selector results by reference, so returning a fresh `{}`
+  // each call makes every read look like a change and spins
+  // useSyncExternalStore into an infinite re-render -- a worse failure
+  // than the crash this guards against. Caught by the test below.
+  //
+  // The guard itself is real, not defensive noise. `filtersByView` is
+  // rehydrated from disk, and `persist` REPLACES this object rather than
+  // merging it -- so a store written before a view existed comes back
+  // without that view's key. Every consumer reads `.sort` / `.repo` off
+  // this value, so returning undefined crashes the whole tree.
+  return useFilters((s) => s.filtersByView[s.view] ?? NO_FILTERS);
 }
