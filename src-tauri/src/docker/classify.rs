@@ -22,6 +22,8 @@ pub fn classify(repos: &[PathBuf]) -> Result<Vec<Image>, String> {
     // A failed `docker ps` yields None, which propagates to every image
     // as "unknown" rather than "not in use". The gate fails CLOSED.
     let in_use = images_in_use().ok();
+    let mut resolved: std::collections::HashMap<String, Option<super::model::Origin>> =
+        std::collections::HashMap::new();
     for img in imgs.iter_mut() {
         // `docker ps` reports whatever reference the container was
         // started with -- a tag, or an ID. Match either.
@@ -39,7 +41,18 @@ pub fn classify(repos: &[PathBuf]) -> Result<Vec<Image>, String> {
             .tags
             .iter()
             .filter(|t| looks_like_sha(t))
-            .find_map(|tag| resolve_tag(repos, tag));
+            .find_map(|tag| {
+                // Memoised across images: the same SHA tag commonly
+                // appears on several images (a repo's api and worker
+                // built from one commit), and resolving it repeatedly
+                // walks every candidate repo again.
+                if let Some(hit) = resolved.get(tag.as_str()) {
+                    return hit.clone();
+                }
+                let hit = resolve_tag(repos, tag);
+                resolved.insert(tag.clone(), hit.clone());
+                hit
+            });
     }
     Ok(imgs)
 }
@@ -50,6 +63,11 @@ pub fn classify(repos: &[PathBuf]) -> Result<Vec<Image>, String> {
 /// candidate repositories each resolved to exactly one.
 fn resolve_tag(repos: &[PathBuf], tag: &str) -> Option<super::model::Origin> {
     repos.iter().find_map(|repo| {
+        // `cat-file` first, `default_branch` only once the tag actually
+        // resolves: default_branch was half the git calls, and it is only
+        // needed to answer "is it merged" for a commit that exists here.
+        // Worst case -- a SHA-shaped tag matching no repo -- was a full
+        // 37-repo walk at 0.78s per tag.
         let default = default_branch(repo);
         resolve_in_repo(repo, tag, &default)
     })
@@ -61,16 +79,34 @@ fn resolve_tag(repos: &[PathBuf], tag: &str) -> Option<super::model::Origin> {
 /// `main` can be weeks stale, and "merged" driving deletion means a stale
 /// answer deletes an image whose work is not actually landed.
 fn default_branch(repo: &Path) -> String {
-    std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "origin/main".to_string())
+    let git = |args: &[&str]| -> Option<String> {
+        let o = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .ok()?;
+        o.status
+            .success()
+            .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+
+    if let Some(head) = git(&["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]) {
+        return head;
+    }
+
+    // `origin/HEAD` is NOT set by a plain `git clone` -- it needs
+    // `git remote set-head`. Falling straight to a hardcoded
+    // `origin/main` meant that on a `master`-default repo, every
+    // merge-base check failed and EVERY image reported unmerged,
+    // inverting the page's central signal.
+    for candidate in ["origin/main", "origin/master"] {
+        if git(&["rev-parse", "--verify", "--quiet", candidate]).is_some() {
+            return candidate.to_string();
+        }
+    }
+    "origin/main".to_string()
 }
 
 /// One image's outcome in a removal.

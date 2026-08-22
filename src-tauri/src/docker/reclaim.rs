@@ -24,35 +24,63 @@ pub struct DanglingVolume {
 /// so this is the most conservative action in the view.
 pub fn dangling_volumes() -> Result<Vec<DanglingVolume>, String> {
     let names = docker(&["volume", "ls", "-q", "-f", "dangling=true"])?;
-    let mut out = Vec::new();
-    for name in names.lines().map(str::trim).filter(|l| !l.is_empty()) {
-        // Size comes from `system df -v`, since `volume ls` does not
-        // carry it. Absent size is 0 rather than a guess -- the UI says
-        // "unknown" rather than implying an empty volume.
-        out.push(DanglingVolume {
+
+    // ONE `system df -v`, not one per volume. That call costs 1.94s cold
+    // and 117ms warm, and already returns every volume's size -- the old
+    // per-volume version parsed out one row and discarded the rest, so
+    // 20 dangling volumes cost 2.35s for data one call contains. Same
+    // shape as the quadratic worktree scan that once took ten minutes.
+    //
+    // Reading them together also makes the figures consistent: they now
+    // come from one daemon snapshot rather than N.
+    let sizes = volume_sizes().unwrap_or_default();
+
+    Ok(names
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(|name| DanglingVolume {
             name: name.to_string(),
-            size_bytes: volume_size(name).unwrap_or(0),
-        });
-    }
-    Ok(out)
+            // Absent stays 0, which the UI renders as an em dash rather
+            // than implying an empty volume.
+            size_bytes: sizes.get(name).copied().unwrap_or(0),
+        })
+        .collect())
 }
 
-fn volume_size(name: &str) -> Option<u64> {
+/// Every volume's size, from one `system df -v`.
+fn volume_sizes() -> Option<std::collections::HashMap<String, u64>> {
     let out = docker(&["system", "df", "-v"]).ok()?;
+    Some(parse_volume_table(&out))
+}
+
+/// The "Local Volumes space usage" section of `docker system df -v`.
+fn parse_volume_table(out: &str) -> std::collections::HashMap<String, u64> {
+    let mut sizes = std::collections::HashMap::new();
     let mut in_volumes = false;
     for line in out.lines() {
         if line.starts_with("Local Volumes space usage") {
             in_volumes = true;
             continue;
         }
-        if in_volumes {
-            let cols: Vec<&str> = line.split_whitespace().collect();
-            if cols.first() == Some(&name) {
-                return cols.get(2).map(|s| parse_size(s));
-            }
+        if !in_volumes {
+            continue;
+        }
+        // A blank line ends the section; another header starts a
+        // different one, and reading past it would attribute some other
+        // table's numbers to volumes.
+        if line.trim().is_empty() {
+            break;
+        }
+        if line.starts_with("VOLUME NAME") {
+            continue;
+        }
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if let (Some(name), Some(size)) = (cols.first(), cols.get(2)) {
+            sizes.insert((*name).to_string(), parse_size(size));
         }
     }
-    None
+    sizes
 }
 
 /// Remove one volume by name. Never a bulk path.
@@ -139,6 +167,30 @@ mod tests {
         let out =
             "Deleted build cache objects:\nabc123\ndef456\n\nTotal reclaimed space: 4.654GB\n";
         assert_eq!(parse_reclaimed(out), 4_654_000_000);
+    }
+
+    /// One `system df -v` for every volume, not one per volume. The
+    /// section ends at a blank line: reading past it would attribute
+    /// another table's numbers to volumes.
+    #[test]
+    fn volume_sizes_are_read_from_one_table() {
+        let table = "Images space usage:\n\
+                     REPOSITORY TAG IMAGE ID\n\
+                     \n\
+                     Local Volumes space usage:\n\
+                     VOLUME NAME     LINKS     SIZE\n\
+                     demo_pg_data    0         4.735GB\n\
+                     other_vol       1         100MB\n\
+                     \n\
+                     Build cache usage: 4.654GB\n\
+                     CACHE ID  SIZE\n\
+                     abc123    999GB\n";
+        let sizes = parse_volume_table(table);
+        assert_eq!(sizes.get("demo_pg_data"), Some(&4_735_000_000));
+        assert_eq!(sizes.get("other_vol"), Some(&100_000_000));
+        // The build-cache row must NOT be read as a volume.
+        assert_eq!(sizes.get("abc123"), None);
+        assert_eq!(sizes.len(), 2);
     }
 
     /// A prune that freed nothing says zero rather than inventing a
