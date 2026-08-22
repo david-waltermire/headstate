@@ -23,6 +23,7 @@ const pr = (over: Partial<PrDetail> = {}): PrDetail => ({
   repo: "octocat/hello-world",
   head_ref: "feature",
   head_oid: "oid-detail",
+  head_ref_id: null,
   base_ref: "main",
   merge_status: "clean",
   review: "approved",

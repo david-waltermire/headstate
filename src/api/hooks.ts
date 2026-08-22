@@ -28,6 +28,7 @@ import {
   dockerRemoveImages,
   dockerRemoveVolume,
   dockerState,
+  deleteHeadBranch,
   removeWorktreeForced,
   setAutoMerge,
   removeWorktrees,
@@ -346,6 +347,16 @@ export function useSetAutoMerge() {
   const qc = useQueryClient();
   return (id: string, repo: string, number: number, expectedHead: string, enable: boolean) =>
     setAutoMerge(id, repo, number, expectedHead, enable).then(() => {
+      void qc.invalidateQueries({ queryKey: ["prs"] });
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+    });
+}
+
+/// Delete a merged pull request's head branch.
+export function useDeleteHeadBranch() {
+  const qc = useQueryClient();
+  return (refId: string, repo: string, number: number, branch: string, merged: boolean) =>
+    deleteHeadBranch(refId, repo, number, branch, merged).then(() => {
       void qc.invalidateQueries({ queryKey: ["prs"] });
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
     });

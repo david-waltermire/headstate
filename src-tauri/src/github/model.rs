@@ -101,6 +101,12 @@ pub struct PullRequest {
     /// commit the user was actually looking at.
     #[serde(default)]
     pub head_oid: String,
+    /// The head branch's Ref node id, for deleting it after merge.
+    ///
+    /// `None` once the branch is gone -- which is exactly how the UI
+    /// tells "already cleaned up" from "still there".
+    #[serde(default)]
+    pub head_ref_id: Option<String>,
     pub base_ref: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -268,6 +274,12 @@ pub struct PrDetail {
     /// commit the user was actually looking at.
     #[serde(default)]
     pub head_oid: String,
+    /// The head branch's Ref node id, for deleting it after merge.
+    ///
+    /// `None` once the branch is gone -- which is exactly how the UI
+    /// tells "already cleaned up" from "still there".
+    #[serde(default)]
+    pub head_ref_id: Option<String>,
     pub base_ref: String,
     // Defaults to Unknown, never Clean: a merge button enabled on data the
     // app never fetched is the one wrong answer that costs something.
@@ -302,6 +314,7 @@ mod attention_tests {
             is_draft: false,
             head_ref: "feature/x".into(),
             head_oid: "deadbeef".into(),
+            head_ref_id: None,
             base_ref: "main".into(),
             created_at: t,
             updated_at: t,

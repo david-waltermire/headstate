@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrDetail } from "@/types/pr";
 
@@ -8,9 +8,15 @@ const state = vi.hoisted(() => ({
   isError: false,
 }));
 
+const deleteBranch = vi.hoisted(() =>
+  vi.fn<(r: string, repo: string, n: number, b: string, m: boolean) => Promise<void>>(
+    () => Promise.resolve(),
+  ),
+);
 vi.mock("../api/hooks", () => ({
   usePrDetail: () => ({ ...state, error: "boom", refetch: vi.fn() }),
   useActOnPr: () => vi.fn(() => Promise.resolve()),
+  useDeleteHeadBranch: () => deleteBranch,
 }));
 
 import { PrDetailView } from "./PrDetailView";
@@ -27,6 +33,7 @@ const detail = (over: Partial<PrDetail> = {}): PrDetail => ({
   repo: "octocat/hello-world",
   head_ref: "feature/retry",
   head_oid: "oid-detail",
+  head_ref_id: null,
   base_ref: "main",
   merge_status: "clean",
   review: "none",
@@ -134,5 +141,39 @@ describe("PrDetailView", () => {
     view();
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.getByRole("link", { name: /view on github/i })).toBeTruthy();
+  });
+
+  // 31 of the last 60 merged PRs on a real account still held a live
+  // remote branch. This is the app's own thesis applied to the one
+  // domain where it did nothing.
+  describe("delete branch", () => {
+    it("is offered once the PR has merged and the branch still exists", () => {
+      state.data = { ...detail(), state: "MERGED", head_ref_id: "REF_1" };
+      render(<PrDetailView repo="o/r" number={1} onBack={() => {}} />);
+      expect(screen.getByRole("button", { name: /delete branch/i })).toBeTruthy();
+    });
+
+    // Deleting the head ref of an OPEN pull request closes it off.
+    it("is never offered while the PR is still open", () => {
+      state.data = { ...detail(), state: "OPEN", head_ref_id: "REF_1" };
+      render(<PrDetailView repo="o/r" number={1} onBack={() => {}} />);
+      expect(screen.queryByRole("button", { name: /delete branch/i })).toBeNull();
+    });
+
+    // A null ref id IS the signal that cleanup already happened.
+    it("is not offered once the branch is already gone", () => {
+      state.data = { ...detail(), state: "MERGED", head_ref_id: null };
+      render(<PrDetailView repo="o/r" number={1} onBack={() => {}} />);
+      expect(screen.queryByRole("button", { name: /delete branch/i })).toBeNull();
+    });
+
+    it("passes merged=true so the backend gate can agree", async () => {
+      state.data = { ...detail(), state: "MERGED", head_ref_id: "REF_1" };
+      render(<PrDetailView repo="o/r" number={1} onBack={() => {}} />);
+      fireEvent.click(screen.getByRole("button", { name: /delete branch/i }));
+      await waitFor(() => expect(deleteBranch).toHaveBeenCalled());
+      expect(deleteBranch.mock.calls[0][0]).toBe("REF_1");
+      expect(deleteBranch.mock.calls[0][4]).toBe(true);
+    });
   });
 });

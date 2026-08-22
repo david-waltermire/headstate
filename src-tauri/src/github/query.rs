@@ -26,6 +26,7 @@ query($q: String!, $reviewing: String!) {
       ... on PullRequest {
         id number title url isDraft createdAt updatedAt
         headRefName headRefOid baseRefName
+        headRef { id }
         author { login }
         repository { nameWithOwner }
         mergeable mergeStateStatus reviewDecision isInMergeQueue totalCommentsCount
@@ -41,6 +42,7 @@ query($q: String!, $reviewing: String!) {
       ... on PullRequest {
         id number title url isDraft createdAt updatedAt
         headRefName headRefOid baseRefName
+        headRef { id }
         author { login }
         repository { nameWithOwner }
         mergeable mergeStateStatus reviewDecision isInMergeQueue totalCommentsCount
@@ -264,6 +266,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
       mergeable mergeStateStatus reviewDecision
       additions deletions changedFiles
       headRefName headRefOid baseRefName
+        headRef { id }
       createdAt updatedAt
       author { login }
       comments(first: 50) {

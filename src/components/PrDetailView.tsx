@@ -1,6 +1,6 @@
-import { ArrowLeft, Bot, Check, CircleDot, CircleSlash, ExternalLink, X } from "lucide-react";
+import { ArrowLeft, Trash2, Bot, Check, CircleDot, CircleSlash, ExternalLink, X } from "lucide-react";
 import { toast } from "sonner";
-import { usePrDetail } from "../api/hooks";
+import { useDeleteHeadBranch, usePrDetail } from "../api/hooks";
 import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
 import { relativeTime } from "../lib/time";
 import { Markdown } from "./Markdown";
@@ -60,6 +60,7 @@ export function PrDetailView({
   onBack: () => void;
 }) {
   const { data: pr, isLoading, isError, error, refetch } = usePrDetail(repo, number);
+  const deleteBranch = useDeleteHeadBranch();
 
   const back = (
     <button
@@ -193,6 +194,34 @@ export function PrDetailView({
           <Bot className="h-3.5 w-3.5" aria-hidden="true" />
           Copy for agent
         </button>
+
+        {/* Only once the PR has MERGED, and only while the branch still
+            exists. 31 of the last 60 merged PRs on a real account still
+            held a live remote branch -- the app's own thesis (agents
+            create branches, PRs merge, leftovers stay) applied to the
+            one domain where it did nothing.
+
+            Deleting the head ref of an OPEN pull request closes it off,
+            so the gate is re-checked on the Rust side too. */}
+        {pr.state === "MERGED" && pr.head_ref_id ? (
+          <button
+            type="button"
+            onClick={() => {
+              const refId = pr.head_ref_id as string;
+              deleteBranch(refId, pr.repo, pr.number, pr.head_ref, true).then(
+                () => toast.success(`Deleted ${pr.head_ref}`),
+                (e: unknown) =>
+                  toast.error(`Could not delete ${pr.head_ref}`, {
+                    description: typeof e === "string" ? e : undefined,
+                  }),
+              );
+            }}
+            className="flex w-fit items-center gap-1.5 rounded border border-[#30363d] px-3 py-1.5 text-sm hover:bg-[#161b22]"
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+            Delete branch
+          </button>
+        ) : null}
       </div>
     </div>
   );

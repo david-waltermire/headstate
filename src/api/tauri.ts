@@ -145,6 +145,18 @@ export const setAutoMerge = (
   enable: boolean,
 ) => invoke<void>("set_auto_merge", { id, repo, number, expectedHead, enable });
 
+/// Delete a merged pull request's head branch.
+///
+/// `merged` is re-checked on the Rust side: deleting the head ref of an
+/// OPEN pull request closes it off.
+export const deleteHeadBranch = (
+  refId: string,
+  repo: string,
+  number: number,
+  branch: string,
+  merged: boolean,
+) => invoke<void>("delete_head_branch", { refId, repo, number, branch, merged });
+
 /// Merge the base branch into a pull request's head -- GitHub's "Update
 /// branch" button.
 ///

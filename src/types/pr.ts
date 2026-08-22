@@ -28,6 +28,10 @@ export interface PullRequest {
   /// The head commit the row was rendered from, so an "update branch"
   /// click can tell GitHub which commit the user was looking at.
   head_oid: string;
+  /// The head branch's Ref node id, for deleting it after merge. `null`
+  /// once the branch is gone -- which is how the UI tells "already
+  /// cleaned up" from "still there".
+  head_ref_id: string | null;
   base_ref: string;
   created_at: string;
   updated_at: string;
@@ -227,6 +231,7 @@ export interface PrDetail {
   /// The head commit the row was rendered from, so an "update branch"
   /// click can tell GitHub which commit the user was looking at.
   head_oid: string;
+  head_ref_id: string | null;
   base_ref: string;
   merge_status: string;
   review: string;

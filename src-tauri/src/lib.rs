@@ -68,6 +68,7 @@ pub fn run() {
             commands::act_on_pr,
             commands::update_pr_branch,
             commands::set_auto_merge,
+            commands::delete_head_branch,
             commands::latest_release,
             commands::act_on_prs,
             commands::get_poll_interval,

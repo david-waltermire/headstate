@@ -51,6 +51,7 @@ mod tests {
             repo: "octocat/hello-world".into(),
             head_ref: "feature/x".into(),
             head_oid: "deadbeef".into(),
+            head_ref_id: None,
             base_ref: "main".into(),
             author: "octocat".into(),
             is_draft: false,

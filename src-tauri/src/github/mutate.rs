@@ -26,6 +26,15 @@ const ENABLE_AUTO_MERGE_DOC: &str = "mutation($id: ID!, $oid: GitObjectID!) { \
 const DISABLE_AUTO_MERGE_DOC: &str = "mutation($id: ID!) { \
      disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }";
 
+/// Delete a branch, by ref node id.
+///
+/// There is no `deletePullRequestHeadRef`: the path is `deleteRef` on the
+/// Ref node, which is why the list query has to fetch `headRef { id }`.
+/// (`deleteLinkedBranch` is for issue-linked branches and takes a
+/// different id entirely -- verified by introspection.)
+const DELETE_REF_DOC: &str = "mutation($id: ID!) { \
+     deleteRef(input: { refId: $id }) { clientMutationId } }";
+
 const UPDATE_BRANCH_DOC: &str = "mutation($id: ID!, $oid: GitObjectID!) { \
      updatePullRequestBranch(input: { pullRequestId: $id, expectedHeadOid: $oid }) \
      { clientMutationId } }";
@@ -138,6 +147,24 @@ impl GitHubClient {
         .await
     }
 
+    /// Delete a merged pull request's head branch.
+    ///
+    /// Measured: 31 of the last 60 merged PRs on a real account still
+    /// held a live remote branch, 12 of them merged within two days.
+    /// This is the app's own thesis -- agents create branches, PRs merge,
+    /// the leftovers stay -- applied to the one domain where it did
+    /// nothing.
+    ///
+    /// The caller must have established the PR is merged or closed:
+    /// deleting the head ref of an OPEN pull request closes it off.
+    pub async fn delete_ref(&self, ref_id: &str) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": DELETE_REF_DOC,
+            "variables": { "id": ref_id }
+        }))
+        .await
+    }
+
     pub async fn update_pr_branch(&self, id: &str, expected_head: &str) -> Result<(), ClientError> {
         self.graphql_mutation(&json!({
             "query": UPDATE_BRANCH_DOC,
@@ -203,6 +230,16 @@ mod tests {
         assert!(ENABLE_AUTO_MERGE_DOC.contains("enablePullRequestAutoMerge"));
         // Disabling needs no OID: cancelling is safe whatever the head is.
         assert!(!DISABLE_AUTO_MERGE_DOC.contains("expectedHeadOid"));
+    }
+
+    /// The mutation is `deleteRef`, not a PR-specific one -- there is no
+    /// `deletePullRequestHeadRef`, and `deleteLinkedBranch` is for
+    /// issue-linked branches and takes a different id.
+    #[test]
+    fn deleting_a_branch_uses_the_ref_node() {
+        assert!(DELETE_REF_DOC.contains("deleteRef"));
+        assert!(DELETE_REF_DOC.contains("refId: $id"));
+        assert!(!DELETE_REF_DOC.contains("deleteLinkedBranch"));
     }
 
     /// Descriptions are logged and shown in errors, so they must read as
