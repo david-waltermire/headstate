@@ -2,6 +2,8 @@ import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import {
   useRemoveWorktree,
+  useAssessed,
+  useRemoveWorktreeForced,
   useRemoveWorktrees,
   useWorktreeSafety,
   useWorktreeSizes,
@@ -55,6 +57,8 @@ function Row({
   onClaudify,
   sizePending,
   removing = false,
+  assessed = false,
+  onForce,
 }: {
   wt: Worktree;
   onRemove: (wt: Worktree) => void;
@@ -63,6 +67,10 @@ function Row({
   /// rows, freezing all of them because one is deleting would be worse
   /// than no feedback at all.
   removing?: boolean;
+  /// This worktree has been handed to Claude Code and the branch has not
+  /// moved since. Unlocks the override.
+  assessed?: boolean;
+  onForce: (wt: Worktree) => void;
   /// Sizes arrive in their own pass, after safety. Tracked separately so
   /// a row whose safety has resolved does not keep waiting on its size.
   sizePending?: boolean;
@@ -129,7 +137,18 @@ function Row({
           which answers the question that actually applies to them --
           "is there anything in here worth keeping?" -- rather than
           showing a dead button that says the app will not help. */}
-      {claudifiable ? (
+      {claudifiable && assessed ? (
+        // Only after an assessment of THIS worktree. Otherwise this is a
+        // "delete anything" button with extra steps.
+        <button
+          type="button"
+          onClick={() => onForce(wt)}
+          title="You assessed this worktree — remove it despite the safety gate"
+          className="shrink-0 rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10"
+        >
+          Remove anyway…
+        </button>
+      ) : claudifiable ? (
         <button
           type="button"
           onClick={() => onClaudify(wt)}
@@ -249,6 +268,10 @@ export function WorktreesPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const removeMany = useRemoveWorktrees();
+  const forceRemove = useRemoveWorktreeForced();
+  const { data: assessedPaths } = useAssessed();
+  const assessed = new Set(assessedPaths ?? []);
+  const [forcing, setForcing] = useState<Worktree | null>(null);
 
   if (isLoading) {
     return (
@@ -289,9 +312,17 @@ export function WorktreesPage() {
     // Sorting by size while sizes are still arriving would make rows jump
     // under the cursor -- a row you were about to click moves as its
     // number lands. Hold the stable path order until they are all in.
-    .sort((a, b) =>
-      sizing ? a.path.localeCompare(b.path) : (b.size_bytes ?? 0) - (a.size_bytes ?? 0),
-    );
+    .sort((a, b) => {
+      // Assessed rows first: the user just came back from reading a
+      // verdict, and finding that row among 124 candidates is the part
+      // that made this feel unfinished.
+      const aa = assessed.has(a.path) ? 0 : 1;
+      const bb = assessed.has(b.path) ? 0 : 1;
+      if (aa !== bb) return aa - bb;
+      return sizing
+        ? a.path.localeCompare(b.path)
+        : (b.size_bytes ?? 0) - (a.size_bytes ?? 0);
+    });
 
   const safeCount = shown.filter((w) => isSafe(w.safety)).length;
 
@@ -371,6 +402,63 @@ export function WorktreesPage() {
             );
           }}
         />
+      ) : null}
+
+      {forcing ? (
+        <Dialog open onOpenChange={(o) => !o && setForcing(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogTitle>Remove {pathBasename(forcing.path)}?</DialogTitle>
+            <p className="mt-3 break-all font-mono text-xs text-[#8b949e]">{forcing.path}</p>
+            {/* The specific loss, computed now -- "are you sure?" is not
+                something anyone can act on, and this is the only
+                genuinely unrecoverable case in the app. */}
+            <p className="mt-3 text-sm text-[#e6edf3]">
+              {safetyReason(forcing.safety)}
+              {forcing.upstream && upstreamShort(forcing.upstream)
+                ? ` · ${upstreamShort(forcing.upstream)}`
+                : ""}
+              {forcing.last_commit ? ` · last commit ${relativeTime(forcing.last_commit)}` : ""}
+            </p>
+            <p className="mt-2 text-sm text-[#f85149]">
+              {forcing.safety.kind === "never_pushed"
+                ? "These commits are not pushed anywhere. This cannot be undone."
+                : "Headstate does not consider this safe to remove. This cannot be undone."}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setForcing(null)}
+                className="rounded border border-[#30363d] px-3 py-1.5 text-sm hover:bg-[#21262d]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = forcing;
+                  const name = pathBasename(target.path);
+                  setForcing(null);
+                  setRemoving(target.path);
+                  forceRemove(selected?.path ?? "", target.path).then(
+                    () => {
+                      setRemoving(null);
+                      toast.success(`Removed ${name}`);
+                    },
+                    (e: unknown) => {
+                      setRemoving(null);
+                      toast.error(`Could not remove ${name}`, {
+                        description: typeof e === "string" ? e : undefined,
+                      });
+                    },
+                  );
+                }}
+                className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149]"
+              >
+                I have reviewed this — remove it
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
       ) : null}
 
       {bulkOpen ? (
@@ -460,6 +548,8 @@ export function WorktreesPage() {
             <Row
               key={wt.path}
               wt={wt}
+              assessed={assessed.has(wt.path)}
+              onForce={setForcing}
               onRemove={setPending}
               onClaudify={claudify}
               sizePending={sizing}

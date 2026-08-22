@@ -1172,6 +1172,53 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
         assert_eq!(key, key.to_lowercase(), "key must be case-folded: {key}");
     }
 
+    /// The override exists so a user who has READ an assessment can act
+    /// on it. It must never be the default: without it, an unmerged
+    /// worktree is still refused.
+    #[test]
+    fn the_override_is_required_to_remove_unsafe_work() {
+        let (_t, repo, wt) = squash_merged_fixture(false);
+        let repo_s = repo.to_str().unwrap();
+        let wt_s = wt.to_string_lossy().into_owned();
+
+        assert!(
+            remove_worktree(repo_s, &wt_s).is_err(),
+            "an unmerged worktree must be refused by default"
+        );
+        assert!(wt.is_dir());
+
+        assert!(
+            remove_worktree_forced(repo_s, &wt_s).is_ok(),
+            "the override must permit what the user acknowledged"
+        );
+        assert!(!wt.is_dir(), "the directory should be gone");
+    }
+
+    /// The override permits a known-unsafe SAFETY state. It does not make
+    /// git force anything, and it does not bypass the checks that protect
+    /// against acting on the wrong directory.
+    #[test]
+    fn the_override_still_refuses_a_worktree_of_another_repo() {
+        let (_t, repo, _wt) = squash_merged_fixture(false);
+        let (_t2, other, other_wt) = squash_merged_fixture(false);
+        let _ = other;
+
+        let err = remove_worktree_forced(repo.to_str().unwrap(), &other_wt.to_string_lossy())
+            .unwrap_err();
+        assert!(err.contains("not a worktree"), "{err}");
+        assert!(other_wt.is_dir(), "the other repo's worktree must survive");
+    }
+
+    /// The main checkout is never removable, override or not.
+    #[test]
+    fn the_override_never_removes_the_main_checkout() {
+        let (_t, repo, _wt) = squash_merged_fixture(false);
+        let repo_s = repo.to_str().unwrap();
+        let err = remove_worktree_forced(repo_s, repo_s).unwrap_err();
+        assert!(err.contains("main checkout"), "{err}");
+        assert!(repo.is_dir());
+    }
+
     /// Bulk removal must re-check safety PER worktree, not once for the
     /// batch. A bulk button that evaluates safety once and then deletes
     /// N directories is a different, much more dangerous thing.
@@ -1509,6 +1556,14 @@ mod live {
 
 /// Remove a worktree, refusing anything not provably safe.
 ///
+/// The commit a worktree's HEAD currently points at.
+///
+/// Used to expire an assessment: a branch that has moved since it was
+/// assessed is no longer the thing that was assessed.
+pub fn head_oid(worktree_path: &str) -> Result<String, String> {
+    git(Path::new(worktree_path), &["rev-parse", "HEAD"]).map(|s| s.trim().to_string())
+}
+
 /// One worktree's outcome in a bulk removal.
 ///
 /// Every input gets an outcome. Partial failure is the normal case here,
@@ -1587,6 +1642,27 @@ fn canonical_key(p: &Path) -> String {
 /// administrative files, where a raw delete leaves a stale entry making
 /// the repo report a worktree that no longer exists.
 pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    remove_inner(repo_path, worktree_path, false)
+}
+
+/// Remove a worktree the safety gate would refuse.
+///
+/// The ONLY caller is a confirmation the user reached by reading an
+/// assessment of that specific worktree. It exists because the app's
+/// verdict and a considered human judgement can legitimately differ:
+/// `never_pushed` means "these commits exist only here", which is a
+/// reason to think hard, not a reason the user may never decide.
+///
+/// It relaxes exactly one check -- the safety gate. Everything else
+/// holds: the target must still be a worktree of THIS repository, the
+/// main checkout is still refused, and git is still asked without
+/// `--force`, so a genuinely stuck worktree still fails rather than
+/// being torn out.
+pub fn remove_worktree_forced(repo_path: &str, worktree_path: &str) -> Result<(), String> {
+    remove_inner(repo_path, worktree_path, true)
+}
+
+fn remove_inner(repo_path: &str, worktree_path: &str, allow_unsafe: bool) -> Result<(), String> {
     let repo = Path::new(repo_path);
     let target = Path::new(worktree_path);
 
@@ -1610,11 +1686,17 @@ pub fn remove_worktree(repo_path: &str, worktree_path: &str) -> Result<(), Strin
         return Err("refusing to remove the repository's main checkout".into());
     }
 
-    // Re-check RIGHT NOW, not from the scan.
-    let branch = default_branch(repo);
-    let safety = worktree_safety(wt, &branch);
-    if !safety.is_safe() {
-        return Err(format!("not safe to remove: {}", safety.reason()));
+    // Re-check RIGHT NOW, not from the scan. Skipped only when the caller
+    // came through `remove_worktree_forced`, which means a human read an
+    // assessment of this specific worktree and decided anyway.
+    if !allow_unsafe {
+        let branch = default_branch(repo);
+        let safety = worktree_safety(wt, &branch);
+        if !safety.is_safe() {
+            return Err(format!("not safe to remove: {}", safety.reason()));
+        }
+    } else {
+        log::warn!("removing {worktree_path} past the safety gate, by explicit confirmation");
     }
 
     // No `--force`. The gate above already established the tree is clean,

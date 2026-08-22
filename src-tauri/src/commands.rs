@@ -384,6 +384,34 @@ pub async fn remove_worktrees(
 }
 
 #[tauri::command]
+/// Remove a worktree the safety gate refuses.
+///
+/// Reached only from a confirmation the user opened after reading an
+/// assessment of this specific worktree. The flag is not a convenience:
+/// it is the record that a human looked at what would be lost.
+pub async fn remove_worktree_forced(
+    app: AppHandle,
+    repo_path: String,
+    worktree_path: String,
+) -> Result<(), String> {
+    crate::worktrees::remove_worktree_forced(&repo_path, &worktree_path)?;
+    // Drop the mark: the worktree is gone, so keeping it would leave a
+    // stale entry that outlives the thing it described.
+    if let Ok(conn) = open_db(&db_path(&app)) {
+        let mut seen: std::collections::BTreeMap<String, String> =
+            settings::get(&conn, settings::keys::ASSESSED_WORKTREES)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+        if seen.remove(&worktree_path).is_some() {
+            let _ = settings::set(&conn, settings::keys::ASSESSED_WORKTREES, &seen);
+        }
+    }
+    log::warn!("{worktree_path} removed past the safety gate");
+    Ok(())
+}
+
+#[tauri::command]
 /// The shell command that hands a worktree to Claude Code.
 ///
 /// Returns text for the clipboard rather than spawning anything.
@@ -398,6 +426,7 @@ pub async fn remove_worktrees(
 /// GUI app's PATH, but the pasted command runs in a login shell where it
 /// resolves fine.
 pub fn claudify_command(
+    app: AppHandle,
     repo_path: String,
     worktree_path: String,
     branch: String,
@@ -411,10 +440,48 @@ pub fn claudify_command(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "claude".to_string());
 
+    // Record what was assessed, keyed by the head it was assessed AT.
+    // Without this the user comes back from a "safe to discard" verdict
+    // and has to find the row again among 124 candidates.
+    if let Ok(conn) = open_db(&db_path(&app)) {
+        let mut seen: std::collections::BTreeMap<String, String> =
+            settings::get(&conn, settings::keys::ASSESSED_WORKTREES)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+        if let Ok(head) = crate::worktrees::head_oid(&worktree_path) {
+            seen.insert(worktree_path.clone(), head);
+            let _ = settings::set(&conn, settings::keys::ASSESSED_WORKTREES, &seen);
+        }
+    }
+
     ClaudifyCommand {
         command: facts.command(&bin),
         claude_installed: installed,
     }
+}
+
+#[tauri::command]
+/// Worktrees that have been assessed and are still at the head they were
+/// assessed at.
+///
+/// A branch that has moved since is dropped: the assessment described a
+/// different state, and offering an override on a stale verdict is
+/// exactly the mistake this feature could otherwise introduce.
+pub fn assessed_worktrees(app: AppHandle) -> Vec<String> {
+    let Ok(conn) = open_db(&db_path(&app)) else {
+        return Vec::new();
+    };
+    let seen: std::collections::BTreeMap<String, String> =
+        settings::get(&conn, settings::keys::ASSESSED_WORKTREES)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+
+    seen.into_iter()
+        .filter(|(path, oid)| crate::worktrees::head_oid(path).is_ok_and(|current| &current == oid))
+        .map(|(path, _)| path)
+        .collect()
 }
 
 /// The clipboard payload, plus whether Claude Code was actually found.

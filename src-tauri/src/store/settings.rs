@@ -41,6 +41,13 @@ pub mod keys {
     pub const POLL_INTERVAL_SECS: &str = "poll_interval_secs";
     /// Directories scanned for git checkouts, as a JSON array of paths.
     pub const WORKTREE_DIRS: &str = "worktree_dirs";
+    /// Worktrees handed to Claude Code, as a JSON map of path -> head
+    /// OID. The OID is what makes the mark expire: a branch that has
+    /// moved since the assessment was read is no longer the thing that
+    /// was assessed, and acting on a stale verdict is the failure this
+    /// guards against -- the same reasoning as `expectedHeadOid` on the
+    /// update-branch mutation.
+    pub const ASSESSED_WORKTREES: &str = "assessed_worktrees";
 }
 
 #[cfg(test)]

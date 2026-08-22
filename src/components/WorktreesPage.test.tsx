@@ -9,6 +9,7 @@ const state = vi.hoisted(() => ({
   isError: false,
   classified: undefined as Worktree[] | undefined,
   classifying: false,
+  assessed: [] as string[],
   sizes: undefined as Map<string, number> | undefined,
   sizing: false,
 }));
@@ -30,10 +31,13 @@ vi.mock("../api/hooks", () => ({
   useWorktreeSafety: () => ({ data: state.classified, isLoading: state.classifying }),
   useRemoveWorktree: () => removeFn,
   useRemoveWorktrees: () => removeManyFn,
+  useRemoveWorktreeForced: () => forceFn,
+  useAssessed: () => ({ data: state.assessed }),
   useWorktreeSizes: () => ({ data: state.sizes, isLoading: state.sizing }),
 }));
 
 const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const forceFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 type Outcome = { path: string; error: string | null };
 const removeManyFn = vi.hoisted(() =>
   vi.fn<(repo: string, paths: string[]) => Promise<Outcome[]>>((_r, paths) =>
@@ -75,6 +79,7 @@ describe("WorktreesPage", () => {
       classifying: false,
       sizes: undefined,
       sizing: false,
+      assessed: [],
     });
     useFilters.setState({ filtersByView: { ...EMPTY }, view: "worktrees", panel: "list" });
     // Calls leak between tests otherwise, which makes "was not called"
@@ -616,6 +621,80 @@ describe("WorktreesPage", () => {
       state.classified = [wt({ safety: { kind: "safe" } })];
       render(<WorktreesPage />);
       expect(screen.queryByRole("button", { name: /safe worktree/i })).toBeNull();
+    });
+  });
+
+  // Coming back from a "safe to discard" verdict, the app's answer and
+  // the user's disagreed and the app won -- with no way to act and no
+  // way to find the row again among 124 candidates.
+  describe("after an assessment", () => {
+    it("offers no override on a worktree that was never assessed", () => {
+      state.classified = [wt({ path: "/code/a", safety: { kind: "never_pushed" } })];
+      render(<WorktreesPage />);
+      expect(screen.queryByRole("button", { name: /remove anyway/i })).toBeNull();
+      expect(screen.getByRole("button", { name: /claudify/i })).toBeTruthy();
+    });
+
+    it("offers the override once that worktree has been assessed", () => {
+      state.classified = [wt({ path: "/code/a", safety: { kind: "never_pushed" } })];
+      state.assessed = ["/code/a"];
+      render(<WorktreesPage />);
+      expect(screen.getByRole("button", { name: /remove anyway/i })).toBeTruthy();
+    });
+
+    // Finding the row you just assessed is the part that made the
+    // feature feel unfinished.
+    it("sorts assessed rows to the top", () => {
+      state.classified = [
+        wt({ path: "/code/big", safety: { kind: "never_pushed" }, size_bytes: 9_000_000 }),
+        wt({ path: "/code/assessed", safety: { kind: "never_pushed" }, size_bytes: 1 }),
+      ];
+      state.assessed = ["/code/assessed"];
+      const { container } = render(<WorktreesPage />);
+      // The cell carries the directory name and the branch, so match the
+      // prefix rather than the whole string.
+      const names = [...container.querySelectorAll(".font-mono")].map((n) => n.textContent);
+      expect(names[0]).toMatch(/^assessed/);
+    });
+
+    // "Are you sure?" is not something anyone can act on. This is the
+    // only genuinely unrecoverable action in the app.
+    it("names the specific loss before removing", () => {
+      state.classified = [wt({ path: "/code/a", safety: { kind: "never_pushed" } })];
+      state.assessed = ["/code/a"];
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove anyway/i }));
+
+      const dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByText("/code/a")).toBeTruthy();
+      expect(within(dialog).getByText(/not pushed anywhere/i)).toBeTruthy();
+      expect(forceFn).not.toHaveBeenCalled();
+    });
+
+    it("removes only after the explicit confirmation", async () => {
+      state.classified = [wt({ path: "/code/a", safety: { kind: "never_pushed" } })];
+      state.assessed = ["/code/a"];
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove anyway/i }));
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /i have reviewed this/i }),
+      );
+      await waitFor(() => expect(forceFn).toHaveBeenCalledWith("/code/proj", "/code/a"));
+    });
+
+    // The bulk path is for the provably-safe set only, regardless of
+    // what any assessment said.
+    it("never includes an assessed-but-unsafe worktree in a bulk removal", () => {
+      state.classified = [
+        wt({ path: "/code/a", safety: { kind: "never_pushed" } }),
+        wt({ path: "/code/b", safety: { kind: "safe" } }),
+        wt({ path: "/code/c", safety: { kind: "safe" } }),
+      ];
+      state.assessed = ["/code/a"];
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      const dialog = screen.getByRole("dialog");
+      expect(within(dialog).queryByText("/code/a")).toBeNull();
     });
   });
 });

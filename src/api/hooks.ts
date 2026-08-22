@@ -18,6 +18,8 @@ import {
   classifyWorktrees,
   listWorktrees,
   removeWorktree,
+  assessedWorktrees,
+  removeWorktreeForced,
   removeWorktrees,
   sizeWorktrees,
   getReviewing,
@@ -425,6 +427,32 @@ export function useRemoveWorktrees() {
       );
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
       return outcomes;
+    });
+}
+
+/// Which worktrees have been assessed, so the row can say so.
+export function useAssessed() {
+  return useQuery({
+    queryKey: ["assessed-worktrees"],
+    queryFn: assessedWorktrees,
+    staleTime: 5_000,
+  });
+}
+
+/// Remove a worktree past the safety gate.
+///
+/// Separate hook from `useRemoveWorktree` on purpose: the two are not
+/// interchangeable, and a single function with a boolean would make the
+/// dangerous call one typo away from the safe one.
+export function useRemoveWorktreeForced() {
+  const qc = useQueryClient();
+  return (repoPath: string, worktreePath: string) =>
+    removeWorktreeForced(repoPath, worktreePath).then(() => {
+      qc.setQueryData<Worktree[]>(["worktree-safety", repoPath], (old) =>
+        old?.filter((w) => w.path !== worktreePath),
+      );
+      void qc.invalidateQueries({ queryKey: ["assessed-worktrees"] });
+      void qc.invalidateQueries({ queryKey: ["worktrees"] });
     });
 }
 

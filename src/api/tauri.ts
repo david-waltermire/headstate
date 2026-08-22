@@ -70,6 +70,16 @@ export interface RemovalOutcome {
 export const removeWorktrees = (repoPath: string, worktreePaths: string[]) =>
   invoke<RemovalOutcome[]>("remove_worktrees", { repoPath, worktreePaths });
 
+/// Worktrees handed to Claude Code and still at the head they were
+/// assessed at. A branch that has moved since is dropped: the assessment
+/// described a different state.
+export const assessedWorktrees = () => invoke<string[]>("assessed_worktrees");
+
+/// Remove a worktree the safety gate refuses. Reached only from a
+/// confirmation opened after reading an assessment of that worktree.
+export const removeWorktreeForced = (repoPath: string, worktreePath: string) =>
+  invoke<void>("remove_worktree_forced", { repoPath, worktreePath });
+
 /// The clipboard payload for Claudify, plus whether Claude Code was
 /// found. `claude_installed` is advisory: the command is returned either
 /// way, since a user may paste it on another machine.
