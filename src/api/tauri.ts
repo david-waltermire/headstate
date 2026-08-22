@@ -76,6 +76,13 @@ export interface RemovalOutcome {
 export const removeWorktrees = (repoPath: string, worktreePaths: string[]) =>
   invoke<RemovalOutcome[]>("remove_worktrees", { repoPath, worktreePaths });
 
+/// The newest published release, or null when this build is current.
+///
+/// Distribution is dmg/exe/deb/AppImage, so no package manager carries
+/// updates: a user on a version with a launch-blocking bug otherwise has
+/// no way to learn a fix exists.
+export const latestRelease = () => invoke<string | null>("latest_release");
+
 /// --- Docker -------------------------------------------------------
 
 export const dockerState = () => invoke<DockerState>("docker_state");

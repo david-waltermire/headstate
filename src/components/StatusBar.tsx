@@ -1,4 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { latestRelease } from "../api/tauri";
 import { Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { usePollError, usePollInterval, usePollState } from "../api/hooks";
@@ -70,11 +71,26 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
   // the number the user actually installed -- which is the whole point of
   // showing it, since it is what they would quote in a bug report.
   const [version, setVersion] = useState<string | null>(null);
+  const [newer, setNewer] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
     getVersion().then(
       (v) => live && setVersion(v),
       // Non-fatal: a missing version line is better than a broken bar.
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Once, at startup -- not on the poll loop. A failure is silent: a
+  // missing update hint is better than a broken status bar, and the app
+  // works perfectly well without knowing.
+  useEffect(() => {
+    let live = true;
+    latestRelease().then(
+      (v) => live && setNewer(v),
       () => {},
     );
     return () => {
@@ -121,6 +137,19 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
         <span className="tabular-nums" title={`Headstate ${version}`}>
           v{version}
         </span>
+      ) : null}
+      {/* Unobtrusive on purpose: an update is worth knowing about, not
+          worth interrupting for. */}
+      {newer ? (
+        <a
+          href="https://github.com/pktstorm/headstate/releases/latest"
+          target="_blank"
+          rel="noreferrer noopener"
+          className="text-[#58a6ff] hover:underline"
+          title={`Headstate ${newer} is available`}
+        >
+          v{newer} available
+        </a>
       ) : null}
 
       <button

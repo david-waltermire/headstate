@@ -104,6 +104,41 @@ fn has_checking(prs: &[PullRequest]) -> bool {
 /// state to leak if the window is closed.
 fn notify_breakage(app: &AppHandle, b: &Breakage) {
     use tauri_plugin_notification::NotificationExt;
+
+    // Ask ONCE, before the first notification rather than at whatever
+    // arbitrary moment a PR happens to break. Left implicit, the OS
+    // prompt appeared hours in and possibly while the window was hidden;
+    // if it was missed or dismissed, `show()` failed forever after and
+    // the failure was swallowed by design ("a notification is an
+    // affordance"). So a headline feature could be permanently dead with
+    // no user-visible signal at all.
+    match app.notification().permission_state() {
+        Ok(tauri_plugin_notification::PermissionState::Granted) => {}
+        Ok(tauri_plugin_notification::PermissionState::Prompt)
+        | Ok(tauri_plugin_notification::PermissionState::PromptWithRationale) => {
+            if let Err(e) = app.notification().request_permission() {
+                log::warn!("could not request notification permission: {e}");
+                return;
+            }
+        }
+        Ok(tauri_plugin_notification::PermissionState::Denied) => {
+            // Logged at INFO, not warn: the user said no, which is a
+            // choice rather than a fault. Logging it once per breakage
+            // would be noise, but silence made "why do I get no
+            // notifications?" unanswerable from the log.
+            log::info!(
+                "notifications are denied; not notifying about {}#{}",
+                b.repo,
+                b.number
+            );
+            return;
+        }
+        Err(e) => {
+            log::warn!("could not read notification permission: {e}");
+            return;
+        }
+    }
+
     let body = format!("{}#{} {}", b.repo, b.number, b.reason);
     if let Err(e) = app
         .notification()

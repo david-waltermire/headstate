@@ -691,6 +691,40 @@ pub fn set_view_needs_github(
 
 /// The configured focused poll interval, in seconds.
 #[tauri::command]
+/// The newest published release, when it is newer than this build.
+///
+/// Distribution is dmg/exe/deb/AppImage, so no package manager carries
+/// updates -- a user who installed a version with a launch-blocking bug
+/// had no mechanism at all to discover the fix. That is not
+/// hypothetical: v1.0.0 never left the splash screen on a second
+/// machine, and v2.0.0 emptied both PR views on upgrade.
+///
+/// Unauthenticated and cheap: the releases endpoint needs no token, and
+/// this runs once at startup rather than on the poll loop.
+pub async fn latest_release(app: AppHandle) -> Option<String> {
+    // The RUNTIME version, not CARGO_PKG_VERSION. The release workflow
+    // stamps the tag into the manifests at build time and never commits
+    // them, so the compiled-in constant reads 0.1.0 in a dev build and
+    // would report every release as an update.
+    let current = app.package_info().version.to_string();
+    // Through the authenticated client, which already exists -- rather
+    // than adding an HTTP dependency for one request. The endpoint is
+    // public, so this works whether or not the token has any scopes.
+    let json: serde_json::Value = octocrab::instance()
+        .get("/repos/pktstorm/headstate/releases/latest", None::<&()>)
+        .await
+        .ok()?;
+    let tag = json.get("tag_name")?.as_str()?.trim_start_matches('v');
+
+    // A plain inequality, not a semver comparison. The published tag is
+    // the only thing that ever appears here, and a wrong answer costs a
+    // spurious "update available" rather than anything harmful -- where
+    // pulling in a semver crate for one string compare would not repay
+    // itself.
+    (tag != current && !current.is_empty()).then(|| tag.to_string())
+}
+
+#[tauri::command]
 pub fn get_poll_interval(state: State<'_, crate::poll::PollInterval>) -> u64 {
     state.0.load(std::sync::atomic::Ordering::Relaxed)
 }

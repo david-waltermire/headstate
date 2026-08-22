@@ -7,7 +7,14 @@ const state = vi.hoisted(() => ({
 }));
 const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
 
-const version = vi.hoisted(() => ({ value: "2.0.2" as string | null }));
+const version = vi.hoisted(() => ({
+  value: "2.0.2" as string | null,
+  newer: null as string | null,
+}));
+vi.mock("../api/tauri", () => ({
+  latestRelease: () => Promise.resolve(version.newer),
+}));
+
 vi.mock("@tauri-apps/api/app", () => ({
   getVersion: () =>
     version.value === null
@@ -153,5 +160,28 @@ describe("StatusBar", () => {
     expect(screen.queryByText(/up to date/i)).toBeNull();
     expect(container.querySelector(".bg-\\[\\#3fb950\\]")).toBeNull();
     state.current = "idle";
+  });
+
+  // Distribution is dmg/exe/deb/AppImage, so no package manager carries
+  // updates. A user on a version with a launch-blocking bug -- v1.0.0
+  // never left the splash on a second machine -- otherwise has no way to
+  // learn a fix exists.
+  describe("update hint", () => {
+    it("links to the release when a newer one exists", async () => {
+      version.newer = "2.3.0";
+      render(<StatusBar updatedAt={Date.now()} />);
+      const link = await screen.findByRole("link", { name: /2\.3\.0 available/ });
+      expect(link.getAttribute("href")).toContain("releases");
+      version.newer = null;
+    });
+
+    // Silence is the right answer when current: an always-present
+    // "you are up to date" is noise in a one-line bar.
+    it("says nothing when this build is current", async () => {
+      version.newer = null;
+      render(<StatusBar updatedAt={Date.now()} />);
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByRole("link", { name: /available/ })).toBeNull();
+    });
   });
 });
