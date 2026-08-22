@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client";
 import App from "./App";
 import { Toaster } from "sonner";
 import { AuthGate } from "./components/AuthGate";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { PERSIST_KEY } from "./store/filters";
 import { initSplash } from "./splash";
 import "./index.css";
 
@@ -16,13 +18,18 @@ const queryClient = new QueryClient();
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <AuthGate>
-        <App />
-      </AuthGate>
-      {/* Dark to match the app, and bottom-right so it never covers the
-          list the user is acting on. */}
-      <Toaster theme="dark" position="bottom-right" richColors />
-    </QueryClientProvider>
+    {/* Outside QueryClientProvider and AuthGate on purpose: a throw in
+        either of those must still land on a readable screen, and this is
+        the only thing left to render it. */}
+    <ErrorBoundary onReset={() => localStorage.removeItem(PERSIST_KEY)}>
+      <QueryClientProvider client={queryClient}>
+        <AuthGate>
+          <App />
+        </AuthGate>
+        {/* Dark to match the app, and bottom-right so it never covers the
+            list the user is acting on. */}
+        <Toaster theme="dark" position="bottom-right" richColors />
+      </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>,
 );

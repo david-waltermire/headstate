@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { safeUnlisten } from "./unlisten";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { DockerImage, PullRequest, Worktree } from "../types/pr";
 import type { PrActionName } from "./tauri";
@@ -67,13 +68,13 @@ export function usePullRequests() {
     listen<PullRequest[]>("prs-updated", (e) => {
       qc.setQueryData(["prs"], e.payload);
     }).then((fn) => {
-      if (cancelled) fn();
+      if (cancelled) safeUnlisten(fn);
       else unlisten = fn;
     });
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      safeUnlisten(unlisten);
     };
   }, [qc]);
 
@@ -176,13 +177,13 @@ export function useRefreshRequested(): void {
         },
       );
     }).then((fn) => {
-      if (cancelled) fn();
+      if (cancelled) safeUnlisten(fn);
       else unlisten = fn;
     });
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      safeUnlisten(unlisten);
     };
   }, [qc]);
 }
@@ -199,7 +200,7 @@ export function usePollError(): string | null {
     listen<string>("poll-error", (e) => {
       setLastPollError(e.payload);
     }).then((fn) => {
-      if (cancelled) fn();
+      if (cancelled) safeUnlisten(fn);
       else unlistenError = fn;
     });
 
@@ -211,14 +212,14 @@ export function usePollError(): string | null {
     listen<PullRequest[]>("prs-updated", () => {
       setLastPollError(null);
     }).then((fn) => {
-      if (cancelled) fn();
+      if (cancelled) safeUnlisten(fn);
       else unlistenUpdated = fn;
     });
 
     return () => {
       cancelled = true;
-      unlistenError?.();
-      unlistenUpdated?.();
+      safeUnlisten(unlistenError);
+      safeUnlisten(unlistenUpdated);
     };
   }, []);
 
@@ -259,14 +260,14 @@ export function usePollState(): "idle" | "fetching" | "retrying" {
       );
     }).then(
       (fn) => {
-        if (cancelled) fn();
+        if (cancelled) safeUnlisten(fn);
         else unlisten = fn;
       },
       () => {},
     );
     return () => {
       cancelled = true;
-      unlisten?.();
+      safeUnlisten(unlisten);
     };
   }, []);
 
@@ -508,14 +509,14 @@ export function useStoreError(): { message: string | null; dismiss: () => void }
     let cancelled = false;
     listen<string>("store-error", (e) => setMsg(e.payload)).then(
       (fn) => {
-        if (cancelled) fn();
+        if (cancelled) safeUnlisten(fn);
         else unlisten = fn;
       },
       () => {},
     );
     return () => {
       cancelled = true;
-      unlisten?.();
+      safeUnlisten(unlisten);
     };
   }, []);
   return { message: msg, dismiss: () => setMsg(null) };
@@ -691,14 +692,14 @@ export function useTruncation(): number | null {
     // advisory notice; failing to subscribe must not break the page.
     listen<number>("prs-truncated", (e) => setTotal(e.payload)).then(
       (fn) => {
-        if (cancelled) fn();
+        if (cancelled) safeUnlisten(fn);
         else unlisten = fn;
       },
       () => {},
     );
     return () => {
       cancelled = true;
-      unlisten?.();
+      safeUnlisten(unlisten);
     };
   }, []);
 

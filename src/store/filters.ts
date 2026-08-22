@@ -68,6 +68,14 @@ const EMPTY_FILTERS: Record<View, Filters> = {
 /// pre-filled with yesterday's text renders a filtered list that looks
 /// like an empty one -- the same class of confusion as the old empty
 /// state, and harder to diagnose because the cause is offscreen history.
+/// The localStorage key this store persists under.
+///
+/// Exported so the error boundary's reset clears the SAME key this writes.
+/// A hardcoded string in both places is one rename away from a reset
+/// button that silently clears nothing -- and the crash it exists to
+/// escape came from persisted state, so a no-op reset would loop forever.
+export const PERSIST_KEY = "headstate-filters";
+
 export const useFilters = create<FilterStore>()(
   persist(
     (set) => ({
@@ -122,7 +130,7 @@ export const useFilters = create<FilterStore>()(
         }),
     }),
     {
-      name: "headstate-filters",
+      name: PERSIST_KEY,
       // Bumped when the persisted SHAPE changes. Without this, a store
       // saved by v1 -- which had a flat `filters` and a `view` enum
       // conflating view with panel -- rehydrates straight into the new
