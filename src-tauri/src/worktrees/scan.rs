@@ -17,6 +17,22 @@ pub(super) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Whether a ref can be passed to git without being read as a flag.
+///
+/// Git ref names may legitimately begin with `-` -- `git branch` refuses
+/// them, but `update-ref` accepts them, so a hostile remote can ship
+/// one. Passed as a bare argv element, `--output=/path` makes `git log`
+/// write to an arbitrary file, which is an arbitrary file write with the
+/// app's privileges.
+///
+/// Rejected at the two BOUNDARIES where remote-controlled refs enter
+/// (`parse_porcelain` and `default_branch`) rather than at each of the
+/// ten call sites, because a boundary cannot be forgotten. The `--`
+/// separators at the sinks are the second layer, not the only one.
+pub(super) fn is_safe_ref(r: &str) -> bool {
+    !r.is_empty() && !r.starts_with('-')
+}
+
 /// Parse `git worktree list --porcelain`.
 ///
 /// Blank-line-delimited records of `worktree`/`HEAD`/`branch`. A record
@@ -36,7 +52,14 @@ pub fn parse_porcelain(out: &str) -> Vec<Worktree> {
         } else if let Some(h) = line.strip_prefix("HEAD ") {
             cur.head = h.to_string();
         } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
-            cur.branch = b.to_string();
+            // A flag-shaped ref is dropped rather than carried. The
+            // worktree still lists -- it just has no usable branch name,
+            // which the classifier already handles as detached.
+            if is_safe_ref(b) {
+                cur.branch = b.to_string();
+            } else {
+                log::warn!("ignoring a branch name that reads as a flag: {b:?}");
+            }
         }
     }
     if !cur.path.is_empty() {
@@ -226,7 +249,8 @@ pub(super) fn default_branch(repo: &Path) -> String {
     )
     .ok()
     .and_then(|s| s.trim().rsplit('/').next().map(str::to_string))
-    .filter(|s| !s.is_empty())
+    // Same guard: a hostile `origin/HEAD` yields `--output=EVIL` here.
+    .filter(|s| is_safe_ref(s))
     .unwrap_or_else(|| "main".to_string())
 }
 
@@ -1293,6 +1317,54 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
         }
     }
 
+    /// A ref beginning with `-` is a valid git ref name but reads as a
+    /// FLAG when passed as a bare argv element. Verified end to end:
+    ///
+    ///   git check-ref-format 'refs/heads/--output=/tmp/x'  -> exit 0
+    ///   git update-ref       'refs/heads/--output=/tmp/x' HEAD
+    ///   worktree list --porcelain -> "branch refs/heads/--output=/tmp/x"
+    ///   git log -1 --format=%cr '--output=/tmp/hs-pwn.txt' -> FILE WRITTEN
+    ///
+    /// Reachable by clicking Claudify on a worktree of a repo you cloned,
+    /// with no typing involved. Overwriting a shell rc file or a git hook
+    /// escalates to code execution.
+    ///
+    /// The boundary is the place to stop it: one guard here beats
+    /// remembering `--` at ten call sites.
+    #[test]
+    fn a_branch_that_looks_like_a_flag_is_rejected_at_the_boundary() {
+        // Real porcelain has no leading indentation; a raw multi-line
+        // string would give every line whitespace that strip_prefix
+        // then fails on.
+        let porcelain = "worktree /code/proj\nHEAD abc123\nbranch refs/heads/main\n\nworktree /code/proj-evil\nHEAD def456\nbranch refs/heads/--output=/tmp/hs-pwn.txt\n";
+        let wts = parse_porcelain(porcelain);
+
+        let evil = wts
+            .iter()
+            .find(|w| w.path.contains("evil"))
+            .expect("the worktree itself must still be listed");
+        assert!(
+            evil.branch.is_empty(),
+            "a flag-shaped branch must not survive as a branch name, got {:?}",
+            evil.branch
+        );
+        // The ordinary branch is untouched.
+        assert_eq!(wts[0].branch, "main");
+    }
+
+    /// The same guard on the other remote-controlled ref. A hostile
+    /// `origin/HEAD` yields `--output=EVIL` after the `rsplit('/')`.
+    #[test]
+    fn a_flag_shaped_default_branch_falls_back_rather_than_being_used() {
+        assert!(!is_safe_ref("--output=/tmp/x"));
+        assert!(!is_safe_ref("-f"));
+        assert!(!is_safe_ref(""));
+        // Ordinary refs, including ones with dashes INSIDE, are fine.
+        assert!(is_safe_ref("main"));
+        assert!(is_safe_ref("feat/some-branch"));
+        assert!(is_safe_ref("release-2.0"));
+    }
+
     /// The bug this fixes. A squash-merged branch is fully merged, but
     /// its tip is not an ancestor of main -- squash replays the work as
     /// a new commit with a new SHA. Ancestry alone therefore reports
@@ -1702,7 +1774,10 @@ fn remove_inner(repo_path: &str, worktree_path: &str, allow_unsafe: bool) -> Res
     // No `--force`. The gate above already established the tree is clean,
     // so needing force here would mean the gate was wrong -- and forcing
     // past it is precisely how unpushed work is lost.
-    git(repo, &["worktree", "remove", worktree_path])
+    // git's OWN resolved path, with a separator: the caller's raw string
+    // could be relative or flag-shaped, and the gate above already
+    // matched this record.
+    git(repo, &["worktree", "remove", "--", &wt.path])
         .map(|_| ())
         .map_err(|e| format!("git refused: {e}"))
 }

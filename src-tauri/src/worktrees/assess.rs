@@ -64,7 +64,11 @@ pub fn assess(repo_path: &str, worktree_path: &str, branch: &str) -> Assessment 
         path: worktree_path.to_string(),
         branch: branch.to_string(),
         commits_ahead: count(&["rev-list", "--count", &range2]),
-        last_activity: git(dir, &["log", "-1", "--format=%cr", branch])
+        // `--` before the ref: a branch named `--output=/path` would
+        // otherwise make git write to an arbitrary file. The boundary in
+        // `parse_porcelain` should already have dropped it; this is the
+        // second layer.
+        last_activity: git(dir, &["log", "-1", "--format=%cr", "--", branch])
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
