@@ -21,11 +21,14 @@ interface FilterStore {
   /// that view rather than a fourth peer, so it stays pinned in the
   /// sidebar rather than joining the switcher. Inlined rather than an
   /// exported type, since nothing imports the name.
-  panel: "list" | "stats";
+  /// The sub-page within a view: the PR list versus Stats, and images
+  /// versus builds inside Docker. A separate axis from `view` for the
+  /// same reason it always was.
+  panel: "list" | "stats" | "builds";
   setFilter: <K extends keyof Filters>(key: K, value: Filters[K]) => void;
   applyPreset: (filters: Filters) => void;
   setView: (view: View) => void;
-  setPanel: (panel: "list" | "stats") => void;
+  setPanel: (panel: "list" | "stats" | "builds") => void;
   /// The PR the detail view is showing, or null for the list.
   ///
   /// Deliberately NOT persisted: reopening the app on a detail page for a

@@ -294,3 +294,16 @@ export interface ImageRemovalOutcome {
   id: string;
   error: string | null;
 }
+
+export interface DockerBuild {
+  reference: string;
+  name: string;
+  status: string;
+  started: string;
+  duration_secs: number;
+  total_steps: number;
+  cached_steps: number;
+  /// Resolved on demand: `inspect` is a subprocess per build.
+  context: string | null;
+  revision: string | null;
+}

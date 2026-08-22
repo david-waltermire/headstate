@@ -1,0 +1,144 @@
+import { useState } from "react";
+import { useDockerBuildDetail, useDockerBuilds, useDockerImages } from "../api/hooks";
+import { formatDockerSize } from "../lib/docker";
+import { relativeTime } from "../lib/time";
+import type { DockerBuild } from "../types/pr";
+
+/// A duration a human reads at a glance.
+///
+/// Sub-second builds are common (a fully cached target finishes in
+/// 0.4s), so seconds get a decimal below ten -- rendering those as "0s"
+/// would hide the difference between cached and instant.
+function formatDuration(secs: number): string {
+  if (secs < 10) return `${secs.toFixed(1)}s`;
+  if (secs < 60) return `${Math.round(secs)}s`;
+  const m = Math.floor(secs / 60);
+  const s = Math.round(secs % 60);
+  return `${m}m ${s}s`;
+}
+
+/// Cache ratio, coloured by what it implies.
+///
+/// This is the number that explains the duration beside it. Real data:
+/// the same target at 48% cached took 56.9s, at 23% took 80.7s. A cold
+/// build is not a problem in itself -- a cold build that used to be warm
+/// is.
+function cachePercent(b: DockerBuild): number {
+  return b.total_steps === 0 ? 0 : Math.floor((b.cached_steps * 100) / b.total_steps);
+}
+
+function cacheTone(pct: number): string {
+  if (pct >= 60) return "text-[#3fb950]";
+  if (pct >= 25) return "text-[#d29922]";
+  return "text-[#8b949e]";
+}
+
+/// What a build produced, and where it came from.
+///
+/// This is the grouping Docker Desktop's Builds page lacks: it shows
+/// durations but never connects a build to its images or its worktree.
+function BuildDetail({ build }: { build: DockerBuild }) {
+  const { data: detail } = useDockerBuildDetail(build.reference);
+  const { data: images } = useDockerImages(true);
+
+  const revision = detail?.revision ?? null;
+  // The build's revision is the image's tag -- that is the link.
+  const produced = (images ?? []).filter((i) =>
+    revision ? i.tags.some((t) => revision.startsWith(t)) : false,
+  );
+
+  return (
+    <div className="rounded-md border border-[#30363d] p-3 text-xs">
+      <div className="flex flex-wrap items-baseline gap-3">
+        <span className="font-semibold text-[#e6edf3]">{build.name}</span>
+        <span className="text-[#8b949e]">{formatDuration(build.duration_secs)}</span>
+        <span className={cacheTone(cachePercent(build))}>
+          {build.cached_steps}/{build.total_steps} steps cached ({cachePercent(build)}%)
+        </span>
+      </div>
+
+      {detail?.context ? (
+        // For a worktree build this path IS the worktree, which is the
+        // answer to "which session produced this?".
+        <p className="mt-2 break-all font-mono text-[#8b949e]">{detail.context}</p>
+      ) : null}
+
+      <p className="mt-2 font-semibold text-[#e6edf3]">Images produced</p>
+      {produced.length === 0 ? (
+        // A normal end state, not an error: it usually means the cleanup
+        // worked. Saying nothing would read as a failure to look.
+        <p className="mt-1 text-[#8b949e]">
+          {revision
+            ? "None still on disk — they were removed, or this build produced no image."
+            : "Build history no longer records what this produced."}
+        </p>
+      ) : (
+        <ul className="mt-1">
+          {produced.map((i) => (
+            <li key={i.id} className="py-0.5 font-mono text-[#8b949e]">
+              {i.repository}:{i.tags[0]} — {formatDockerSize(i.size_bytes)}
+              {i.superseded ? " · superseded" : " · current"}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export function DockerBuildsPage() {
+  const { data: builds, isLoading } = useDockerBuilds(true);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  if (isLoading) {
+    return (
+      <div className="rounded-md border border-[#30363d] px-4 py-12 text-center text-sm text-[#8b949e]">
+        Reading build history…
+      </div>
+    );
+  }
+
+  const shown = builds ?? [];
+  const chosen = shown.find((b) => b.reference === selected);
+
+  return (
+    <div className="flex flex-col gap-3">
+      {chosen ? <BuildDetail build={chosen} /> : null}
+
+      <div className="rounded-md border border-[#30363d]">
+        {shown.length === 0 ? (
+          <div className="px-4 py-12 text-center text-sm text-[#8b949e]">
+            No builds in history.
+          </div>
+        ) : (
+          shown.map((b) => {
+            const pct = cachePercent(b);
+            const failed = b.status !== "Completed";
+            return (
+              <button
+                type="button"
+                key={b.reference}
+                onClick={() => setSelected(b.reference === selected ? null : b.reference)}
+                className={`flex w-full items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-left text-sm last:border-b-0 hover:bg-[#161b22] ${
+                  b.reference === selected ? "bg-[#161b22]" : ""
+                }`}
+              >
+                <span className="min-w-0 flex-1 truncate font-mono text-[#e6edf3]">{b.name}</span>
+                {/* Failures are kept, never filtered: a failing build is
+                    usually what the user came to investigate. */}
+                {failed ? <span className="shrink-0 text-xs text-[#f85149]">failed</span> : null}
+                <span className={`shrink-0 text-xs ${cacheTone(pct)}`}>{pct}% cached</span>
+                <span className="w-16 shrink-0 text-right tabular-nums text-xs text-[#8b949e]">
+                  {formatDuration(b.duration_secs)}
+                </span>
+                <span className="w-24 shrink-0 text-right text-xs text-[#8b949e]">
+                  {b.started ? relativeTime(b.started) : ""}
+                </span>
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}

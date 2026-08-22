@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CycleTrend,
   DanglingVolume,
+  DockerBuild,
   DockerDiskUsage,
   DockerImage,
   DockerState,
@@ -78,6 +79,9 @@ export const removeWorktrees = (repoPath: string, worktreePaths: string[]) =>
 /// --- Docker -------------------------------------------------------
 
 export const dockerState = () => invoke<DockerState>("docker_state");
+export const dockerBuilds = () => invoke<DockerBuild[]>("docker_builds");
+export const dockerBuildDetail = (reference: string) =>
+  invoke<DockerBuild>("docker_build_detail", { reference });
 export const dockerImages = () => invoke<DockerImage[]>("docker_images");
 export const dockerDiskUsage = () => invoke<DockerDiskUsage>("docker_disk_usage");
 export const dockerRemoveImages = (ids: string[]) =>

@@ -1,5 +1,6 @@
 //! Docker: images, builds, and reclaiming the disk they fill.
 
+mod builds;
 mod classify;
 mod cli;
 mod model;
@@ -7,6 +8,7 @@ mod origin;
 mod parse;
 mod reclaim;
 
+pub use builds::{enrich, parse_history, Build};
 pub use classify::{classify, remove_image, remove_images, RemovalOutcome};
 pub use cli::{docker, find_docker, state};
 pub use model::{DiskUsage, DockerState, Image, Origin, OriginSource};

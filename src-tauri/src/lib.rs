@@ -77,6 +77,8 @@ pub fn run() {
             commands::remove_worktree,
             commands::remove_worktrees,
             commands::docker_state,
+            commands::docker_builds,
+            commands::docker_build_detail,
             commands::docker_images,
             commands::docker_disk_usage,
             commands::docker_remove_images,

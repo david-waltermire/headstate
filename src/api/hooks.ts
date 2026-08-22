@@ -19,6 +19,8 @@ import {
   listWorktrees,
   removeWorktree,
   assessedWorktrees,
+  dockerBuildDetail,
+  dockerBuilds,
   dockerDanglingVolumes,
   dockerDiskUsage,
   dockerImages,
@@ -486,6 +488,27 @@ export function useDockerImages(enabled: boolean) {
     queryFn: dockerImages,
     enabled,
     staleTime: 10_000,
+  });
+}
+
+/// Build history. Failed builds are kept: a failing build is usually
+/// what the user came to investigate.
+export function useDockerBuilds(enabled: boolean) {
+  return useQuery({
+    queryKey: ["docker-builds"],
+    queryFn: dockerBuilds,
+    enabled,
+    staleTime: 10_000,
+  });
+}
+
+/// One build's context and revision, fetched only when selected.
+export function useDockerBuildDetail(reference: string | undefined) {
+  return useQuery({
+    queryKey: ["docker-build", reference],
+    queryFn: () => dockerBuildDetail(reference as string),
+    enabled: Boolean(reference),
+    staleTime: 60_000,
   });
 }
 

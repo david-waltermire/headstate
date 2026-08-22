@@ -17,7 +17,9 @@ import { PrList } from "./components/PrList";
 import { ReviewChips } from "./components/ReviewChips";
 import { TriageChips } from "./components/TriageChips";
 import { WorktreeSidebar } from "./components/WorktreeSidebar";
+import { DockerBuildsPage } from "./components/DockerBuilds";
 import { DockerPage } from "./components/DockerPage";
+import { DockerSidebar } from "./components/DockerSidebar";
 import { WorktreesPage } from "./components/WorktreesPage";
 import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
@@ -109,7 +111,9 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3]">
       <div className="flex min-h-0 flex-1">
-      {view === "worktrees" || view === "docker" ? (
+      {view === "docker" ? (
+        <DockerSidebar viewCounts={{ "to-review": reviewing.length }} />
+      ) : view === "worktrees" ? (
         <WorktreeSidebar viewCounts={{ "to-review": reviewing.length }} />
       ) : (
         <RepoSidebar prs={source} viewCounts={{ "to-review": reviewing.length }} />
@@ -124,7 +128,9 @@ export default function App() {
             {view === "to-review"
               ? "Pull requests to review"
               : view === "docker"
-                ? "Docker"
+                ? panel === "builds"
+                  ? "Docker builds"
+                  : "Docker images"
                 : view === "worktrees"
                   ? "Worktrees"
                 : panel === "stats"
@@ -152,7 +158,7 @@ export default function App() {
           </div>
         ) : view === "docker" ? (
           <div className="p-4">
-            <DockerPage />
+            {panel === "builds" ? <DockerBuildsPage /> : <DockerPage />}
           </div>
         ) : view === "worktrees" ? (
           <div className="p-4">

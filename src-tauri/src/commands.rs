@@ -363,6 +363,30 @@ pub fn default_worktree_dirs() -> Vec<String> {
 /// Non-existent paths are rejected rather than stored: a typo should fail
 /// visibly here, not silently produce an empty worktrees view later.
 #[tauri::command]
+/// Build history: what was built, how long it took, and how much came
+/// from cache.
+///
+/// The context and revision are NOT resolved here: `inspect` is a
+/// subprocess per build, and fetching it for fifty builds up front would
+/// make the page slow for data only the selected build needs.
+pub fn docker_builds() -> Result<Vec<crate::docker::Build>, String> {
+    crate::docker::docker(&["buildx", "history", "ls", "--format", "{{json .}}"])
+        .map(|out| crate::docker::parse_history(&out))
+}
+
+#[tauri::command]
+/// The build context and revision for one build, resolved on demand.
+pub fn docker_build_detail(reference: String) -> Result<crate::docker::Build, String> {
+    let out = crate::docker::docker(&["buildx", "history", "ls", "--format", "{{json .}}"])?;
+    let mut build = crate::docker::parse_history(&out)
+        .into_iter()
+        .find(|b| b.reference == reference)
+        .ok_or_else(|| "that build is no longer in history".to_string())?;
+    crate::docker::enrich(&mut build);
+    Ok(build)
+}
+
+#[tauri::command]
 /// Whether Docker can be talked to.
 ///
 /// A stopped daemon is a state, not an error: reporting it as a failure
