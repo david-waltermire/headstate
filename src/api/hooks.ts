@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { PullRequest } from "../types/pr";
+import type { PullRequest, Worktree } from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
   getCached,
@@ -388,8 +388,21 @@ export function useRemoveWorktree() {
   const qc = useQueryClient();
   return (repoPath: string, worktreePath: string) =>
     removeWorktree(repoPath, worktreePath).then(() => {
+      // Drop the row rather than invalidating. Invalidation re-runs
+      // `classify_repo` over EVERY worktree in the repo, sequentially --
+      // ~0.35s each, so 51 seconds on a 146-worktree repo, during which
+      // the deleted row sits there looking undeleted.
+      //
+      // It is also unnecessary: removing a worktree cannot change any
+      // other worktree's safety, since each verdict is computed from that
+      // worktree's own state. Filtering the cache is instant and exactly
+      // as accurate as re-running 146 git commands.
+      qc.setQueryData<Worktree[]>(["worktree-safety", repoPath], (old) =>
+        old?.filter((w) => w.path !== worktreePath),
+      );
+      // The repo listing IS invalidated: it is cheap, and a repo that
+      // just lost its last worktree should leave the sidebar.
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
-      void qc.invalidateQueries({ queryKey: ["worktree-safety", repoPath] });
     });
 }
 

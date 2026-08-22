@@ -51,10 +51,15 @@ function Row({
   onRemove,
   onClaudify,
   sizePending,
+  removing = false,
 }: {
   wt: Worktree;
   onRemove: (wt: Worktree) => void;
   onClaudify: (wt: Worktree) => void;
+  /// This row's removal is in flight. Per row, not per page: with 100+
+  /// rows, freezing all of them because one is deleting would be worse
+  /// than no feedback at all.
+  removing?: boolean;
   /// Sizes arrive in their own pass, after safety. Tracked separately so
   /// a row whose safety has resolved does not keep waiting on its size.
   sizePending?: boolean;
@@ -122,16 +127,16 @@ function Row({
       ) : (
         <button
           type="button"
-          disabled={!safe}
+          disabled={!safe || removing}
           onClick={() => onRemove(wt)}
           title={safe ? "Remove this worktree" : safetyReason(wt.safety)}
           className={`shrink-0 rounded border px-2 py-0.5 text-xs ${
-            safe
+            safe && !removing
               ? "border-[#f85149]/40 text-[#f85149] hover:bg-[#f85149]/10"
               : "border-[#30363d] text-[#8b949e] opacity-50"
           }`}
         >
-          Remove
+          {removing ? "Removing…" : "Remove"}
         </button>
       )}
     </div>
@@ -221,6 +226,9 @@ export function WorktreesPage() {
     );
   };
   const [pending, setPending] = useState<Worktree | null>(null);
+  /// The path currently being removed, or null. A path rather than a
+  /// boolean so only the clicked row goes busy.
+  const [removing, setRemoving] = useState<string | null>(null);
 
   if (isLoading) {
     return (
@@ -305,15 +313,24 @@ export function WorktreesPage() {
             const target = pending;
             const name = pathBasename(target.path);
             setPending(null);
+            setRemoving(target.path);
             remove(selected?.path ?? "", target.path).then(
-              () => toast.success(`Removed ${name}`),
+              () => {
+                setRemoving(null);
+                toast.success(`Removed ${name}`);
+              },
               // The backend re-checks safety at delete time, so a
               // worktree that went dirty since the scan is refused. That
               // message is the useful part -- show it, do not summarise.
-              (e: unknown) =>
+              (e: unknown) => {
+                // Back to normal, not stuck on "Removing...": the backend
+                // re-checks safety at delete time and legitimately
+                // refuses a worktree that went dirty since the scan.
+                setRemoving(null);
                 toast.error(`Could not remove ${name}`, {
                   description: typeof e === "string" ? e : undefined,
-                }),
+                });
+              },
             );
           }}
         />
@@ -332,6 +349,7 @@ export function WorktreesPage() {
               onRemove={setPending}
               onClaudify={claudify}
               sizePending={sizing}
+              removing={removing === wt.path}
             />
           ))
         )}

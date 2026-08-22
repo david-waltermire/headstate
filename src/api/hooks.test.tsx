@@ -5,11 +5,13 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { PR_FIXTURES } from "../fixtures/prs";
+import type { Worktree } from "../types/pr";
 import {
   clearPollError,
   usePollError,
   usePullRequests,
   useRefreshRequested,
+  useRemoveWorktree,
   useStats,
 } from "./hooks";
 
@@ -30,9 +32,14 @@ afterEach(() => {
 /// to the client `useQuery` is actually reading from.
 function makeWrapper() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return function wrapper({ children }: { children: ReactNode }) {
+  const wrapper = function wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
   };
+  // Exposed so a test can seed and inspect the cache directly. Cache
+  // contents are the observable behaviour for a mutation hook that has no
+  // return value of its own.
+  wrapper.client = qc;
+  return wrapper;
 }
 
 describe("usePullRequests", () => {
@@ -228,5 +235,68 @@ describe("clearPollError", () => {
     await waitFor(() => expect(result.current).toBe("boom"));
     clearPollError();
     await waitFor(() => expect(result.current).toBeNull());
+  });
+});
+
+describe("useRemoveWorktree", () => {
+  const wt = (path: string): Worktree => ({
+    path,
+    branch: "b",
+    head: "abc",
+    size_bytes: 1,
+    safety: { kind: "safe" },
+    is_main: false,
+    merged_at: null,
+    upstream: null,
+  });
+
+  /// Re-classifying after a removal costs ~0.35s per worktree,
+  /// sequentially -- 51 seconds on a 146-worktree repo. Removing one
+  /// worktree cannot change any OTHER worktree's safety, since each
+  /// verdict comes from that worktree's own state, so dropping the row
+  /// from the cache is both instant and exactly as accurate.
+  it("drops the removed row without re-classifying the repo", async () => {
+    let classifyCalls = 0;
+    mockIPC((cmd) => {
+      if (cmd === "remove_worktree") return null;
+      if (cmd === "classify_worktrees") {
+        classifyCalls += 1;
+        return [];
+      }
+      return undefined;
+    }, { shouldMockEvents: true });
+
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useRemoveWorktree(), { wrapper });
+
+    const qc = wrapper.client;
+    qc.setQueryData(["worktree-safety", "/repo"], [wt("/repo/a"), wt("/repo/b")]);
+
+    await result.current("/repo", "/repo/a");
+
+    const after = qc.getQueryData<Worktree[]>(["worktree-safety", "/repo"]);
+    expect(after?.map((w) => w.path)).toEqual(["/repo/b"]);
+    expect(classifyCalls).toBe(0);
+  });
+
+  /// A refusal -- the backend re-checks safety at delete time and rejects
+  /// a worktree that went dirty since the scan -- must leave the row
+  /// exactly where it was.
+  it("leaves the row in place when the removal fails", async () => {
+    mockIPC((cmd) => {
+      if (cmd === "remove_worktree") throw new Error("not safe to remove: 2 uncommitted files");
+      return undefined;
+    }, { shouldMockEvents: true });
+
+    const wrapper = makeWrapper();
+    const { result } = renderHook(() => useRemoveWorktree(), { wrapper });
+
+    const qc = wrapper.client;
+    qc.setQueryData(["worktree-safety", "/repo"], [wt("/repo/a"), wt("/repo/b")]);
+
+    await expect(result.current("/repo", "/repo/a")).rejects.toBeTruthy();
+
+    const after = qc.getQueryData<Worktree[]>(["worktree-safety", "/repo"]);
+    expect(after?.map((w) => w.path)).toEqual(["/repo/a", "/repo/b"]);
   });
 });

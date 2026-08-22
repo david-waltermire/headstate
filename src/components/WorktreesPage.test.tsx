@@ -403,4 +403,75 @@ describe("WorktreesPage", () => {
       expect(opts.description).toMatch(/not found/i);
     });
   });
+
+  // Removal takes a moment, and a button that still looks live invites a
+  // second click on a directory that is already being deleted.
+  describe("removal feedback", () => {
+    it("shows the button as busy and stops accepting clicks", async () => {
+      let release: () => void = () => {};
+      removeFn.mockImplementationOnce(
+        () => new Promise<void>((r) => { release = r; }),
+      );
+      state.classified = [wt({ safety: { kind: "safe" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /^remove$/i }),
+      );
+
+      const busy = await screen.findByRole("button", { name: /removing/i });
+      expect((busy as HTMLButtonElement).disabled).toBe(true);
+
+      // A second click while in flight must not submit again.
+      fireEvent.click(busy);
+      expect(removeFn).toHaveBeenCalledTimes(1);
+
+      release();
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    });
+
+    // The backend re-checks safety at delete time and can refuse. The
+    // button must come back, not stay stuck on "Removing...".
+    it("returns the button to normal when the removal is refused", async () => {
+      removeFn.mockRejectedValueOnce("not safe to remove: 2 uncommitted files");
+      state.classified = [wt({ safety: { kind: "safe" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /^remove$/i }),
+      );
+
+      await waitFor(() => expect(toastError).toHaveBeenCalled());
+      const back = await screen.findByRole("button", { name: /^remove$/i });
+      expect((back as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    // With 100+ rows, freezing all of them because one is in flight
+    // would be worse than the current behaviour.
+    it("leaves other rows clickable while one is being removed", async () => {
+      let release: () => void = () => {};
+      removeFn.mockImplementationOnce(
+        () => new Promise<void>((r) => { release = r; }),
+      );
+      state.classified = [
+        wt({ path: "/code/proj-a", safety: { kind: "safe" } }),
+        wt({ path: "/code/proj-b", safety: { kind: "safe" } }),
+      ];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getAllByRole("button", { name: /^remove$/i })[0]);
+      fireEvent.click(
+        within(screen.getByRole("dialog")).getByRole("button", { name: /^remove$/i }),
+      );
+      await screen.findByRole("button", { name: /removing/i });
+
+      const others = screen.getAllByRole("button", { name: /^remove$/i });
+      expect(others).toHaveLength(1);
+      expect((others[0] as HTMLButtonElement).disabled).toBe(false);
+
+      release();
+    });
+  });
 });
