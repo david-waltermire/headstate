@@ -4,6 +4,7 @@ import {
   useCommentOnPr,
   useDeleteHeadBranch,
   usePrDetail,
+  useRerunChecks,
   useReviewPr,
   useViewer,
 } from "../api/hooks";
@@ -11,6 +12,7 @@ import { useState } from "react";
 import type { ReviewVerdictName } from "../api/tauri";
 import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
 import { relativeTime } from "../lib/time";
+import { rerunnableRun } from "../lib/rerun";
 import { Markdown } from "./Markdown";
 import { PrActions } from "./PrActions";
 import { ReviewBox } from "./ReviewBox";
@@ -77,6 +79,9 @@ export function PrDetailView({
   // so a failed viewer fetch never silently removes the approve button.
   const { data: viewer } = useViewer();
   const [reviewing, setReviewing] = useState<ReviewVerdictName | null>(null);
+  const rerun = useRerunChecks();
+  const [rerunning, setRerunning] = useState(false);
+  const rerunnable = pr ? rerunnableRun(pr.checks) : null;
 
   const back = (
     <button
@@ -198,8 +203,39 @@ export function PrDetailView({
 
       {pr.checks.length > 0 ? (
         <div className="rounded-md border border-[#30363d]">
-          <div className="border-b border-[#30363d] px-3 py-2 text-sm font-semibold">
-            Checks
+          <div className="flex items-center justify-between border-b border-[#30363d] px-3 py-2 text-sm font-semibold">
+            <span>Checks</span>
+            {/* Offered only when something FAILED and that failure
+                belongs to an Actions workflow run. A status context and
+                a non-Actions check both have no run to re-run, so the
+                button would 404 rather than help. */}
+            {rerunnable !== null ? (
+              <button
+                type="button"
+                disabled={rerunning}
+                onClick={() => {
+                  setRerunning(true);
+                  rerun(pr.repo, pr.number, rerunnable).then(
+                    () => {
+                      setRerunning(false);
+                      toast.success(`Re-running failed checks on #${pr.number}`);
+                    },
+                    (e: unknown) => {
+                      setRerunning(false);
+                      // GitHub's refusal is the useful part: "This
+                      // workflow run cannot be retried" says exactly why
+                      // where a generic message would not.
+                      toast.error(`Could not re-run checks on #${pr.number}`, {
+                        description: typeof e === "string" ? e : undefined,
+                      });
+                    },
+                  );
+                }}
+                className="rounded border border-[#30363d] px-2 py-1 text-xs font-normal text-[#e6edf3] hover:bg-[#161b22] disabled:opacity-50"
+              >
+                {rerunning ? "Working…" : "Re-run failed"}
+              </button>
+            ) : null}
           </div>
           <div className="p-1">
             {pr.checks.map((c) => (

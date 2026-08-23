@@ -43,6 +43,7 @@ import {
   reviewPr,
   commentOnPr,
   getViewer,
+  rerunChecks,
   getNotifyPrefs,
   setNotifyPrefs,
   type NotifyPrefs,
@@ -354,6 +355,19 @@ export function useActOnPr() {
 /// so before the click rather than after a round-trip.
 export function useViewer() {
   return useQuery({ queryKey: ["viewer"], queryFn: getViewer, staleTime: Infinity });
+}
+
+/// Re-run a pull request's failed CI.
+///
+/// Invalidates the detail view, where the check list lives, and
+/// refreshes the list because the rollup state changes too.
+export function useRerunChecks() {
+  const qc = useQueryClient();
+  return (repo: string, number: number, runId: number) =>
+    rerunChecks(repo, number, runId).then(async () => {
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+      await refreshPrs(qc);
+    });
 }
 
 /// Submit a review on a pull request.

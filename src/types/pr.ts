@@ -248,7 +248,15 @@ export interface PrDetail {
   /// `state` is `success`, `failure`, `pending`, `skipped`, or a raw
   /// GitHub value when unmodelled -- never coerced to success. Inlined
   /// rather than exported types, since nothing imports the names.
-  checks: { name: string; state: string; url: string }[];
+  checks: {
+    name: string;
+    state: string;
+    url: string;
+    /// The Actions workflow run, for re-running failed jobs. Null for a
+    /// plain commit status or a non-Actions check -- neither can be
+    /// re-run, so the button is offered only where this exists.
+    run_id: number | null;
+  }[];
 }
 
 /// How an image's provenance was established. A recorded fact and a

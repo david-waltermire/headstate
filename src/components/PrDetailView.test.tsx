@@ -14,6 +14,7 @@ const deleteBranch = vi.hoisted(() =>
   ),
 );
 const reviewPr = vi.fn(() => Promise.resolve());
+const rerunChecks = vi.fn(() => Promise.resolve());
 const commentOnPr = vi.fn(() => Promise.resolve());
 
 vi.mock("../api/hooks", () => ({
@@ -21,6 +22,7 @@ vi.mock("../api/hooks", () => ({
   useActOnPr: () => vi.fn(() => Promise.resolve()),
   useDeleteHeadBranch: () => deleteBranch,
   useReviewPr: () => reviewPr,
+  useRerunChecks: () => rerunChecks,
   useCommentOnPr: () => commentOnPr,
   // The detail view treats undefined as "we could not ask", which is
   // deliberately NOT the same as "this is mine" -- see ReviewBox.
@@ -67,6 +69,7 @@ describe("PrDetailView", () => {
     // sees calls made by an earlier one -- which is exactly how the
     // "not called" assertion below failed while passing in isolation.
     reviewPr.mockClear();
+    rerunChecks.mockClear();
     commentOnPr.mockClear();
     deleteBranch.mockClear();
   });
@@ -94,18 +97,44 @@ describe("PrDetailView", () => {
   it("lists each check with its outcome", () => {
     view({
       checks: [
-        { name: "build", state: "success", url: "https://ci/1" },
-        { name: "lint", state: "failure", url: "" },
+        { name: "build", state: "success", url: "https://ci/1", run_id: null },
+        { name: "lint", state: "failure", url: "", run_id: null },
       ],
     });
     expect(screen.getByText("build")).toBeTruthy();
     expect(screen.getByText("failure")).toBeTruthy();
   });
 
+  // The `rerunnableRun` rules are tested in lib/rerun.test.ts. These
+  // prove the button is WIRED to them.
+  it("offers a re-run when a failing check has a workflow run", () => {
+    view({ checks: [{ name: "lint", state: "failure", url: "", run_id: 99 }] });
+    expect(screen.getByRole("button", { name: /re-run failed/i })).toBeTruthy();
+  });
+
+  it("offers no re-run when everything passed", () => {
+    view({ checks: [{ name: "lint", state: "success", url: "", run_id: 99 }] });
+    expect(screen.queryByRole("button", { name: /re-run failed/i })).toBeNull();
+  });
+
+  // A status context has no workflow run, so the REST call would 404.
+  it("offers no re-run for a failure with no workflow run", () => {
+    view({ checks: [{ name: "legacy", state: "failure", url: "", run_id: null }] });
+    expect(screen.queryByRole("button", { name: /re-run failed/i })).toBeNull();
+  });
+
+  it("re-runs against the workflow run, not the check", async () => {
+    view({ checks: [{ name: "lint", state: "failure", url: "", run_id: 99 }] });
+    fireEvent.click(screen.getByRole("button", { name: /re-run failed/i }));
+    await waitFor(() =>
+      expect(rerunChecks).toHaveBeenCalledWith("octocat/hello-world", 42, 99),
+    );
+  });
+
   // A check with no URL must not render an anchor going nowhere.
   it("only links checks that have a URL", () => {
     const { container } = view({
-      checks: [{ name: "lint", state: "failure", url: "" }],
+      checks: [{ name: "lint", state: "failure", url: "", run_id: null }],
     });
     const anchors = Array.from(container.querySelectorAll("a")).filter(
       (a) => a.textContent?.includes("lint"),

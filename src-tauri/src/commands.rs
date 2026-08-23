@@ -128,6 +128,34 @@ pub async fn act_on_pr(
     }
 }
 
+/// Re-run the failed jobs of a pull request's CI.
+///
+/// Takes the workflow RUN id, which the detail query now fetches per
+/// check. One call re-runs every failed job in that run.
+#[tauri::command]
+pub async fn rerun_checks(
+    client: State<'_, GhClient>,
+    waker: State<'_, crate::poll::Waker>,
+    repo: String,
+    number: u64,
+    run_id: u64,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    match client.rerun_failed_jobs(&repo, run_id).await {
+        Ok(()) => {
+            log::info!("{repo}#{number} failed checks re-run requested");
+            // CI state changes as a result, so the list should catch up
+            // rather than keep showing the old red until the next tick.
+            waker.0.notify_one();
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} could not re-run checks: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
 /// Who the token belongs to.
 ///
 /// Cached forever by the caller: a login does not change during a

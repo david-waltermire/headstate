@@ -168,6 +168,28 @@ impl PrAction {
 }
 
 impl GitHubClient {
+    /// Re-run the failed jobs of an Actions workflow run.
+    ///
+    /// REST, not GraphQL: there is no re-run mutation in the GraphQL
+    /// schema at all (verified by introspection), so this is the only
+    /// path. It is still a WRITE and still lives in this module, so the
+    /// "reads and writes are separately auditable" split holds.
+    ///
+    /// Targets the WORKFLOW RUN rather than individual check runs. One
+    /// call re-runs everything that failed, where per-check would be one
+    /// request each -- and could not re-run a job that never started
+    /// because an earlier one failed.
+    ///
+    /// GitHub answers 403 "This workflow run cannot be retried" for a
+    /// run that succeeded or is too old. That text is returned verbatim,
+    /// like every other refusal here.
+    pub async fn rerun_failed_jobs(&self, repo: &str, run_id: u64) -> Result<(), ClientError> {
+        self.rest_post(&format!(
+            "/repos/{repo}/actions/runs/{run_id}/rerun-failed-jobs"
+        ))
+        .await
+    }
+
     /// Apply an action to a pull request.
     ///
     /// Returns the GitHub error verbatim on refusal -- a rejected merge

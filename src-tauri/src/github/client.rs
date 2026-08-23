@@ -182,6 +182,18 @@ impl GitHubClient {
     /// The GitHub message is passed through verbatim: "base branch was
     /// modified" is display-ready and more useful than anything this
     /// layer could substitute.
+    /// POST to a REST path with no body and no useful response.
+    ///
+    /// The one REST write the app makes (re-running failed CI) has no
+    /// GraphQL equivalent. The endpoint answers 201 with an EMPTY body,
+    /// which is not valid JSON -- so this reads the response as raw
+    /// bytes and discards them rather than trying to deserialise
+    /// nothing, which is what a plain `post::<_, T>` would do and fail.
+    pub(super) async fn rest_post(&self, path: &str) -> Result<(), ClientError> {
+        self.octocrab._post(path, None::<&()>).await?;
+        Ok(())
+    }
+
     pub(super) async fn graphql_mutation(
         &self,
         body: &serde_json::Value,

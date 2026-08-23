@@ -43,11 +43,14 @@ fn check_state(node: &Value) -> String {
 }
 
 /// The detail payload for one pull request.
-pub fn map_detail(v: &Value, repo: &str) -> PrDetail {
-    let pr = &v["repository"]["pullRequest"];
+/// The per-check list for one pull request.
+///
+/// Extracted so the `run_id` rules are testable without building a whole
+/// `PrDetail`: which checks can be re-run is the decision the UI gates
+/// its button on, and it must be exercised directly.
+pub fn map_detail_checks(pr: &Value) -> Vec<CheckRun> {
     let empty = vec![];
-
-    let checks = pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
+    pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
         .as_array()
         .unwrap_or(&empty)
         .iter()
@@ -64,8 +67,19 @@ pub fn map_detail(v: &Value, repo: &str) -> PrDetail {
                 .or_else(|| c["targetUrl"].as_str())
                 .unwrap_or_default()
                 .to_string(),
+            // Absent for a StatusContext and for check runs from apps
+            // that are not Actions. None means "cannot re-run this",
+            // which the UI reads rather than guessing.
+            run_id: c["checkSuite"]["workflowRun"]["databaseId"].as_u64(),
         })
-        .collect();
+        .collect()
+}
+
+pub fn map_detail(v: &Value, repo: &str) -> PrDetail {
+    let pr = &v["repository"]["pullRequest"];
+    let empty = vec![];
+
+    let checks = map_detail_checks(pr);
 
     let comments = pr["comments"]["nodes"]
         .as_array()
@@ -414,6 +428,40 @@ pub fn map_cycle_trend(v: &Value) -> CycleTrend {
 
 #[cfg(test)]
 mod tests {
+    /// The workflow run id is what makes re-running possible, and it
+    /// is OPTIONAL by design: a plain commit status and a check run from
+    /// a non-Actions app both have no workflow run. None must mean
+    /// "cannot re-run this" rather than defaulting to a wrong id.
+    #[test]
+    fn check_runs_carry_their_workflow_run_when_there_is_one() {
+        let v = json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {
+            "state": "FAILURE",
+            "contexts": {"nodes": [
+                {"name": "lint", "conclusion": "FAILURE", "detailsUrl": "https://x/1",
+                 "checkSuite": {"workflowRun": {"databaseId": 12345}}},
+                // A StatusContext: no checkSuite at all.
+                {"context": "legacy/ci", "state": "FAILURE", "targetUrl": "https://x/2"}
+            ]}
+        }}}]}});
+        let checks = map_detail_checks(&v);
+        assert_eq!(checks[0].run_id, Some(12345));
+        assert_eq!(checks[1].run_id, None, "a status context cannot be re-run");
+    }
+
+    /// An Actions check whose suite has no workflow run -- which happens
+    /// for check runs created by other apps -- must also come back None
+    /// rather than panicking on the missing field.
+    #[test]
+    fn a_check_without_a_workflow_run_is_not_rerunnable() {
+        let v = json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {
+            "contexts": {"nodes": [
+                {"name": "third-party", "conclusion": "FAILURE",
+                 "checkSuite": {"workflowRun": null}}
+            ]}
+        }}}]}});
+        assert_eq!(map_detail_checks(&v)[0].run_id, None);
+    }
+
     /// The login must come back verbatim, and its absence must be None
     /// rather than an empty string -- "we could not ask" is not "nobody".
     #[test]

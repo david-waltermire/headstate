@@ -241,6 +241,13 @@ pub struct CheckRun {
     pub state: String,
     /// Where to see the run itself. Empty when GitHub gives none.
     pub url: String,
+    /// The Actions workflow RUN this check belongs to, for re-running.
+    ///
+    /// None for a check from an app that is not GitHub Actions, and for
+    /// a plain commit status -- neither has a workflow run to re-run.
+    /// Optional rather than defaulted, so the UI offers the button only
+    /// where it can actually work rather than failing on click.
+    pub run_id: Option<u64>,
 }
 
 /// One comment on a pull request.

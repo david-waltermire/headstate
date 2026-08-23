@@ -286,7 +286,16 @@ query($owner: String!, $repo: String!, $number: Int!) {
         nodes { commit { statusCheckRollup {
           state
           contexts(first: 20) { nodes {
-            ... on CheckRun { name conclusion detailsUrl }
+            ... on CheckRun {
+              name conclusion detailsUrl
+              # The workflow RUN, not the check run: re-running failed
+              # jobs is one REST call per run, where per-check would be
+              # one call each and could not re-run a job that never
+              # started. `workflowRun` is null for check runs from apps
+              # that are not GitHub Actions, which is why the mapper
+              # treats it as optional rather than assuming it.
+              checkSuite { workflowRun { databaseId } }
+            }
             ... on StatusContext { context state targetUrl }
           } }
         } } }

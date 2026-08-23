@@ -54,6 +54,14 @@ export const getNotifyPrefs = () => invoke<NotifyPrefs>("get_notify_prefs");
 export const setNotifyPrefs = (prefs: NotifyPrefs) =>
   invoke<void>("set_notify_prefs", { prefs });
 
+/// Re-run the failed jobs of a pull request's CI.
+///
+/// Takes the workflow RUN id, not a check id: one call re-runs every
+/// failed job in that run, and a per-check call could not restart a job
+/// that never started because an earlier one failed.
+export const rerunChecks = (repo: string, number: number, runId: number) =>
+  invoke<void>("rerun_checks", { repo, number, runId });
+
 /// The authenticated user's login.
 ///
 /// Asked once and cached forever: it cannot change during a session.
