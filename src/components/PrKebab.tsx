@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useActOnPr, useSetAutoMerge, useUpdatePrBranch } from "../api/hooks";
 import type { PrActionName } from "../api/tauri";
+import { inverseOf } from "../lib/undo";
 import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
 import type { PullRequest } from "../types/pr";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -77,7 +78,30 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
 
   const run = (action: PrActionName) => {
     act(pr.id, pr.repo, pr.number, action).then(
-      () => toast.success(`${pr.repo}#${pr.number} — ${LABEL[action].toLowerCase()}`),
+      () => {
+        const back = inverseOf(action);
+        toast.success(`${pr.repo}#${pr.number} — ${LABEL[action].toLowerCase()}`, {
+          // Only for actions with a true inverse. Merge and close are
+          // deliberately absent -- see `inverseOf`.
+          action: back
+            ? {
+                label: "Undo",
+                onClick: () => {
+                  void act(pr.id, pr.repo, pr.number, back).then(
+                    () =>
+                      toast.success(
+                        `${pr.repo}#${pr.number} — ${LABEL[back].toLowerCase()}`,
+                      ),
+                    (e: unknown) =>
+                      toast.error(`Could not undo #${pr.number}`, {
+                        description: typeof e === "string" ? e : undefined,
+                      }),
+                  );
+                },
+              }
+            : undefined,
+        });
+      },
       (e: unknown) =>
         toast.error(`Could not ${LABEL[action].toLowerCase()} #${pr.number}`, {
           description: typeof e === "string" ? e : undefined,

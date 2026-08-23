@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PR_FIXTURES } from "@/fixtures/prs";
@@ -232,5 +233,50 @@ describe("PrKebab", () => {
       open();
       expect(screen.queryByRole("menuitem", { name: /merge when green/i })).toBeNull();
     });
+  });
+});
+
+/// The pure `inverseOf` mapping is tested in `lib/undo.test.ts`. These
+/// prove it is actually WIRED: a correct map that never reaches the
+/// toast offers the user nothing.
+describe("undo", () => {
+  it("offers an undo on a reversible action", async () => {
+    render(<PrKebab pr={pr({ is_draft: false })} />);
+    open();
+    fireEvent.click(await screen.findByRole("menuitem", { name: /convert to draft/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    const opts = vi.mocked(toast.success).mock.calls.at(-1)?.[1] as
+      | { action?: { label: string } }
+      | undefined;
+    expect(opts?.action?.label).toBe("Undo");
+  });
+
+  // Merging is the one action the user genuinely cannot take back:
+  // `reopen` cannot un-merge, and a revert is a new commit. Offering
+  // "Undo" here would be a lie.
+  it("offers no undo on merge", async () => {
+    render(<PrKebab pr={pr({ is_draft: false, merge_status: "clean", merge: "mergeable" })} />);
+    open();
+    fireEvent.click(await screen.findByRole("menuitem", { name: /^merge$/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    const opts = vi.mocked(toast.success).mock.calls.at(-1)?.[1] as
+      | { action?: { label: string } }
+      | undefined;
+    expect(opts?.action).toBeUndefined();
+  });
+
+  it("applies the inverse when undo is clicked", async () => {
+    render(<PrKebab pr={pr({ is_draft: false })} />);
+    open();
+    fireEvent.click(await screen.findByRole("menuitem", { name: /convert to draft/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    const opts = vi.mocked(toast.success).mock.calls.at(-1)?.[1] as
+      | { action?: { onClick: () => void } }
+      | undefined;
+    act.mockClear();
+    opts?.action?.onClick();
+    await waitFor(() =>
+      expect(act).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), "ready"),
+    );
   });
 });

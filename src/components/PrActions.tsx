@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { useActOnPr } from "../api/hooks";
 import type { PrActionName } from "../api/tauri";
+import { inverseOf } from "../lib/undo";
 import type { PrDetail } from "../types/pr";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
@@ -53,7 +54,33 @@ export function PrActions({ pr }: { pr: PrDetail }) {
     act(pr.id, pr.repo, pr.number, action).then(
       () => {
         setBusy(null);
-        toast.success(`${pr.repo}#${pr.number} — ${LABEL[action].toLowerCase()}`);
+        const back = inverseOf(action);
+        toast.success(`${pr.repo}#${pr.number} — ${LABEL[action].toLowerCase()}`, {
+          // Only for actions with a true inverse. Merge and close are
+          // deliberately absent -- see `inverseOf`.
+          action: back
+            ? {
+                label: "Undo",
+                onClick: () => {
+                  setBusy(back);
+                  void act(pr.id, pr.repo, pr.number, back).then(
+                    () => {
+                      setBusy(null);
+                      toast.success(
+                        `${pr.repo}#${pr.number} — ${LABEL[back].toLowerCase()}`,
+                      );
+                    },
+                    (e: unknown) => {
+                      setBusy(null);
+                      toast.error(`Could not undo #${pr.number}`, {
+                        description: typeof e === "string" ? e : undefined,
+                      });
+                    },
+                  );
+                },
+              }
+            : undefined,
+        });
       },
       (e: unknown) => {
         setBusy(null);
