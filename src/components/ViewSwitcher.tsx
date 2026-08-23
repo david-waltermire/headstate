@@ -1,6 +1,7 @@
 import { Container, ChevronDown, Eye, FolderGit2, GitPullRequest } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type View, useFilters } from "../store/filters";
+import { useUiPrefs } from "../api/hooks";
 
 const VIEWS: { id: View; label: string; Icon: typeof GitPullRequest }[] = [
   { id: "my-prs", label: "My pull requests", Icon: GitPullRequest },
@@ -24,6 +25,18 @@ export function ViewSwitcher({ counts }: { counts?: Partial<Record<View, number>
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const current = VIEWS.find((v) => v.id === view) ?? VIEWS[0];
+  const { prefs } = useUiPrefs();
+  // Two views are never hidden, whatever is stored:
+  //
+  // - "my-prs" is the default view and the app's whole premise. Hiding
+  //   it would leave someone with no way back to what they installed
+  //   this for.
+  // - The CURRENT view, even when hidden, or the app would show a page
+  //   its own switcher says does not exist -- with no way off it.
+  const hidden = new Set(prefs?.hidden_views ?? []);
+  const offered = VIEWS.filter(
+    ({ id }) => id === "my-prs" || id === view || !hidden.has(id),
+  );
 
   // Dismiss on Escape and on a click elsewhere. Without both, the menu
   // stays open behind whatever the user does next.
@@ -67,7 +80,7 @@ export function ViewSwitcher({ counts }: { counts?: Partial<Record<View, number>
           role="menu"
           className="absolute left-0 right-0 top-full z-20 mt-1 rounded border border-[#30363d] bg-[#161b22] p-1 shadow-lg"
         >
-          {VIEWS.map(({ id, label, Icon }) => (
+          {offered.map(({ id, label, Icon }) => (
             <button
               key={id}
               type="button"

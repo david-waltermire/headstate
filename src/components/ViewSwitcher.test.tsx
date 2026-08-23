@@ -1,4 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
+// ViewSwitcher reads `useUiPrefs`, so it needs a QueryClient.
+import { renderWithQuery as render } from "@/test-utils";
 import { beforeEach, describe, expect, it } from "vitest";
 import { useFilters } from "../store/filters";
 import { ViewSwitcher } from "./ViewSwitcher";

@@ -893,6 +893,62 @@ pub fn get_notify_prefs(app: AppHandle) -> crate::poll::NotifyPrefs {
         .unwrap_or_default()
 }
 
+/// Interface preferences.
+#[tauri::command]
+pub fn get_ui_prefs(app: AppHandle) -> crate::poll::UiPrefs {
+    read_ui_prefs(&app)
+}
+
+/// Read interface preferences, or the defaults if unreadable.
+///
+/// Shared with the window event handler, which needs
+/// `close_hides_to_tray` and runs outside any command. Every failure
+/// path returns the default, which is the app's pre-existing behaviour:
+/// a database problem must not silently start QUITTING an app the user
+/// expects to hide.
+pub fn read_ui_prefs(app: &AppHandle) -> crate::poll::UiPrefs {
+    open_db(&db_path(app))
+        .ok()
+        .and_then(|c| crate::store::settings::get(&c, settings::keys::UI_PREFS).ok())
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Whether the app is registered to start at login.
+///
+/// Asked of the OS rather than stored: the user can disable it from
+/// System Settings, and a stored flag would then disagree with reality.
+#[tauri::command]
+pub fn get_autostart(app: AppHandle) -> bool {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+/// Register or unregister start-at-login.
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let mgr = app.autolaunch();
+    let res = if enabled { mgr.enable() } else { mgr.disable() };
+    res.map_err(|e| e.to_string())?;
+    log::info!("start at login: {enabled}");
+    Ok(())
+}
+
+/// Change interface preferences.
+#[tauri::command]
+pub fn set_ui_prefs(app: AppHandle, prefs: crate::poll::UiPrefs) -> Result<(), String> {
+    let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
+    crate::store::settings::set(&conn, settings::keys::UI_PREFS, &prefs)
+        .map_err(|e| e.to_string())?;
+    log::info!(
+        "ui: {} view(s) hidden, close_hides_to_tray={}",
+        prefs.hidden_views.len(),
+        prefs.close_hides_to_tray
+    );
+    Ok(())
+}
+
 /// Change which desktop notifications are sent.
 ///
 /// No waker: the poll loop reads this per tick, so the next poll picks it

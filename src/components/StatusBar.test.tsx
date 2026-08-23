@@ -23,6 +23,12 @@ vi.mock("@tauri-apps/api/app", () => ({
 }));
 
 vi.mock("../api/hooks", () => ({
+  // Defaults, matching the Rust side: nothing hidden, close hides.
+  useUiPrefs: () => ({
+    prefs: { hidden_views: [], close_hides_to_tray: true },
+    set: () => Promise.resolve(),
+  }),
+  useAutostart: () => ({ enabled: false, set: () => Promise.resolve() }),
   usePollState: () => state.current,
   usePollError: () => state.error,
   usePollInterval: () => ({ seconds: 120, set: setInterval_ }),

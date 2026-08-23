@@ -44,6 +44,11 @@ import {
   commentOnPr,
   getViewer,
   rerunChecks,
+  getUiPrefs,
+  setUiPrefs,
+  type UiPrefs,
+  getAutostart,
+  setAutostart,
   getNotifyPrefs,
   setNotifyPrefs,
   type NotifyPrefs,
@@ -753,6 +758,40 @@ export function usePollInterval() {
       return applied;
     });
   return { seconds: query.data, set };
+}
+
+/// Interface preferences.
+export function useUiPrefs() {
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: ["ui-prefs"],
+    queryFn: getUiPrefs,
+    staleTime: Infinity,
+  });
+  const set = (prefs: UiPrefs) =>
+    setUiPrefs(prefs).then(() => {
+      qc.setQueryData(["ui-prefs"], prefs);
+    });
+  return { prefs: query.data, set };
+}
+
+/// Whether the app starts at login.
+///
+/// No optimistic seed: this one can genuinely FAIL -- registering a
+/// launch agent touches the filesystem -- so the checkbox should reflect
+/// what the OS actually did, not what was asked for.
+export function useAutostart() {
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: ["autostart"],
+    queryFn: getAutostart,
+    staleTime: Infinity,
+  });
+  const set = (enabled: boolean) =>
+    setAutostart(enabled).then(() =>
+      qc.invalidateQueries({ queryKey: ["autostart"] }),
+    );
+  return { enabled: query.data ?? false, set };
 }
 
 /// Which desktop notifications the user wants.

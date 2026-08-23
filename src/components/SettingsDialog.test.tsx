@@ -6,6 +6,12 @@ const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
 const dirs = vi.hoisted(() => ({ current: ["/Users/x/code"] as string[] }));
 
 vi.mock("../api/hooks", () => ({
+  // Defaults, matching the Rust side: nothing hidden, close hides.
+  useUiPrefs: () => ({
+    prefs: { hidden_views: [], close_hides_to_tray: true },
+    set: () => Promise.resolve(),
+  }),
+  useAutostart: () => ({ enabled: false, set: () => Promise.resolve() }),
   usePollInterval: () => ({ seconds: 120, set: setInterval_ }),
   useWorktreeDirs: () => ({ dirs: dirs.current, set: setDirs }),
   // Defaults, matching the Rust side: absent prefs mean everything on.

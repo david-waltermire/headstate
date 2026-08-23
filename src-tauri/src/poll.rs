@@ -192,6 +192,35 @@ impl BreakageKind {
     }
 }
 
+/// Interface preferences that Rust needs to know about.
+///
+/// Lives here beside `NotifyPrefs` rather than in a UI module because
+/// `close_hides_to_tray` is read by the window event handler, which is
+/// Rust-side and cannot see anything the webview stores.
+///
+/// `hidden_views` is a plain list of view ids rather than a bool per
+/// view, so adding a view later needs no migration and hiding an id
+/// this build does not know about is harmless.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct UiPrefs {
+    /// View ids the switcher should not offer.
+    pub hidden_views: Vec<String>,
+    /// Whether the close button hides to the tray instead of quitting.
+    pub close_hides_to_tray: bool,
+}
+
+impl Default for UiPrefs {
+    fn default() -> Self {
+        Self {
+            // Nothing hidden, and close hides -- exactly what the app
+            // did before this setting existed. An upgrade must not
+            // change behaviour for someone who never opens Settings.
+            hidden_views: Vec::new(),
+            close_hides_to_tray: true,
+        }
+    }
+}
+
 /// Which notifications the user wants.
 ///
 /// Defaults to everything ON, matching the behaviour before this existed
@@ -566,6 +595,30 @@ pub fn spawn(
 
 #[cfg(test)]
 mod tests {
+    /// Defaults must reproduce the behaviour from before this setting
+    /// existed: nothing hidden, and close hides to the tray. An upgrade
+    /// must not change what the app does for someone who never opens
+    /// Settings -- and a close button that suddenly QUITS loses more
+    /// than one that hides.
+    #[test]
+    fn ui_prefs_default_to_the_previous_behaviour() {
+        let d = UiPrefs::default();
+        assert!(d.hidden_views.is_empty());
+        assert!(d.close_hides_to_tray);
+    }
+
+    /// Hidden views are a list of ids, not a bool per view, so a build
+    /// that does not know an id simply carries it -- no migration, and
+    /// no crash on a value written by a newer version.
+    #[test]
+    fn an_unknown_hidden_view_id_is_carried_not_rejected() {
+        let json =
+            r#"{"hidden_views":["docker","a-view-from-the-future"],"close_hides_to_tray":false}"#;
+        let p: UiPrefs = serde_json::from_str(json).unwrap();
+        assert_eq!(p.hidden_views.len(), 2);
+        assert!(!p.close_hides_to_tray);
+    }
+
     /// The default must be everything ON. This is the upgrade path: a
     /// user who has never opened Settings had notifications before this
     /// key existed, and must still have them after.

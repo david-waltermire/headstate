@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { useNotifyPrefs, usePollInterval, useWorktreeDirs } from "../api/hooks";
+import {
+  useAutostart,
+  useNotifyPrefs,
+  usePollInterval,
+  useUiPrefs,
+  useWorktreeDirs,
+} from "../api/hooks";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
 /// Matches the backend's own range: `clamp_interval` allows 60s..3600s
@@ -29,6 +35,9 @@ export function SettingsDialog({
   const { seconds, set: setInterval } = usePollInterval();
   const { dirs, set: setDirs } = useWorktreeDirs();
   const { prefs, set: setPrefs } = useNotifyPrefs();
+  const { prefs: ui, set: setUi } = useUiPrefs();
+  const { enabled: autostart, set: setAutostart } = useAutostart();
+  const [autostartError, setAutostartError] = useState<string | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -151,6 +160,71 @@ export function SettingsDialog({
           {error ? (
             <p role="alert" className="text-xs text-[#f85149]">
               {error}
+            </p>
+          ) : null}
+        </div>
+
+        {/* Half the top-level navigation is irrelevant to a PR-only
+            user, and both of these lead to an empty screen on first run
+            -- Worktrees needs scan directories, Docker needs a running
+            daemon. "My pull requests" is deliberately absent: it is the
+            default view and the app's premise, so hiding it would leave
+            someone with no way back. */}
+        <div className="mt-5 flex flex-col gap-2">
+          <span className="text-sm font-medium">Views</span>
+          {[
+            { id: "to-review", label: "To review" },
+            { id: "worktrees", label: "Worktrees" },
+            { id: "docker", label: "Docker" },
+          ].map(({ id, label }) => (
+            <label key={id} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={!(ui?.hidden_views ?? []).includes(id)}
+                onChange={() => {
+                  if (!ui) return;
+                  const hidden = ui.hidden_views.includes(id)
+                    ? ui.hidden_views.filter((v) => v !== id)
+                    : [...ui.hidden_views, id];
+                  void setUi({ ...ui, hidden_views: hidden });
+                }}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+
+        <div className="mt-5 flex flex-col gap-2">
+          <span className="text-sm font-medium">Window</span>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={ui?.close_hides_to_tray ?? true}
+              onChange={() =>
+                ui && void setUi({ ...ui, close_hides_to_tray: !ui.close_hides_to_tray })
+              }
+            />
+            Closing the window hides it to the tray
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={autostart}
+              onChange={() => {
+                setAutostartError(null);
+                // Unlike every other setting here this one touches the
+                // filesystem and can genuinely fail, so the error is
+                // shown rather than swallowed.
+                void setAutostart(!autostart).catch((e: unknown) =>
+                  setAutostartError(typeof e === "string" ? e : "Could not change this"),
+                );
+              }}
+            />
+            Start Headstate at login
+          </label>
+          {autostartError ? (
+            <p role="alert" className="text-xs text-[#f85149]">
+              {autostartError}
             </p>
           ) : null}
         </div>

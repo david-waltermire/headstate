@@ -46,6 +46,13 @@ pub fn run() {
         // rotating file beside it. Never log the token, and never log a
         // repository owner -- see CONTRIBUTING and check-privacy.sh.
         .plugin(tauri_plugin_notification::init())
+        // No launch args: the app already opens hidden-to-tray on its
+        // own terms, and passing --hidden here would be a second, easily
+        // divergent source of truth for that behaviour.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
@@ -68,6 +75,10 @@ pub fn run() {
             commands::act_on_pr,
             commands::get_viewer,
             commands::rerun_checks,
+            commands::get_ui_prefs,
+            commands::set_ui_prefs,
+            commands::get_autostart,
+            commands::set_autostart,
             commands::get_notify_prefs,
             commands::set_notify_prefs,
             commands::review_pr,
@@ -213,6 +224,17 @@ pub fn run() {
             // focused flag itself -- otherwise polling would stay on the
             // 60s cadence forever after close-to-tray.
             tauri::WindowEvent::CloseRequested { api, .. } => {
+                // Read per close rather than cached at startup, so the
+                // setting takes effect immediately rather than at the
+                // next launch -- and an unreadable database falls back
+                // to hiding, the app's pre-existing behaviour, because
+                // quitting unexpectedly loses more than hiding does.
+                if !crate::commands::read_ui_prefs(&window.app_handle().clone()).close_hides_to_tray
+                {
+                    // Let the close proceed: Tauri exits when the last
+                    // window closes, which is what "quit" means here.
+                    return;
+                }
                 api.prevent_close();
                 let _ = window.hide();
                 if let Some(focused) = window.try_state::<Focused>() {

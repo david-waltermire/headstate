@@ -10,6 +10,12 @@ import { useFilters } from "./store/filters";
 const mockPrs = vi.fn<() => PullRequest[]>(() => []);
 
 vi.mock("./api/hooks", () => ({
+  // Defaults, matching the Rust side: nothing hidden, close hides.
+  useUiPrefs: () => ({
+    prefs: { hidden_views: [], close_hides_to_tray: true },
+    set: () => Promise.resolve(),
+  }),
+  useAutostart: () => ({ enabled: false, set: () => Promise.resolve() }),
   useActOnPr: () => () => Promise.resolve(),
   useUpdatePrBranch: () => () => Promise.resolve(),
   useActOnPrs: () => () => Promise.resolve([]),

@@ -54,6 +54,9 @@ pub mod keys {
     /// did before this key existed -- an upgrade must not silently turn
     /// off a feature someone relies on.
     pub const NOTIFY_PREFS: &str = "notify_prefs";
+    /// Interface preferences, as a JSON `UiPrefs`. Absent means the
+    /// defaults, which are what the app did before this key existed.
+    pub const UI_PREFS: &str = "ui_prefs";
 }
 
 #[cfg(test)]

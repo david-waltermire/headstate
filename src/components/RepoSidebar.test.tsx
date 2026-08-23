@@ -1,4 +1,6 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
+// The sidebar renders ViewSwitcher, which reads `useUiPrefs`.
+import { renderWithQuery as render } from "@/test-utils";
 import { afterEach, describe, expect, it } from "vitest";
 import { PR_FIXTURES } from "@/fixtures/prs";
 import { useFilters } from "@/store/filters";

@@ -39,6 +39,23 @@ export const getCached = () => invoke<PullRequest[]>("get_cached");
 /// not affect the poll loop's cadence.
 export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 
+/// Interface preferences. Mirrors the Rust `UiPrefs`.
+export interface UiPrefs {
+  hidden_views: string[];
+  close_hides_to_tray: boolean;
+}
+
+export const getUiPrefs = () => invoke<UiPrefs>("get_ui_prefs");
+export const setUiPrefs = (prefs: UiPrefs) => invoke<void>("set_ui_prefs", { prefs });
+
+/// Whether the app starts at login.
+///
+/// Asked of the OS rather than stored: the user can turn it off in
+/// System Settings, and a stored flag would then disagree with reality.
+export const getAutostart = () => invoke<boolean>("get_autostart");
+export const setAutostart = (enabled: boolean) =>
+  invoke<void>("set_autostart", { enabled });
+
 /// Which desktop notifications the user wants.
 ///
 /// Mirrors the Rust `NotifyPrefs`. Absent on the Rust side means

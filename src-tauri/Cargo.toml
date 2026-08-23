@@ -28,6 +28,9 @@ chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-log = "2.9.0"
 log = "0.4.33"
 tauri-plugin-notification = "2.3.3"
+# Start at login. A tray app whose value is a live badge while hidden is
+# weakened by requiring a manual launch every boot.
+tauri-plugin-autostart = "2.5.1"
 
 [dev-dependencies]
 temp-env = "0.3"
