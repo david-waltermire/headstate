@@ -29,6 +29,12 @@ interface FilterStore {
   applyPreset: (filters: Filters) => void;
   setView: (view: View) => void;
   setPanel: (panel: "list" | "stats" | "builds") => void;
+  /// How tightly PR rows pack.
+  ///
+  /// A global preference rather than per-view: it is about the user's
+  /// eyes and screen, not about which list they happen to be reading.
+  density: "comfortable" | "dense";
+  setDensity: (density: "comfortable" | "dense") => void;
   /// The PR the detail view is showing, or null for the list.
   ///
   /// Deliberately NOT persisted: reopening the app on a detail page for a
@@ -90,6 +96,8 @@ export const useFilters = create<FilterStore>()(
       filtersByView: { ...EMPTY_FILTERS },
       view: "my-prs",
       panel: "list",
+      density: "comfortable",
+      setDensity: (density) => set({ density }),
       setFilter: (key, value) =>
         set((s) => ({
           filtersByView: {
@@ -104,6 +112,8 @@ export const useFilters = create<FilterStore>()(
         set((s) => ({
           filtersByView: { ...s.filtersByView, [s.view]: filters },
           panel: "list",
+      density: "comfortable",
+      setDensity: (density) => set({ density }),
         })),
       // Selection clears with the view: a working set assembled on My
       // PRs means nothing on the review list, and carrying it across
@@ -192,6 +202,7 @@ export const useFilters = create<FilterStore>()(
         ) as Record<View, Filters>,
         view: s.view,
         panel: s.panel,
+        density: s.density,
       }),
     },
   ),

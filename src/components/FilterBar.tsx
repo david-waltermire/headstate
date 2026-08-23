@@ -48,7 +48,7 @@ const SORT_OPTIONS: { value: NonNullable<Filters["sort"]>; label: string }[] = [
 /// never drifts from what the PR list is actually showing.
 export function FilterBar({ prs }: { prs: PullRequest[] }) {
   const filters = useActiveFilters();
-  const { setFilter, reset } = useFilters();
+  const { setFilter, reset, density, setDensity } = useFilters();
   const labels = [...new Set(prs.flatMap((pr) => pr.labels.map((l) => l.name)))].sort();
 
   const toggleLabel = (key: "includeLabels" | "excludeLabels", name: string) => {
@@ -233,7 +233,22 @@ export function FilterBar({ prs }: { prs: PullRequest[] }) {
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <Button variant="ghost" size="sm" className="ml-auto" onClick={reset}>
+      {/* Density is a VIEW preference, not a filter -- it changes how
+          rows look, never which ones are shown -- so it sits past the
+          `ml-auto` divider with Clear filters rather than among the
+          chips, and `reset` deliberately does not touch it. */}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="ml-auto"
+        aria-pressed={density === "dense"}
+        title={density === "dense" ? "Switch to comfortable rows" : "Fit more rows on screen"}
+        onClick={() => setDensity(density === "dense" ? "comfortable" : "dense")}
+      >
+        {density === "dense" ? "Comfortable" : "Dense"}
+      </Button>
+
+      <Button variant="ghost" size="sm" onClick={reset}>
         Clear filters
       </Button>
     </div>

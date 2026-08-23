@@ -134,6 +134,13 @@ function prState(pr: PullRequest): { className: string; label: string } {
   return { className: "text-[#3fb950]", label: "Open" };
 }
 
+/// How many labels a dense row shows before collapsing to "+N".
+///
+/// Labels render unbounded otherwise, so a PR with six of them wraps the
+/// flex line and pushes CI and review state off the row -- spending the
+/// exact density this mode reclaims.
+const DENSE_LABELS = 2;
+
 export function PrRow({
   pr,
   onOpen,
@@ -155,7 +162,8 @@ export function PrRow({
   selectable?: boolean;
 }) {
   const state = prState(pr);
-  const { checked, toggleChecked, anchor, setAnchor } = useFilters();
+  const { checked, toggleChecked, anchor, setAnchor, density } = useFilters();
+  const dense = density === "dense";
   const key = prKey(pr);
   return (
     // The row opens the detail view; the title anchor still opens GitHub,
@@ -170,7 +178,9 @@ export function PrRow({
           onOpen();
         }
       }}
-      className={`flex gap-3 border-b border-[#30363d] px-4 py-3 last:border-b-0 hover:bg-[#161b22] ${
+      className={`flex gap-3 border-b border-[#30363d] px-4 ${
+        dense ? "py-1.5" : "py-3"
+      } last:border-b-0 hover:bg-[#161b22] ${
         onOpen ? "cursor-pointer" : ""
       }`}
     >
@@ -223,9 +233,14 @@ export function PrRow({
           >
             {pr.title}
           </a>
+          {/* The number moves up in dense mode: it lives on the prose
+              line otherwise, and that line is gone here. Without it a
+              dense row cannot be referred to -- "#42" is how a pull
+              request is named everywhere else in the app. */}
+          {dense ? <span className="shrink-0 text-xs text-[#8b949e]">#{pr.number}</span> : null}
           <CiGlyph pr={pr} />
           <ReviewGlyph pr={pr} />
-          {pr.labels.map((label) => (
+          {(dense ? pr.labels.slice(0, DENSE_LABELS) : pr.labels).map((label) => (
             <span
               key={label.name}
               className="rounded-full px-2 py-0.5 text-xs font-medium"
@@ -237,7 +252,18 @@ export function PrRow({
               {label.name}
             </span>
           ))}
+          {dense && pr.labels.length > DENSE_LABELS ? (
+            // The count is not decoration: without it a capped list
+            // looks like the whole list, and a label the user filters on
+            // would appear simply absent.
+            <span className="text-xs text-[#8b949e]">+{pr.labels.length - DENSE_LABELS}</span>
+          ) : null}
         </div>
+        {/* Dense drops the PROSE line only. Every decisive signal --
+            CI, review verdict, state colour, title, number -- lives on
+            the line above and is untouched; this line largely repeats
+            them in words. */}
+        {dense ? null : (
         <div className="mt-1 text-xs text-[#8b949e]">
           {/* `updated_at` is what the app SORTS and reasons about (stale
               detection, "least recently updated"), so a row showing only
@@ -279,6 +305,7 @@ export function PrRow({
             </span>
           )}
         </div>
+        )}
       </div>
       <div className="shrink-0 text-xs text-[#8b949e]">{pr.repo}</div>
       <PrKebab pr={pr} canWrite={canWrite} />
