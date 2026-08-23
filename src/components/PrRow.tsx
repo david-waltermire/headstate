@@ -108,30 +108,36 @@ function ReviewGlyph({ pr }: { pr: PullRequest }) {
 /// (conflicts or failing CI), so the icon agrees with the priorities strip
 /// and the tray badge rather than inventing a fourth definition of broken.
 ///
-/// Colour never carries the meaning alone: the label names the state for
-/// anyone who cannot distinguish these hues, matching how `CiGlyph`
-/// already labels its states.
-function prState(pr: PullRequest): { className: string; label: string } {
+/// The label is rendered as a VISIBLE chip as well as an `aria-label`.
+/// It used to be aria-only, which is not visible text and is not a
+/// tooltip -- so for a sighted user colour was the sole carrier, and
+/// "Blocked on review" and "Behind base branch" are the same hue
+/// (#d29922) and were therefore indistinguishable.
+///
+/// `chip` is false for the ordinary Open state: a marker on every row
+/// would be noise and would defeat its own purpose, the same reasoning
+/// `ReviewGlyph` already applies to itself.
+function prState(pr: PullRequest): { className: string; label: string; chip: boolean } {
   if (needsAttention(pr)) {
-    return { className: "text-[#f85149]", label: "Blocked" };
+    return { className: "text-[#f85149]", label: "Blocked", chip: true };
   }
   if (pr.in_merge_queue) {
-    return { className: "text-[#db6d28]", label: "In merge queue" };
+    return { className: "text-[#db6d28]", label: "In merge queue", chip: true };
   }
   if (pr.is_draft) {
-    return { className: "text-[#8b949e]", label: "Draft" };
+    return { className: "text-[#8b949e]", label: "Draft", chip: true };
   }
   // GitHub's own verdict, which `needsAttention` cannot express: a PR
   // waiting on a required review is neither broken nor ready, and a PR
   // whose base has moved needs an update rather than a fix. Both look
   // identical to the conflicts-or-red-CI rule above.
   if (pr.merge_status === "blocked") {
-    return { className: "text-[#d29922]", label: "Blocked on review" };
+    return { className: "text-[#d29922]", label: "Blocked on review", chip: true };
   }
   if (pr.merge_status === "behind") {
-    return { className: "text-[#d29922]", label: "Behind base branch" };
+    return { className: "text-[#d29922]", label: "Behind base branch", chip: true };
   }
-  return { className: "text-[#3fb950]", label: "Open" };
+  return { className: "text-[#3fb950]", label: "Open", chip: false };
 }
 
 /// How many labels a dense row shows before collapsing to "+N".
@@ -238,6 +244,16 @@ export function PrRow({
               dense row cannot be referred to -- "#42" is how a pull
               request is named everywhere else in the app. */}
           {dense ? <span className="shrink-0 text-xs text-[#8b949e]">#{pr.number}</span> : null}
+          {/* Visible text, not only an aria-label. The icon's colour
+              alone made "Blocked on review" and "Behind base branch"
+              identical, since both are #d29922. */}
+          {state.chip ? (
+            <span
+              className={`shrink-0 rounded-full border border-current px-2 py-0.5 text-xs font-medium ${state.className}`}
+            >
+              {state.label}
+            </span>
+          ) : null}
           <CiGlyph pr={pr} />
           <ReviewGlyph pr={pr} />
           {(dense ? pr.labels.slice(0, DENSE_LABELS) : pr.labels).map((label) => (
@@ -272,10 +288,18 @@ export function PrRow({
               ago and one dead six weeks. */}
           #{pr.number} opened {relativeTime(pr.created_at)} by {pr.author} · updated{" "}
           {relativeTime(pr.updated_at)}
-          {pr.is_draft && (
+          {/* Kept, and NOT redundant with the state chip. `prState`
+              returns exactly one state, so a draft whose CI is also red
+              reports as "Blocked" -- dropping these lost the fact that
+              it is a draft at all. The chip says what most needs acting
+              on; these say what else is true. Only shown when the chip
+              is not already saying the same word. */}
+          {pr.is_draft && state.label !== "Draft" && (
             <span className="ml-2 rounded border border-[#30363d] px-1.5">Draft</span>
           )}
-          {pr.in_merge_queue && <span className="ml-2 text-[#a371f7]">• In merge queue</span>}
+          {pr.in_merge_queue && state.label !== "In merge queue" && (
+            <span className="ml-2 text-[#a371f7]">• In merge queue</span>
+          )}
           {pr.merge === "conflicted" && (
             <span className="ml-2 text-[#f85149]">• Conflicts</span>
           )}
