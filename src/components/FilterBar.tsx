@@ -20,6 +20,17 @@ const REVIEW_OPTIONS: { value: ReviewState; label: string }[] = [
   { value: "none", label: "No reviews" },
 ];
 
+/// CI states, in the order a triaging user cares about: what is broken
+/// first. `applyFilters` has always implemented this filter
+/// (`derive.ts:144`); it just had no control outside NudgeWizard's local
+/// state, which never wrote the store.
+const CI_OPTIONS: { value: NonNullable<Filters["ci"]>; label: string }[] = [
+  { value: "failure", label: "Failing" },
+  { value: "pending", label: "Running" },
+  { value: "success", label: "Passing" },
+  { value: "none", label: "No checks" },
+];
+
 const SORT_OPTIONS: { value: NonNullable<Filters["sort"]>; label: string }[] = [
   { value: "newest", label: "Newest" },
   { value: "oldest", label: "Oldest" },
@@ -120,7 +131,13 @@ export function FilterBar({ prs }: { prs: PullRequest[] }) {
         <DropdownMenuTrigger
           render={
             <Button variant="ghost" size="sm">
-              Reviews{filters.review ? `: ${filters.review}` : ""}
+              {/* Look the label up rather than rendering the enum: the
+                  raw value is snake_case (`changes_requested`), and the
+                  Sort trigger below already does exactly this. */}
+              Reviews
+              {filters.review
+                ? `: ${REVIEW_OPTIONS.find((o) => o.value === filters.review)?.label ?? filters.review}`
+                : ""}
             </Button>
           }
         />
@@ -141,12 +158,54 @@ export function FilterBar({ prs }: { prs: PullRequest[] }) {
         </DropdownMenuContent>
       </DropdownMenu>
 
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="ghost" size="sm">
+              CI
+              {filters.ci
+                ? `: ${CI_OPTIONS.find((o) => o.value === filters.ci)?.label ?? filters.ci}`
+                : ""}
+            </Button>
+          }
+        />
+        <DropdownMenuContent>
+          <DropdownMenuRadioGroup
+            value={filters.ci ?? ""}
+            onValueChange={(value) =>
+              setFilter("ci", (value || undefined) as Filters["ci"])
+            }
+          >
+            <DropdownMenuRadioItem value="">Any</DropdownMenuRadioItem>
+            {CI_OPTIONS.map((opt) => (
+              <DropdownMenuRadioItem key={opt.value} value={opt.value}>
+                {opt.label}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
       <Button
         variant={filters.draftsOnly ? "secondary" : "ghost"}
         size="sm"
         onClick={() => setFilter("draftsOnly", !filters.draftsOnly)}
       >
         Drafts only
+      </Button>
+
+      {/* `in_merge_queue` is rendered on rows, counted by deriveStats,
+          and gates kebab actions -- filtering to it was the one thing
+          you could not do. Undefined rather than false when off, so it
+          matches how every other boolean filter clears. */}
+      <Button
+        variant={filters.inMergeQueueOnly ? "secondary" : "ghost"}
+        size="sm"
+        onClick={() =>
+          setFilter("inMergeQueueOnly", filters.inMergeQueueOnly ? undefined : true)
+        }
+      >
+        In merge queue
       </Button>
 
       <DropdownMenu>
