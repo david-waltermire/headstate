@@ -76,7 +76,13 @@ export function BulkBar({ prs }: { prs: PullRequest[] }) {
   };
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-[#1f6feb] bg-[#0d1a2f] px-3 py-2 text-sm">
+    // Sticky because `<main>` is the scroll container and this bar
+    // renders ABOVE the list: after scrolling down to check a row, the
+    // bar you need to act on it had scrolled off the top. The worktrees
+    // page already hit this and fixed it for its own confirm dialog.
+    // `z-10` clears the rows; the opaque background stops text showing
+    // through as they scroll under it.
+    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-md border border-[#1f6feb] bg-[#0d1a2f] px-3 py-2 text-sm">
       <span className="font-medium">
         {selected.length} selected
       </span>

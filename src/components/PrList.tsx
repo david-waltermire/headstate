@@ -1,5 +1,7 @@
 import type { PullRequest } from "@/types/pr";
 import { PrRow } from "@/components/PrRow";
+import { useFilters } from "@/store/filters";
+import { prKey } from "@/components/BulkBar";
 
 /// Renders PRs in whatever order it is given -- sorting is the caller's
 /// responsibility (see `sortPrs` in `@/lib/derive`), so this component has
@@ -28,10 +30,61 @@ export function PrList({
   canWrite?: boolean;
   selectable?: boolean;
 }) {
+  const { checked, setChecked } = useFilters();
+
+  // Select-all acts on what is ON SCREEN, not the unfiltered list.
+  // Selecting rows the user cannot see and then bulk-closing them is the
+  // failure this avoids -- BulkBar deliberately reads the unfiltered
+  // list so narrowing a filter cannot shrink a batch, which makes it all
+  // the more important that the batch only ever grows from visible rows.
+  const visibleKeys = prs.map(prKey);
+  const allSelected = visibleKeys.length > 0 && visibleKeys.every((k) => checked.includes(k));
+  const someSelected = !allSelected && visibleKeys.some((k) => checked.includes(k));
+
+  // Range selection lives HERE, not in the row: only the list knows the
+  // order rows are rendered in, and a range is defined by that order.
+  // ADDS to the selection rather than replacing it, so shift-clicking a
+  // second range extends rather than discards the first.
+  const selectRange = (from: string, to: string) => {
+    const a = visibleKeys.indexOf(from);
+    const b = visibleKeys.indexOf(to);
+    if (a === -1 || b === -1) return;
+    const [lo, hi] = a <= b ? [a, b] : [b, a];
+    setChecked([...new Set([...checked, ...visibleKeys.slice(lo, hi + 1)])]);
+  };
+
+  const toggleAll = () => {
+    if (allSelected) {
+      // Clear only the visible ones, leaving any off-screen selection
+      // the user made before filtering.
+      setChecked(checked.filter((k) => !visibleKeys.includes(k)));
+    } else {
+      setChecked([...new Set([...checked, ...visibleKeys])]);
+    }
+  };
+
   return (
     <div className="rounded-md border border-[#30363d]">
       <div className="flex items-center justify-between border-b border-[#30363d] bg-[#161b22] px-4 py-3 text-sm">
-        <span className="font-semibold text-[#e6edf3]">{prs.length} Open</span>
+        <span className="flex items-center gap-3 font-semibold text-[#e6edf3]">
+          {selectable ? (
+            <label className="flex items-center">
+              <span className="sr-only">Select all</span>
+              <input
+                type="checkbox"
+                checked={allSelected}
+                // A partial selection is neither checked nor unchecked,
+                // and only the DOM property can say so.
+                ref={(el) => {
+                  if (el) el.indeterminate = someSelected;
+                }}
+                onChange={toggleAll}
+                className="h-4 w-4 cursor-pointer accent-[#1f6feb]"
+              />
+            </label>
+          ) : null}
+          {prs.length} Open
+        </span>
         {total !== undefined && total > prs.length ? (
           <span className="text-xs text-[#d29922]">
             showing {prs.length} of {total} — GitHub returns at most 100
@@ -60,6 +113,7 @@ export function PrList({
             onOpen={onOpen ? () => onOpen(pr) : undefined}
             canWrite={canWrite}
             selectable={selectable}
+            onRange={selectRange}
           />
         ))
       )}

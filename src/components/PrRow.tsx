@@ -138,6 +138,7 @@ export function PrRow({
   pr,
   onOpen,
   canWrite = true,
+  onRange,
   selectable = false,
 }: {
   pr: PullRequest;
@@ -145,12 +146,16 @@ export function PrRow({
   /// False on the review view: merging or closing someone else's pull
   /// request is usually not yours to do.
   canWrite?: boolean;
+  /// Select every row between two keys. Supplied by the list, which is
+  /// the only thing that knows the ORDER rows are rendered in -- a row
+  /// cannot compute a range it is only one element of.
+  onRange?: (from: string, to: string) => void;
   /// Show the bulk-selection checkbox. Off on the review view for the
   /// same reason `canWrite` is: every bulk action is a write.
   selectable?: boolean;
 }) {
   const state = prState(pr);
-  const { checked, toggleChecked } = useFilters();
+  const { checked, toggleChecked, anchor, setAnchor } = useFilters();
   const key = prKey(pr);
   return (
     // The row opens the detail view; the title anchor still opens GitHub,
@@ -181,7 +186,24 @@ export function PrRow({
           <input
             type="checkbox"
             checked={checked.includes(key)}
-            onChange={() => toggleChecked(key)}
+            // One handler, not an onClick/onChange pair. A pair fires
+            // BOTH for a mouse click, so a shift-click computed the
+            // range and then the change handler re-added just the
+            // endpoint on top of it.
+            //
+            // `shiftKey` is read off the NATIVE event: React's
+            // ChangeEvent does not carry modifier keys, which is why the
+            // original `onChange={() => toggle(key)}` could not support
+            // ranges at all.
+            onChange={(e) => {
+              const shift = (e.nativeEvent as MouseEvent).shiftKey === true;
+              if (shift && anchor && onRange) {
+                onRange(anchor, key);
+              } else {
+                toggleChecked(key);
+                setAnchor(key);
+              }
+            }}
             className="h-4 w-4 cursor-pointer accent-[#1f6feb]"
           />
         </label>

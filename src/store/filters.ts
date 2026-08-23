@@ -45,6 +45,14 @@ interface FilterStore {
   /// would be worse than starting empty.
   checked: string[];
   toggleChecked: (key: string) => void;
+  /// The last row toggled by a plain click, for shift-click ranges.
+  ///
+  /// Deliberately NOT persisted and cleared with the view, like
+  /// `checked`: an anchor is meaningful only against the list currently
+  /// on screen, and restoring one from a previous session would extend a
+  /// range from a row the user never touched.
+  anchor: string | null;
+  setAnchor: (key: string | null) => void;
   setChecked: (keys: string[]) => void;
   clearChecked: () => void;
   reset: () => void;
@@ -100,11 +108,13 @@ export const useFilters = create<FilterStore>()(
       // Selection clears with the view: a working set assembled on My
       // PRs means nothing on the review list, and carrying it across
       // would let a later batch act on rows the user cannot see.
-      setView: (view) => set({ view, selectedPr: null, checked: [] }),
+      setView: (view) => set({ view, selectedPr: null, checked: [], anchor: null }),
       setPanel: (panel) => set({ panel }),
       selectedPr: null,
       selectPr: (selectedPr) => set({ selectedPr }),
       checked: [],
+      anchor: null,
+      setAnchor: (anchor) => set({ anchor }),
       toggleChecked: (key) =>
         set((s) => ({
           checked: s.checked.includes(key)
