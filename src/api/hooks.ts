@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { safeUnlisten } from "./unlisten";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -289,6 +289,34 @@ export function useViewCadence(view: string): void {
   }, [view]);
 }
 
+/// Refresh the PR list from GITHUB after a write, and seed the cache.
+///
+/// `invalidateQueries(["prs"])` alone does nothing here, and this is the
+/// bug behind "I closed a PR and it stayed in the list until I reloaded".
+/// The query's own `queryFn` reads the SQLite snapshot first and only
+/// falls through to a live fetch when that snapshot is EMPTY -- so with
+/// any PRs at all, the refetch re-reads the very rows the user is looking
+/// at. The invalidation was a no-op by construction.
+///
+/// The `prs-updated` push from the woken poll loop does eventually
+/// correct it, but that is a full GitHub round-trip after the click with
+/// nothing on screen to say so, and if that one poll fails the list stays
+/// wrong for another interval -- up to 2 minutes focused, 10 backgrounded.
+///
+/// Costs one extra request per write (2 rate-limit points against
+/// 5000/hour). It stays NON-OPTIMISTIC: the row disappears because GitHub
+/// says it is gone, never because we assumed the write succeeded.
+async function refreshPrs(qc: QueryClient): Promise<void> {
+  try {
+    qc.setQueryData(["prs"], await refreshNow());
+  } catch {
+    // The write already succeeded; only the read-back failed. Fall back
+    // to the poll loop, which the Rust side has already woken. Throwing
+    // here would report a successful action as failed.
+    void qc.invalidateQueries({ queryKey: ["prs"] });
+  }
+}
+
 /// Apply an action to a pull request, then refresh what it affected.
 ///
 /// NOT optimistic. Every list mutation elsewhere updates locally first,
@@ -304,10 +332,10 @@ export function useActOnPr() {
     number: number,
     action: PrActionName,
   ) =>
-    actOnPr(id, repo, number, action).then(() => {
+    actOnPr(id, repo, number, action).then(async () => {
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
-      void qc.invalidateQueries({ queryKey: ["prs"] });
       void qc.invalidateQueries({ queryKey: ["reviewing"] });
+      await refreshPrs(qc);
     });
 }
 
@@ -320,10 +348,10 @@ export function useActOnPr() {
 export function useUpdatePrBranch() {
   const qc = useQueryClient();
   return (id: string, repo: string, number: number, expectedHead: string) =>
-    updatePrBranch(id, repo, number, expectedHead).then(() => {
+    updatePrBranch(id, repo, number, expectedHead).then(async () => {
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
-      void qc.invalidateQueries({ queryKey: ["prs"] });
       void qc.invalidateQueries({ queryKey: ["reviewing"] });
+      await refreshPrs(qc);
     });
 }
 
@@ -336,9 +364,9 @@ export function useUpdatePrBranch() {
 export function useActOnPrs() {
   const qc = useQueryClient();
   return (prs: [string, string, number][], action: PrActionName) =>
-    actOnPrs(prs, action).then((outcomes) => {
-      void qc.invalidateQueries({ queryKey: ["prs"] });
+    actOnPrs(prs, action).then(async (outcomes) => {
       void qc.invalidateQueries({ queryKey: ["reviewing"] });
+      await refreshPrs(qc);
       return outcomes;
     });
 }
@@ -347,9 +375,9 @@ export function useActOnPrs() {
 export function useSetAutoMerge() {
   const qc = useQueryClient();
   return (id: string, repo: string, number: number, expectedHead: string, enable: boolean) =>
-    setAutoMerge(id, repo, number, expectedHead, enable).then(() => {
-      void qc.invalidateQueries({ queryKey: ["prs"] });
+    setAutoMerge(id, repo, number, expectedHead, enable).then(async () => {
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+      await refreshPrs(qc);
     });
 }
 
@@ -357,9 +385,9 @@ export function useSetAutoMerge() {
 export function useDeleteHeadBranch() {
   const qc = useQueryClient();
   return (refId: string, repo: string, number: number, branch: string, merged: boolean) =>
-    deleteHeadBranch(refId, repo, number, branch, merged).then(() => {
-      void qc.invalidateQueries({ queryKey: ["prs"] });
+    deleteHeadBranch(refId, repo, number, branch, merged).then(async () => {
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+      await refreshPrs(qc);
     });
 }
 
