@@ -11,6 +11,7 @@ import {
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
+import { CourtStrip } from "./components/CourtStrip";
 import { PrDetailView } from "./components/PrDetailView";
 import { BulkBar } from "./components/BulkBar";
 import { PrList } from "./components/PrList";
@@ -43,7 +44,7 @@ export default function App() {
     dataUpdatedAt,
   } = usePullRequests();
   const filters = useActiveFilters();
-  const { view, panel, selectedPr, selectPr } = useFilters();
+  const { view, panel, selectedPr, selectPr, applyPreset } = useFilters();
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
   // is what actually makes it do anything (see the hook's own comment).
@@ -214,6 +215,23 @@ export default function App() {
             {/* Only for My PRs: the strip means "blocked on YOU as
                 author", and someone else's red CI is not yours to fix. The
                 review view gets its own attention rule below. */}
+            {/* Answers "is anything on fire?" before the filter
+                toolbar does anything. `PrioritiesStrip` still follows
+                with the WHY for each blocked pull request -- this says
+                whether to look at all, that says what to look at. */}
+            {view === "my-prs" ? (
+              <CourtStrip
+                authored={scopedForStrip}
+                reviewing={reviewing}
+                onSelect={(court) =>
+                  applyPreset(
+                    court === "mine"
+                      ? { needsAttentionOnly: true }
+                      : { awaitingReviewOnly: true },
+                  )
+                }
+              />
+            ) : null}
             {view === "my-prs" ? <PrioritiesStrip prs={scopedForStrip} /> : null}
             {/* Counts come from the same predicates the chips apply, so a
                 chip can never open a list that disagrees with its number.
