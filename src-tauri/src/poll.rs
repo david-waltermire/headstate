@@ -895,13 +895,35 @@ mod tests {
         //
         // Occurrences, not presence: dropping a connection from a single
         // search has to move this number.
-        let cost = ["labels(", "statusCheckRollup", "reviewThreads("]
+        // A PROXY for the real cost, not the cost itself: GitHub charges
+        // for connection fields, and these three are the ones the query
+        // currently has. It is a tripwire for "someone edited the query",
+        // and it only trips for fields already on this list.
+        //
+        // That gap is real and was found by measuring: adding
+        // `reviewRequests(first: 10)` takes the LIVE cost from 6 to 7
+        // while leaving this count at 6, so the guard would have passed
+        // a 17%-per-poll increase in silence. The list below is therefore
+        // every connection field in the query, not only the expensive
+        // ones -- a new connection must either appear here or be a
+        // deliberate, measured exception.
+        let connections = [
+            "labels(",
+            "statusCheckRollup",
+            "reviewThreads(",
+            "reviewRequests(",
+            "latestReviews(",
+            "assignees(",
+            "comments(",
+        ];
+        let cost = connections
             .iter()
             .map(|c| q.matches(c).count() as u64)
             .sum::<u64>();
         assert_eq!(
             cost, 6,
-            "PRS_QUERY cost changed; re-measure against the live API"
+            "PRS_QUERY cost changed; re-measure against the live API \
+             (it was 6 points on 2026-08-23) before updating this number"
         );
 
         // The FLOOR, not the default: a user picking the fastest allowed
