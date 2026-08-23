@@ -17,6 +17,7 @@ import {
   isSafe,
   pathBasename,
   prForWorktree,
+  worktreeSignal,
   safetyReason,
   safetyTone,
   upstreamReason,
@@ -84,6 +85,7 @@ function Row({
   const safe = isSafe(wt.safety);
   const pending = isPending(wt.safety);
   const claudifiable = canClaudify(wt.safety);
+  const signal = worktreeSignal(pr);
   return (
     <div className="flex items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">
       <span className="min-w-0 flex-1 truncate font-mono text-[#e6edf3]">
@@ -138,6 +140,13 @@ function Row({
           >
             {" · "}#{pr.number}
           </a>
+        ) : null}
+        {/* Why you would come back to this checkout. Display only, like
+            the number itself: a wrong pairing must never authorise a
+            deletion. Costs no new call -- every field read here is
+            already on the pull request resolved above. */}
+        {signal ? (
+          <span className={signal.className}> · {signal.label}</span>
         ) : null}
         {wt.last_commit && !wt.is_main ? (
           <span className="text-[#8b949e]"> · {relativeTime(wt.last_commit)}</span>

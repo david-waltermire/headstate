@@ -202,3 +202,35 @@ export function formatSize(bytes: number | null): string {
   }
   return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
 }
+
+/// What a worktree's pull request says is wrong, or null if nothing is.
+///
+/// `prForWorktree` already resolves the pull request for a row, but the
+/// row showed only its NUMBER -- while the `PullRequest` in hand carries
+/// `ci`, `merge`, and `review`. That is usually the reason to come back
+/// to a worktree at all: its pull request broke.
+///
+/// Ordered by loudness, and returns only ONE: a row is a glance, not a
+/// report, and three stacked badges would push the path off the line.
+/// Red CI wins over conflicts because it is the more surprising of the
+/// two -- a conflict is a consequence of other work landing, a red build
+/// is a consequence of yours.
+///
+/// Silent on a healthy pull request, and silent while CI is still
+/// RUNNING: pending is an unfinished answer, not a problem, and a badge
+/// on every row is noise. The number stays a link for anyone who wants
+/// the detail. No new fetching: every field here is already on the
+/// PullRequest this function is handed.
+export function worktreeSignal(
+  // `undefined` as well as `null`: the prop is optional on the row, and
+  // both mean the same thing here -- no pull request, nothing to say.
+  pr: PullRequest | null | undefined,
+): { label: string; className: string } | null {
+  if (!pr) return null;
+  if (pr.ci === "failure") return { label: "CI failing", className: "text-[#f85149]" };
+  if (pr.merge === "conflicted") return { label: "Conflicts", className: "text-[#f85149]" };
+  if (pr.review === "changes_requested") {
+    return { label: "Changes requested", className: "text-[#d29922]" };
+  }
+  return null;
+}
