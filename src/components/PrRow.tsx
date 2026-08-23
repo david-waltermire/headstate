@@ -238,15 +238,32 @@ export function PrRow({
       />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <a
-            href={pr.url}
-            target="_blank"
-            rel="noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="font-semibold text-[#e6edf3] hover:text-[#4493f8]"
-          >
-            {pr.title}
-          </a>
+          {/* The title opens the DETAIL VIEW, not github.com.
+              
+              It used to be an `<a target="_blank">` that stopped
+              propagation, so clicking the most obvious target in the row
+              launched a browser tab and never reached `onOpen`. That
+              read as a To review bug because `canWrite` is false there,
+              leaving the title as the only thing that looks interactive
+              -- but it behaved the same way on every view.
+              
+              "View on GitHub" already exists in the kebab menu and in
+              the detail view itself, so nothing is lost. When there is
+              no detail view to open, the title stays a link rather than
+              becoming inert. */}
+          {onOpen ? (
+            <span className="font-semibold text-[#e6edf3]">{pr.title}</span>
+          ) : (
+            <a
+              href={pr.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="font-semibold text-[#e6edf3] hover:text-[#4493f8]"
+            >
+              {pr.title}
+            </a>
+          )}
           {/* The number moves up in dense mode: it lives on the prose
               line otherwise, and that line is gone here. Without it a
               dense row cannot be referred to -- "#42" is how a pull

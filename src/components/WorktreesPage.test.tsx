@@ -778,4 +778,51 @@ describe("WorktreesPage", () => {
       expect(screen.getByText(/at least/i)).toBeTruthy();
     });
   });
+
+  /// The all-repositories rollup showed a total; the per-repo page --
+  /// the one you land on after choosing a repo -- did not, so it could
+  /// not answer "how much is this one holding?".
+  describe("total size", () => {
+    const withSizes = (sizes: (number | null)[]) => {
+      state.repos = [
+        {
+          identity: null,
+          name: "proj",
+          path: "/code/proj",
+          worktrees: sizes.map((size_bytes, i) =>
+            wt({ path: `/w/${i}`, branch: `b-${i}`, size_bytes }),
+          ),
+        },
+      ];
+      useFilters.setState({
+        filtersByView: { ...EMPTY, worktrees: { repo: "/code/proj" } },
+        view: "worktrees",
+        panel: "list",
+      });
+      return render(<WorktreesPage />);
+    };
+
+    it("sums the sizes it has", () => {
+      withSizes([1024, 2048]);
+      expect(screen.getByText(/3\.0 KB total|3 KB total/i)).toBeTruthy();
+    });
+
+    // Counting an unmeasured size as zero would report a confident
+    // wrong number, so the total says so instead.
+    it("says the total is partial while a size is missing", () => {
+      withSizes([1024, null]);
+      expect(screen.getByText(/at least/i)).toBeTruthy();
+    });
+
+    it("drops the qualifier once everything is measured", () => {
+      withSizes([1024, 2048]);
+      expect(screen.queryByText(/at least/i)).toBeNull();
+    });
+
+    // Nothing measured yet is not "0 bytes" -- it is no answer at all.
+    it("shows no total before any size has arrived", () => {
+      withSizes([null, null]);
+      expect(screen.queryByText(/total/i)).toBeNull();
+    });
+  });
 });

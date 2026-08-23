@@ -25,7 +25,18 @@ function blockedReasons(pr: PullRequest): string[] {
   return reasons;
 }
 
-export function PrioritiesStrip({ prs }: { prs: PullRequest[] }) {
+export function PrioritiesStrip({
+  prs,
+  onOpen,
+}: {
+  prs: PullRequest[];
+  /// Open a pull request's detail view.
+  ///
+  /// Optional so a caller with nowhere to send the user does not get a
+  /// row that LOOKS clickable and is not -- the entry falls back to a
+  /// plain link in that case.
+  onOpen?: (pr: PullRequest) => void;
+}) {
   const blocked = prs.filter(needsAttention);
 
   if (blocked.length === 0) {
@@ -42,18 +53,45 @@ export function PrioritiesStrip({ prs }: { prs: PullRequest[] }) {
       </h2>
       <ul>
         {blocked.map((pr) => (
-          <li key={`${pr.repo}#${pr.number}`} className="px-4 py-2 text-sm">
-            <a
-              href={pr.url}
-              target="_blank"
-              rel="noreferrer"
-              className="text-[#e6edf3] hover:text-[#4493f8]"
-            >
-              {pr.title}
-            </a>
-            <span className="ml-2 text-xs text-[#8b949e]">
-              {pr.repo}#{pr.number} — {blockedReasons(pr).join(" and ")}
-            </span>
+          <li key={`${pr.repo}#${pr.number}`} className="text-sm">
+            {/* The panel exists to say "these need you right now", and
+                it was the one surface you could not act from: its only
+                interactive element was an external link to github.com.
+                Opening the detail view matches what a row in the list
+                below already does. */}
+            {onOpen ? (
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpen(pr)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpen(pr);
+                  }
+                }}
+                className="cursor-pointer px-4 py-2 hover:bg-[#f85149]/10"
+              >
+                <span className="text-[#e6edf3]">{pr.title}</span>
+                <span className="ml-2 text-xs text-[#8b949e]">
+                  {pr.repo}#{pr.number} — {blockedReasons(pr).join(" and ")}
+                </span>
+              </div>
+            ) : (
+              <div className="px-4 py-2">
+                <a
+                  href={pr.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-[#e6edf3] hover:text-[#4493f8]"
+                >
+                  {pr.title}
+                </a>
+                <span className="ml-2 text-xs text-[#8b949e]">
+                  {pr.repo}#{pr.number} — {blockedReasons(pr).join(" and ")}
+                </span>
+              </div>
+            )}
           </li>
         ))}
       </ul>

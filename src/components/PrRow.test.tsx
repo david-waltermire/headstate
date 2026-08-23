@@ -251,13 +251,24 @@ describe("PrRow click-through", () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  // The title still goes to GitHub; clicking it must not be hijacked
-  // into opening the in-app view instead.
-  it("lets the title link through to GitHub without opening the detail", () => {
+  // This DELIBERATELY reverses an earlier assertion. The old test read
+  // "lets the title link through to GitHub without opening the detail",
+  // encoding the view that the title belongs to github.com.
+  //
+  // Reported as "clicking a PR on To review does not show it": the
+  // title was an `<a target="_blank">` that stopped propagation, so the
+  // most obvious click target in the row launched a browser tab and
+  // never reached `onOpen`. It behaved that way on EVERY view -- To
+  // review just makes it visible, because `canWrite` is false there and
+  // the title is the only thing that looks interactive.
+  //
+  // "View on GitHub" already exists in the kebab menu and in the detail
+  // view, so the route to the browser is not lost.
+  it("opens the detail view when the title is clicked", () => {
     const onOpen = vi.fn();
     render(<PrRow pr={pr()} onOpen={onOpen} />);
-    fireEvent.click(screen.getByRole("link", { name: pr().title }));
-    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText(pr().title));
+    expect(onOpen).toHaveBeenCalled();
   });
 
   it("is keyboard reachable", () => {

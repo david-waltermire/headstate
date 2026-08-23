@@ -471,6 +471,13 @@ export function WorktreesPage() {
   // forever while this read a confident "0 safe to remove".
   const safeKnown = !classifying && !classifyFailed;
   const safeCount = shown.filter((w) => isSafe(w.safety)).length;
+  // Same honesty rule as the all-repositories rollup: an unmeasured
+  // size is null, and counting it as zero would report a confident
+  // wrong total. Sizes arrive in their own pass after safety, so this
+  // grows as results land rather than being computed once.
+  const measured = shown.filter((w) => w.size_bytes !== null && w.size_bytes !== undefined);
+  const totalBytes = measured.reduce((n, w) => n + (w.size_bytes ?? 0), 0);
+  const sizesComplete = measured.length === shown.length;
 
   return (
     <div className="flex flex-col gap-3">
@@ -498,6 +505,16 @@ export function WorktreesPage() {
         )}
         {!classifying && sizing ? (
           <span className="text-xs text-[#8b949e]">measuring sizes…</span>
+        ) : null}
+        {/* "at least" until every worktree has been measured. Reported
+            here as well as on the rollup, because the per-repo page is
+            where you land after choosing a repo and could not answer
+            "how much is this one holding?". */}
+        {measured.length > 0 ? (
+          <span className="text-xs text-[#8b949e]">
+            {sizesComplete ? "" : "at least "}
+            {formatSize(totalBytes)} total
+          </span>
         ) : null}
         {/* The count is in the label, so the scope is legible before
             clicking rather than only in the dialog. 106 of 268 worktrees

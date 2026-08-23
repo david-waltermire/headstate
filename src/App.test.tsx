@@ -8,6 +8,7 @@ import { useFilters } from "./store/filters";
 // The shell talks to Tauri on mount. Stub the command surface so these tests
 // exercise the wiring, not the backend.
 const mockPrs = vi.fn<() => PullRequest[]>(() => []);
+const mockReviewing = vi.fn<() => PullRequest[]>(() => []);
 
 vi.mock("./api/hooks", () => ({
   // Defaults, matching the Rust side: nothing hidden, close hides.
@@ -33,7 +34,15 @@ vi.mock("./api/hooks", () => ({
     prefs: { enabled: true, ci_failed: true, conflicted: true },
     set: () => Promise.resolve(),
   }),
-  useReviewing: () => ({ data: [], isLoading: false }),
+  useReviewing: () => ({ data: mockReviewing(), isLoading: false }),
+  // PrDetailView's hooks: App's mock replaces the whole module, so
+  // rendering the detail branch needs every hook it calls.
+  usePrDetail: () => ({ data: undefined, isLoading: true, isError: false, refetch: () => {} }),
+  useDeleteHeadBranch: () => () => Promise.resolve(),
+  useReviewPr: () => () => Promise.resolve(),
+  useCommentOnPr: () => () => Promise.resolve(),
+  useRerunChecks: () => () => Promise.resolve(),
+  useViewer: () => ({ data: undefined }),
   useCycleTrend: () => ({ data: undefined }),
   // StatsPage owns these; this suite only asserts the shell's layout, so
   // they return a settled empty result rather than real figures.
@@ -223,5 +232,54 @@ describe("keyboard triage", () => {
     render(<App />);
     press("x");
     expect(useFilters.getState().checked).toEqual([]);
+  });
+});
+
+/// Reported: clicking a pull request on To review did not show it.
+///
+/// The existing tests mocked `useReviewing` to an empty array, so no
+/// test ever clicked a row on that view -- which is how a regression
+/// here would go unnoticed regardless of cause.
+describe("opening a pull request from To review", () => {
+  const theirs: PullRequest = {
+    ...PR_FIXTURES[0],
+    repo: "someone/else",
+    number: 71,
+    title: "Someone else's pull request",
+    author: "caitlinhalla",
+  };
+
+  beforeEach(() => {
+    mockPrs.mockReturnValue([]);
+    mockReviewing.mockReturnValue([theirs]);
+    useFilters.setState({
+      view: "to-review",
+      panel: "list",
+      selectedPr: null,
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+    });
+  });
+
+  it("lists the review queue", () => {
+    render(<App />);
+    expect(screen.getByText(theirs.title)).toBeTruthy();
+  });
+
+  it("selects the pull request when its row is clicked", () => {
+    render(<App />);
+    fireEvent.click(screen.getByText(theirs.title));
+    expect(useFilters.getState().selectedPr).toEqual({
+      repo: "someone/else",
+      number: 71,
+    });
+  });
+
+  // The actual complaint: selecting it must SHOW it, not leave the list
+  // on screen. `view !== "worktrees"` already allows this branch, so a
+  // failure here is about rendering rather than routing.
+  it("shows the detail view rather than staying on the list", () => {
+    useFilters.setState({ selectedPr: { repo: "someone/else", number: 71 } });
+    render(<App />);
+    expect(screen.getByRole("button", { name: /back to list/i })).toBeTruthy();
   });
 });

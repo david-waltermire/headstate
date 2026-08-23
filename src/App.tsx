@@ -232,7 +232,12 @@ export default function App() {
                 }
               />
             ) : null}
-            {view === "my-prs" ? <PrioritiesStrip prs={scopedForStrip} /> : null}
+            {view === "my-prs" ? (
+              <PrioritiesStrip
+                prs={scopedForStrip}
+                onOpen={(pr) => selectPr({ repo: pr.repo, number: pr.number })}
+              />
+            ) : null}
             {/* Counts come from the same predicates the chips apply, so a
                 chip can never open a list that disagrees with its number.
                 Scoped to the sidebar selection like the strip above. */}
