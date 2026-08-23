@@ -8,6 +8,11 @@ const dirs = vi.hoisted(() => ({ current: ["/Users/x/code"] as string[] }));
 vi.mock("../api/hooks", () => ({
   usePollInterval: () => ({ seconds: 120, set: setInterval_ }),
   useWorktreeDirs: () => ({ dirs: dirs.current, set: setDirs }),
+  // Defaults, matching the Rust side: absent prefs mean everything on.
+  useNotifyPrefs: () => ({
+    prefs: { enabled: true, ci_failed: true, conflicted: true },
+    set: () => Promise.resolve(),
+  }),
 }));
 
 import { SettingsDialog } from "./SettingsDialog";

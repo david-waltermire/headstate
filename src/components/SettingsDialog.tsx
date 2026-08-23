@@ -1,8 +1,12 @@
 import { useState } from "react";
-import { usePollInterval, useWorktreeDirs } from "../api/hooks";
+import { useNotifyPrefs, usePollInterval, useWorktreeDirs } from "../api/hooks";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
-const INTERVALS = [60, 120, 300, 900];
+/// Matches the backend's own range: `clamp_interval` allows 60s..3600s
+/// (`poll.rs`), and the UI previously stopped at 900 -- so a user who
+/// wanted a half-hour cadence to conserve rate limit could not pick one
+/// even though the backend would have accepted it.
+const INTERVALS = [60, 120, 300, 900, 1800, 3600];
 
 function intervalLabel(secs: number): string {
   return secs < 60 ? `${secs}s` : `${secs / 60} min`;
@@ -24,6 +28,7 @@ export function SettingsDialog({
 }) {
   const { seconds, set: setInterval } = usePollInterval();
   const { dirs, set: setDirs } = useWorktreeDirs();
+  const { prefs, set: setPrefs } = useNotifyPrefs();
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -74,6 +79,56 @@ export function SettingsDialog({
           </select>
           <p className="text-xs text-[#8b949e]">
             Applies immediately. Shorter intervals use more of your GitHub rate limit.
+          </p>
+        </div>
+
+        {/* Notifications had no off switch anywhere in the app -- the
+            only escape was denying permission at the OS level, which the
+            poll loop treats as permanent. Nothing in the UI even said
+            the app sent them. */}
+        <div className="mt-5 flex flex-col gap-2">
+          <span className="text-sm font-medium">Notifications</span>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={prefs?.enabled ?? true}
+              onChange={() =>
+                prefs && void setPrefs({ ...prefs, enabled: !prefs.enabled })
+              }
+            />
+            Desktop notifications
+          </label>
+          {/* Nested and disabled rather than hidden when the master
+              switch is off: hiding them would make the choices look
+              lost, and they are deliberately preserved so turning
+              notifications back on restores what was picked. */}
+          <div className="ml-6 flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={!(prefs?.enabled ?? true)}
+                checked={prefs?.ci_failed ?? true}
+                onChange={() =>
+                  prefs && void setPrefs({ ...prefs, ci_failed: !prefs.ci_failed })
+                }
+              />
+              CI starts failing
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={!(prefs?.enabled ?? true)}
+                checked={prefs?.conflicted ?? true}
+                onChange={() =>
+                  prefs && void setPrefs({ ...prefs, conflicted: !prefs.conflicted })
+                }
+              />
+              Merge conflicts appear
+            </label>
+          </div>
+          <p className="text-xs text-[#8b949e]">
+            Only when a pull request newly breaks — never repeated for one that
+            was already broken, and never on first launch.
           </p>
         </div>
 

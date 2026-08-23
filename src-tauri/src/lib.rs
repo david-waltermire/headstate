@@ -67,6 +67,8 @@ pub fn run() {
             commands::get_pr_detail,
             commands::act_on_pr,
             commands::get_viewer,
+            commands::get_notify_prefs,
+            commands::set_notify_prefs,
             commands::review_pr,
             commands::comment_on_pr,
             commands::update_pr_branch,

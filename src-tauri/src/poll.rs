@@ -139,7 +139,7 @@ fn notify_breakage(app: &AppHandle, b: &Breakage) {
         }
     }
 
-    let body = format!("{}#{} {}", b.repo, b.number, b.reason);
+    let body = format!("{}#{} {}", b.repo, b.number, b.kind.reason());
     if let Err(e) = app
         .notification()
         .builder()
@@ -158,7 +158,68 @@ pub struct Breakage {
     pub repo: String,
     pub number: u64,
     pub url: String,
-    pub reason: &'static str,
+    pub kind: BreakageKind,
+}
+
+/// What broke.
+///
+/// A type rather than the prose string it used to be, so the settings
+/// filter matches on the KIND and cannot drift from display wording. A
+/// user who turns off conflict notifications must keep getting CI ones,
+/// and comparing on "has merge conflicts" would break the moment that
+/// sentence is reworded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BreakageKind {
+    CiFailed,
+    Conflicted,
+}
+
+impl BreakageKind {
+    /// The notification body. Reads after "owner/repo#123 ...".
+    pub fn reason(self) -> &'static str {
+        match self {
+            BreakageKind::CiFailed => "CI is failing",
+            BreakageKind::Conflicted => "has merge conflicts",
+        }
+    }
+
+    /// Whether the user wants to hear about this one.
+    pub fn enabled_by(self, prefs: &NotifyPrefs) -> bool {
+        match self {
+            BreakageKind::CiFailed => prefs.ci_failed,
+            BreakageKind::Conflicted => prefs.conflicted,
+        }
+    }
+}
+
+/// Which notifications the user wants.
+///
+/// Defaults to everything ON, matching the behaviour before this existed
+/// -- an upgrade must not silently turn off a feature someone relies on.
+/// `enabled` is a master switch rather than a third kind, so turning
+/// notifications off does not lose the per-kind choices underneath it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NotifyPrefs {
+    pub enabled: bool,
+    pub ci_failed: bool,
+    pub conflicted: bool,
+}
+
+impl Default for NotifyPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            ci_failed: true,
+            conflicted: true,
+        }
+    }
+}
+
+impl NotifyPrefs {
+    /// Whether this breakage should interrupt the user.
+    pub fn wants(&self, kind: BreakageKind) -> bool {
+        self.enabled && kind.enabled_by(self)
+    }
 }
 
 /// PRs that just BROKE, by comparing a tick against the one before it.
@@ -180,10 +241,10 @@ pub fn newly_broken(previous: &[PullRequest], current: &[PullRequest]) -> Vec<Br
             let was = previous
                 .iter()
                 .find(|p| p.repo == pr.repo && p.number == pr.number)?;
-            let reason = if pr.ci == CiState::Failure && was.ci != CiState::Failure {
-                "CI is failing"
+            let kind = if pr.ci == CiState::Failure && was.ci != CiState::Failure {
+                BreakageKind::CiFailed
             } else if pr.merge == MergeState::Conflicted && was.merge != MergeState::Conflicted {
-                "has merge conflicts"
+                BreakageKind::Conflicted
             } else {
                 return None;
             };
@@ -192,7 +253,7 @@ pub fn newly_broken(previous: &[PullRequest], current: &[PullRequest]) -> Vec<Br
                 repo: pr.repo.clone(),
                 number: pr.number,
                 url: pr.url.clone(),
-                reason,
+                kind,
             })
         })
         .collect()
@@ -231,6 +292,27 @@ fn emit_store_error(app: &AppHandle, msg: String) {
     if let Err(e) = app.emit("store-error", msg) {
         log::warn!("failed to emit store error: {e}");
     }
+}
+
+/// The user's notification choices, or the default if unreadable.
+///
+/// Every failure path here -- no data dir, no database, a corrupt value
+/// -- falls back to `NotifyPrefs::default()`, which is everything ON.
+/// That direction is deliberate: the alternative is that a transient
+/// database problem silently mutes an interruption channel the user is
+/// relying on, and they would have no way to tell that from "nothing
+/// broke". A notification too many is recoverable; a missed one is not.
+fn read_notify_prefs(app: &AppHandle) -> NotifyPrefs {
+    let Ok(dir) = app.path().app_data_dir() else {
+        return NotifyPrefs::default();
+    };
+    let Ok(conn) = open_db(&dir.join("headstate.db")) else {
+        return NotifyPrefs::default();
+    };
+    crate::store::settings::get(&conn, crate::store::settings::keys::NOTIFY_PREFS)
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 fn persist_and_emit(app: &AppHandle, prs: &[PullRequest]) {
@@ -399,8 +481,16 @@ pub fn spawn(
                     // starts empty, so the first tick never notifies --
                     // otherwise launching with 13 broken PRs would fire 13
                     // notifications at once.
+                    // Read per tick rather than cached at startup, so a
+                    // setting change takes effect on the next poll
+                    // instead of at the next relaunch. A failed read
+                    // falls back to the default (everything on), which
+                    // is what the app did before the setting existed.
+                    let prefs = read_notify_prefs(&app);
                     for b in newly_broken(&previous, &prs) {
-                        notify_breakage(&app, &b);
+                        if prefs.wants(b.kind) {
+                            notify_breakage(&app, &b);
+                        }
                     }
                     previous = prs.clone();
                     // Only interesting when GitHub says there are more than
@@ -476,6 +566,65 @@ pub fn spawn(
 
 #[cfg(test)]
 mod tests {
+    /// The default must be everything ON. This is the upgrade path: a
+    /// user who has never opened Settings had notifications before this
+    /// key existed, and must still have them after.
+    #[test]
+    fn notifications_default_to_on() {
+        let d = NotifyPrefs::default();
+        assert!(d.enabled && d.ci_failed && d.conflicted);
+        assert!(d.wants(BreakageKind::CiFailed));
+        assert!(d.wants(BreakageKind::Conflicted));
+    }
+
+    /// The master switch silences everything without discarding the
+    /// per-kind choices underneath it, so turning notifications back on
+    /// restores what the user picked rather than a reset.
+    #[test]
+    fn the_master_switch_silences_every_kind() {
+        let p = NotifyPrefs {
+            enabled: false,
+            ci_failed: true,
+            conflicted: true,
+        };
+        assert!(!p.wants(BreakageKind::CiFailed));
+        assert!(!p.wants(BreakageKind::Conflicted));
+        // The choices survive: flipping `enabled` back is enough.
+        assert!(p.ci_failed && p.conflicted);
+    }
+
+    /// Turning one kind off must not touch the other. This is the whole
+    /// point of the per-kind split -- "stop telling me about conflicts"
+    /// is a different request from "stop telling me anything".
+    #[test]
+    fn kinds_are_silenced_independently() {
+        let no_conflicts = NotifyPrefs {
+            enabled: true,
+            ci_failed: true,
+            conflicted: false,
+        };
+        assert!(no_conflicts.wants(BreakageKind::CiFailed));
+        assert!(!no_conflicts.wants(BreakageKind::Conflicted));
+
+        let no_ci = NotifyPrefs {
+            enabled: true,
+            ci_failed: false,
+            conflicted: true,
+        };
+        assert!(!no_ci.wants(BreakageKind::CiFailed));
+        assert!(no_ci.wants(BreakageKind::Conflicted));
+    }
+
+    /// The kind drives the filter; the prose is only display. Asserting
+    /// both here is what stops a reworded sentence from silently
+    /// changing which notifications a user receives.
+    #[test]
+    fn kind_carries_the_wording_but_the_filter_matches_the_kind() {
+        assert_eq!(BreakageKind::CiFailed.reason(), "CI is failing");
+        assert_eq!(BreakageKind::Conflicted.reason(), "has merge conflicts");
+        assert_ne!(BreakageKind::CiFailed, BreakageKind::Conflicted);
+    }
+
     use super::*;
 
     /// The reported bug. A single transport blip painted a red banner
@@ -849,7 +998,9 @@ mod tests {
         )];
         let b = newly_broken(&before, &after);
         assert_eq!(b.len(), 1);
-        assert_eq!(b[0].reason, "CI is failing");
+        // The KIND, not the prose: the kind is what the notification
+        // filter matches on, and the wording is asserted separately.
+        assert_eq!(b[0].kind, BreakageKind::CiFailed);
         assert!(b[0].url.ends_with("/pull/1"), "must be clickable");
     }
 
@@ -868,8 +1019,8 @@ mod tests {
             MergeState::Conflicted,
         )];
         assert_eq!(
-            newly_broken(&before, &after)[0].reason,
-            "has merge conflicts"
+            newly_broken(&before, &after)[0].kind,
+            BreakageKind::Conflicted
         );
     }
 

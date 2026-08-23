@@ -852,6 +852,39 @@ pub fn get_poll_interval(state: State<'_, crate::poll::PollInterval>) -> u64 {
     state.0.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Which desktop notifications the user wants.
+///
+/// Absent means everything on, matching what the app did before this
+/// setting existed -- an upgrade must not silently mute a feature.
+#[tauri::command]
+pub fn get_notify_prefs(app: AppHandle) -> crate::poll::NotifyPrefs {
+    open_db(&db_path(&app))
+        .ok()
+        .and_then(|c| crate::store::settings::get(&c, settings::keys::NOTIFY_PREFS).ok())
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// Change which desktop notifications are sent.
+///
+/// No waker: the poll loop reads this per tick, so the next poll picks it
+/// up without being nudged. Unlike the poll interval there is nothing
+/// in-memory to update -- the loop is the only reader.
+#[tauri::command]
+pub fn set_notify_prefs(app: AppHandle, prefs: crate::poll::NotifyPrefs) -> Result<(), String> {
+    let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
+    crate::store::settings::set(&conn, settings::keys::NOTIFY_PREFS, &prefs)
+        .map_err(|e| e.to_string())?;
+    // Counts only -- which repos break is not a setting and not logged.
+    log::info!(
+        "notifications: enabled={} ci={} conflicts={}",
+        prefs.enabled,
+        prefs.ci_failed,
+        prefs.conflicted
+    );
+    Ok(())
+}
+
 /// Set the focused poll interval, clamped to the allowed range.
 ///
 /// Wakes the poll loop so a SHORTENED interval takes effect immediately

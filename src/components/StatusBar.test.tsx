@@ -27,6 +27,11 @@ vi.mock("../api/hooks", () => ({
   usePollError: () => state.error,
   usePollInterval: () => ({ seconds: 120, set: setInterval_ }),
   useWorktreeDirs: () => ({ dirs: [], set: () => Promise.resolve([]) }),
+  // Defaults, matching the Rust side: absent prefs mean everything on.
+  useNotifyPrefs: () => ({
+    prefs: { enabled: true, ci_failed: true, conflicted: true },
+    set: () => Promise.resolve(),
+  }),
 }));
 
 import { StatusBar } from "./StatusBar";

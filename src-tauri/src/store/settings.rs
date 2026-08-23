@@ -48,6 +48,12 @@ pub mod keys {
     /// guards against -- the same reasoning as `expectedHeadOid` on the
     /// update-branch mutation.
     pub const ASSESSED_WORKTREES: &str = "assessed_worktrees";
+    /// Which desktop notifications to send, as a JSON `NotifyPrefs`.
+    ///
+    /// Absent means the default (everything on), which is what the app
+    /// did before this key existed -- an upgrade must not silently turn
+    /// off a feature someone relies on.
+    pub const NOTIFY_PREFS: &str = "notify_prefs";
 }
 
 #[cfg(test)]

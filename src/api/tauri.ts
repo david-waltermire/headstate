@@ -39,6 +39,21 @@ export const getCached = () => invoke<PullRequest[]>("get_cached");
 /// not affect the poll loop's cadence.
 export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 
+/// Which desktop notifications the user wants.
+///
+/// Mirrors the Rust `NotifyPrefs`. Absent on the Rust side means
+/// everything on, matching what the app did before the setting existed.
+export interface NotifyPrefs {
+  enabled: boolean;
+  ci_failed: boolean;
+  conflicted: boolean;
+}
+
+export const getNotifyPrefs = () => invoke<NotifyPrefs>("get_notify_prefs");
+
+export const setNotifyPrefs = (prefs: NotifyPrefs) =>
+  invoke<void>("set_notify_prefs", { prefs });
+
 /// The authenticated user's login.
 ///
 /// Asked once and cached forever: it cannot change during a session.

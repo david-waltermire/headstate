@@ -43,6 +43,9 @@ import {
   reviewPr,
   commentOnPr,
   getViewer,
+  getNotifyPrefs,
+  setNotifyPrefs,
+  type NotifyPrefs,
   type ReviewVerdictName,
 } from "./tauri";
 
@@ -736,6 +739,25 @@ export function usePollInterval() {
       return applied;
     });
   return { seconds: query.data, set };
+}
+
+/// Which desktop notifications the user wants.
+///
+/// Seeds optimistically on write, like `usePollInterval`: the Rust side
+/// is the source of truth, but a checkbox that waits for a round-trip to
+/// tick feels broken.
+export function useNotifyPrefs() {
+  const qc = useQueryClient();
+  const query = useQuery({
+    queryKey: ["notify-prefs"],
+    queryFn: getNotifyPrefs,
+    staleTime: Infinity,
+  });
+  const set = (prefs: NotifyPrefs) =>
+    setNotifyPrefs(prefs).then(() => {
+      qc.setQueryData(["notify-prefs"], prefs);
+    });
+  return { prefs: query.data, set };
 }
 
 /// PRs awaiting the user's review.
