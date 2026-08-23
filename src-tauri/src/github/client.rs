@@ -6,7 +6,7 @@
 
 use super::map::{
     map_cycle_trend, map_detail, map_history, map_list, map_merged_detail, map_rate_limit,
-    map_search, map_total,
+    map_search, map_total, map_viewer,
 };
 use super::model::{CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats};
 use super::query::{
@@ -239,6 +239,19 @@ impl GitHubClient {
     /// to have a false negative, and silently dropping PR 118 breaks that
     /// promise. Returning the total lets the UI say "showing 100 of 137"
     /// instead of quietly lying.
+    /// The authenticated user's login.
+    ///
+    /// Its own tiny query rather than plumbed out of the poll pipeline:
+    /// the login never changes for a session, so the UI asks once and
+    /// caches it forever, and threading a rarely-changing string through
+    /// every poll and the SQLite snapshot would cost more than it saves.
+    pub async fn fetch_viewer(&self) -> Result<String, ClientError> {
+        let v = self
+            .graphql_partial_ok(&json!({ "query": "query { viewer { login } }" }))
+            .await?;
+        map_viewer(&v).ok_or_else(|| ClientError::Graphql("no viewer login in response".into()))
+    }
+
     pub async fn fetch_prs_with_total(&self) -> Result<(Vec<PullRequest>, u64), ClientError> {
         let v = self
             .graphql_partial_ok(&json!({

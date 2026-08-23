@@ -15,13 +15,19 @@ clicks.
 
 ## Status
 
-Headstate is early. v1 is deliberately **read-only** — it cannot merge,
-comment, approve, close, or touch the merge queue. It only reads from
-`api.github.com` and shows you what it finds.
+Headstate reads from `api.github.com` and shows you what it finds. It
+also **writes, but only when you ask it to** — merge, close, reopen,
+draft/ready, the merge queue, auto-merge, branch deletion, and reviews
+(approve, request changes, comment).
+
+Every write is an explicit action on a pull request you are looking at.
+Nothing is automated, nothing runs in the background, and every write is
+logged with its repo, number, and action. Reads and writes live in
+separate modules so the read path stays independently auditable.
 
 ## Prerequisites
 
-- macOS.
+- macOS, Windows, or Linux.
 - The [GitHub CLI](https://cli.github.com/), authenticated:
 
   ```

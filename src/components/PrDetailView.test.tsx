@@ -13,10 +13,18 @@ const deleteBranch = vi.hoisted(() =>
     () => Promise.resolve(),
   ),
 );
+const reviewPr = vi.fn(() => Promise.resolve());
+const commentOnPr = vi.fn(() => Promise.resolve());
+
 vi.mock("../api/hooks", () => ({
   usePrDetail: () => ({ ...state, error: "boom", refetch: vi.fn() }),
   useActOnPr: () => vi.fn(() => Promise.resolve()),
   useDeleteHeadBranch: () => deleteBranch,
+  useReviewPr: () => reviewPr,
+  useCommentOnPr: () => commentOnPr,
+  // The detail view treats undefined as "we could not ask", which is
+  // deliberately NOT the same as "this is mine" -- see ReviewBox.
+  useViewer: () => ({ data: undefined }),
 }));
 
 import { PrDetailView } from "./PrDetailView";
@@ -53,7 +61,15 @@ function view(over: Partial<PrDetail> = {}) {
 }
 
 describe("PrDetailView", () => {
-  beforeEach(() => Object.assign(state, { data: undefined, isLoading: false, isError: false }));
+  beforeEach(() => {
+    Object.assign(state, { data: undefined, isLoading: false, isError: false });
+    // The mutation mocks are module-level, so without this a later test
+    // sees calls made by an earlier one -- which is exactly how the
+    // "not called" assertion below failed while passing in isolation.
+    reviewPr.mockClear();
+    commentOnPr.mockClear();
+    deleteBranch.mockClear();
+  });
 
   it("shows the title, number and branch pair", () => {
     view();
@@ -136,11 +152,50 @@ describe("PrDetailView", () => {
     expect(screen.getByText(/could not load this pull request/i)).toBeTruthy();
   });
 
-  // Deliberately absent: reviewing code belongs in GitHub or an editor.
-  it("does not pretend to offer a diff or a comment box", () => {
+  // This DELIBERATELY reverses an earlier assertion. The old test read
+  // "does not pretend to offer a diff or a comment box", encoding the
+  // v1 stance that reviewing belongs in GitHub. The comment box is now
+  // the point -- approving was the most common reviewer action and the
+  // one thing that still forced a trip to the browser.
+  //
+  // The diff genuinely stays absent: rendering one well is a different
+  // product, and the GitHub link remains the way there.
+  it("offers a review box but still no diff", () => {
     view();
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByRole("textbox")).toBeTruthy();
     expect(screen.getByRole("link", { name: /view on github/i })).toBeTruthy();
+    expect(screen.queryByText(/^@@/)).toBeNull();
+  });
+
+  it("submits a verdict through the review hook", async () => {
+    view();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "needs work" } });
+    fireEvent.click(screen.getByRole("button", { name: /request changes/i }));
+    await waitFor(() =>
+      expect(reviewPr).toHaveBeenCalledWith(
+        "PR_test",
+        "octocat/hello-world",
+        42,
+        "request_changes",
+        "needs work",
+      ),
+    );
+  });
+
+  // "Comment" must post a CONVERSATION comment, not a COMMENT review.
+  // They are different GraphQL nodes -- addComment makes an IssueComment,
+  // addPullRequestReview makes a PullRequestReview with state COMMENTED
+  // -- and the comment list in this view renders IssueComments. Routing
+  // it through the review mutation would post something the user could
+  // then not see in the list right above the box.
+  it("posts a plain comment through addComment, not as a review", async () => {
+    view();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "looks good" } });
+    fireEvent.click(screen.getByRole("button", { name: /^comment$/i }));
+    await waitFor(() =>
+      expect(commentOnPr).toHaveBeenCalledWith("PR_test", "octocat/hello-world", 42, "looks good"),
+    );
+    expect(reviewPr).not.toHaveBeenCalled();
   });
 
   // 31 of the last 60 merged PRs on a real account still held a live

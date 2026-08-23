@@ -35,9 +35,84 @@ const DISABLE_AUTO_MERGE_DOC: &str = "mutation($id: ID!) { \
 const DELETE_REF_DOC: &str = "mutation($id: ID!) { \
      deleteRef(input: { refId: $id }) { clientMutationId } }";
 
+/// Submit a review: approve, request changes, or plain comment.
+///
+/// Verified against the live schema by introspection, like every other
+/// document here: `addPullRequestReview(input: { pullRequestId: ID!,
+/// event: PullRequestReviewEvent, body: String })`.
+///
+/// This is the first mutation Headstate makes to a pull request it does
+/// NOT own, which is the whole point -- the to-review queue was
+/// read-only, so the most common action a reviewer takes (approving)
+/// meant leaving the app.
+///
+/// `body` is sent unconditionally rather than omitted when empty. GitHub
+/// rejects REQUEST_CHANGES without one, and an empty string produces the
+/// same refusal as a missing field -- but sending it keeps one document
+/// for all three events instead of branching on the event to pick a
+/// query, which is the kind of drift the hoisted-document convention in
+/// this module exists to prevent.
+const ADD_REVIEW_DOC: &str =
+    "mutation($id: ID!, $event: PullRequestReviewEvent!, $body: String) { \
+     addPullRequestReview(input: { pullRequestId: $id, event: $event, body: $body }) \
+     { clientMutationId } }";
+
+/// Comment on a pull request.
+///
+/// `subjectId` takes the PR's own node id -- the same id every other
+/// mutation here uses -- because a pull request IS a comment subject.
+const ADD_COMMENT_DOC: &str = "mutation($id: ID!, $body: String!) { \
+     addComment(input: { subjectId: $id, body: $body }) { clientMutationId } }";
+
 const UPDATE_BRANCH_DOC: &str = "mutation($id: ID!, $oid: GitObjectID!) { \
      updatePullRequestBranch(input: { pullRequestId: $id, expectedHeadOid: $oid }) \
      { clientMutationId } }";
+
+/// A review verdict.
+///
+/// Separate from `PrAction` on purpose: every `PrAction` sends the
+/// identical `{ pullRequestId: $id }` input, which is what lets
+/// `mutate_pr` build them all from one format string. A review carries an
+/// event AND a body, so folding it in would mean special-casing the very
+/// uniformity that makes `PrAction` safe.
+///
+/// DISMISS exists in the schema but is deliberately absent: it dismisses
+/// someone ELSE's review, which is a different act with different social
+/// weight, and nothing in the UI asks for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewVerdict {
+    Approve,
+    RequestChanges,
+    Comment,
+}
+
+impl ReviewVerdict {
+    /// The `PullRequestReviewEvent` enum value.
+    fn event(self) -> &'static str {
+        match self {
+            ReviewVerdict::Approve => "APPROVE",
+            ReviewVerdict::RequestChanges => "REQUEST_CHANGES",
+            ReviewVerdict::Comment => "COMMENT",
+        }
+    }
+
+    /// For logs. Past tense, matching `PrAction::describe`.
+    pub fn describe(self) -> &'static str {
+        match self {
+            ReviewVerdict::Approve => "approved",
+            ReviewVerdict::RequestChanges => "sent change requests to",
+            ReviewVerdict::Comment => "reviewed",
+        }
+    }
+
+    /// Whether GitHub refuses this event without body text.
+    ///
+    /// Checked in the UI so the user sees "a comment is required" before
+    /// they click, rather than a GraphQL refusal after.
+    pub fn requires_body(self) -> bool {
+        matches!(self, ReviewVerdict::RequestChanges | ReviewVerdict::Comment)
+    }
+}
 
 /// What a mutation does to a pull request.
 ///
@@ -107,6 +182,38 @@ impl GitHubClient {
         self.graphql_mutation(&json!({
             "query": query,
             "variables": { "id": id }
+        }))
+        .await
+    }
+
+    /// Submit a review on a pull request.
+    ///
+    /// The first write Headstate makes to a PR it does not own. Returns
+    /// GitHub's refusal verbatim, like every other mutation here: "Can
+    /// not approve your own pull request" is exactly what the user needs
+    /// to read, and rewording it would lose that.
+    pub async fn add_review(
+        &self,
+        id: &str,
+        verdict: ReviewVerdict,
+        body: &str,
+    ) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": ADD_REVIEW_DOC,
+            "variables": { "id": id, "event": verdict.event(), "body": body }
+        }))
+        .await
+    }
+
+    /// Comment on a pull request without reviewing it.
+    ///
+    /// Distinct from a COMMENT review: this is a plain issue comment on
+    /// the conversation, which is what the detail view already displays
+    /// 50 of. A COMMENT review appears as a review in the timeline.
+    pub async fn add_comment(&self, id: &str, body: &str) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": ADD_COMMENT_DOC,
+            "variables": { "id": id, "body": body }
         }))
         .await
     }
@@ -192,6 +299,59 @@ mod tests {
             (PrAction::Dequeue, "dequeuePullRequest"),
         ] {
             assert_eq!(action.field(), field);
+        }
+    }
+
+    /// Verified against the live schema by introspection:
+    /// `PullRequestReviewEvent` is exactly COMMENT / APPROVE /
+    /// REQUEST_CHANGES / DISMISS.
+    #[test]
+    fn every_verdict_names_a_real_event() {
+        assert_eq!(ReviewVerdict::Approve.event(), "APPROVE");
+        assert_eq!(ReviewVerdict::RequestChanges.event(), "REQUEST_CHANGES");
+        assert_eq!(ReviewVerdict::Comment.event(), "COMMENT");
+    }
+
+    /// Approving with no words is normal and GitHub allows it. The other
+    /// two are refused without a body, so the UI must ask first rather
+    /// than let the user discover it through a GraphQL error.
+    #[test]
+    fn only_approve_may_omit_the_body() {
+        assert!(!ReviewVerdict::Approve.requires_body());
+        assert!(ReviewVerdict::RequestChanges.requires_body());
+        assert!(ReviewVerdict::Comment.requires_body());
+    }
+
+    /// The documents are hoisted so these assert on what is actually
+    /// sent, not on a copy that could drift.
+    #[test]
+    fn review_document_targets_the_pull_request_and_carries_the_event() {
+        assert!(ADD_REVIEW_DOC.contains("addPullRequestReview"));
+        assert!(ADD_REVIEW_DOC.contains("pullRequestId: $id"));
+        assert!(ADD_REVIEW_DOC.contains("event: $event"));
+        assert!(ADD_REVIEW_DOC.contains("$event: PullRequestReviewEvent!"));
+    }
+
+    /// `addComment` takes `subjectId`, NOT `pullRequestId` -- a different
+    /// argument name from every other mutation in this module, and the
+    /// kind of detail that is easy to get wrong from memory.
+    #[test]
+    fn comment_document_uses_subject_id() {
+        assert!(ADD_COMMENT_DOC.contains("addComment"));
+        assert!(ADD_COMMENT_DOC.contains("subjectId: $id"));
+        assert!(!ADD_COMMENT_DOC.contains("pullRequestId"));
+    }
+
+    /// DISMISS is in the schema but must not be reachable: it dismisses
+    /// someone else's review, which nothing in the UI asks for.
+    #[test]
+    fn dismiss_is_not_offered() {
+        for v in [
+            ReviewVerdict::Approve,
+            ReviewVerdict::RequestChanges,
+            ReviewVerdict::Comment,
+        ] {
+            assert_ne!(v.event(), "DISMISS");
         }
     }
 

@@ -1,10 +1,19 @@
 import { ArrowLeft, Trash2, Bot, Check, CircleDot, CircleSlash, ExternalLink, X } from "lucide-react";
 import { toast } from "sonner";
-import { useDeleteHeadBranch, usePrDetail } from "../api/hooks";
+import {
+  useCommentOnPr,
+  useDeleteHeadBranch,
+  usePrDetail,
+  useReviewPr,
+  useViewer,
+} from "../api/hooks";
+import { useState } from "react";
+import type { ReviewVerdictName } from "../api/tauri";
 import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
 import { relativeTime } from "../lib/time";
 import { Markdown } from "./Markdown";
 import { PrActions } from "./PrActions";
+import { ReviewBox } from "./ReviewBox";
 import { QueryError, errorMessage } from "./QueryError";
 
 /// One check, with its outcome and a link to the run.
@@ -61,6 +70,13 @@ export function PrDetailView({
 }) {
   const { data: pr, isLoading, isError, error, refetch } = usePrDetail(repo, number);
   const deleteBranch = useDeleteHeadBranch();
+  const review = useReviewPr();
+  const comment = useCommentOnPr();
+  // Undefined until the login lands, and undefined FOREVER if it fails.
+  // ReviewBox reads that as "might not be mine" rather than "is mine",
+  // so a failed viewer fetch never silently removes the approve button.
+  const { data: viewer } = useViewer();
+  const [reviewing, setReviewing] = useState<ReviewVerdictName | null>(null);
 
   const back = (
     <button
@@ -124,6 +140,53 @@ export function PrDetailView({
       </div>
 
       <PrActions pr={pr} />
+
+      {/* Available on EVERY pull request, not only the review queue.
+          Gating this on which list you arrived from would mean the same
+          pull request offers different actions depending on how you
+          navigated to it -- and commenting on your own work is normal.
+          Approving your own is the one case GitHub refuses, and
+          ReviewBox handles that itself. */}
+      <ReviewBox
+        viewer={viewer}
+        author={pr.author}
+        busy={reviewing}
+        onSubmit={(verdict, body) => {
+          setReviewing(verdict);
+          const done = () => setReviewing(null);
+          const label =
+            verdict === "approve"
+              ? "Approved"
+              : verdict === "request_changes"
+                ? "Changes requested on"
+                : "Commented on";
+          // "Comment" posts a CONVERSATION comment, not a COMMENT
+          // review. They are different nodes: addComment creates an
+          // IssueComment, addPullRequestReview creates a
+          // PullRequestReview with state COMMENTED. The list above
+          // renders IssueComments -- so routing this through the review
+          // mutation would post something the user then could not see.
+          const submit =
+            verdict === "comment"
+              ? comment(pr.id, pr.repo, pr.number, body)
+              : review(pr.id, pr.repo, pr.number, verdict, body);
+          submit.then(
+            () => {
+              done();
+              toast.success(`${label} ${pr.repo}#${pr.number}`);
+            },
+            (e: unknown) => {
+              done();
+              // GitHub's refusal is the useful part -- "Can not approve
+              // your own pull request" tells the user exactly what
+              // happened where a generic message would not.
+              toast.error(`Could not review #${pr.number}`, {
+                description: typeof e === "string" ? e : undefined,
+              });
+            },
+          );
+        }}
+      />
 
       {pr.body.trim() ? (
         <div className="rounded-md border border-[#30363d] p-4">

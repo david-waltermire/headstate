@@ -40,6 +40,10 @@ import {
   setPollInterval,
   setViewNeedsGithub,
   setWorktreeDirs,
+  reviewPr,
+  commentOnPr,
+  getViewer,
+  type ReviewVerdictName,
 } from "./tauri";
 
 /// The PR list. Seeded from the SQLite snapshot so the first paint shows
@@ -336,6 +340,49 @@ export function useActOnPr() {
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
       void qc.invalidateQueries({ queryKey: ["reviewing"] });
       await refreshPrs(qc);
+    });
+}
+
+/// Who the token belongs to.
+///
+/// `staleTime: Infinity` because a login cannot change during a session,
+/// so this is one request per launch. Used to decide whether approving is
+/// offered at all -- GitHub refuses self-approval, and the UI should say
+/// so before the click rather than after a round-trip.
+export function useViewer() {
+  return useQuery({ queryKey: ["viewer"], queryFn: getViewer, staleTime: Infinity });
+}
+
+/// Submit a review on a pull request.
+///
+/// Invalidates `["reviewing"]` and refreshes the PR list: approving a PR
+/// removes it from the review queue, and the queue is the surface the
+/// user is standing on when they do this.
+export function useReviewPr() {
+  const qc = useQueryClient();
+  return (
+    id: string,
+    repo: string,
+    number: number,
+    verdict: ReviewVerdictName,
+    body: string,
+  ) =>
+    reviewPr(id, repo, number, verdict, body).then(async () => {
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+      void qc.invalidateQueries({ queryKey: ["reviewing"] });
+      await refreshPrs(qc);
+    });
+}
+
+/// Comment on a pull request.
+///
+/// Only the detail view changes: a comment does not alter any state the
+/// list renders, so refreshing the whole list would be a wasted request.
+export function useCommentOnPr() {
+  const qc = useQueryClient();
+  return (id: string, repo: string, number: number, body: string) =>
+    commentOnPr(id, repo, number, body).then(() => {
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
     });
 }
 

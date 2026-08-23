@@ -20,6 +20,14 @@ use chrono::{DateTime, Duration, Utc};
 pub const PRS_QUERY: &str = r#"
 query($q: String!, $reviewing: String!) {
   rateLimit { cost remaining resetAt }
+  # Who we are. The app previously relied entirely on `@me` qualifiers and
+  # never learned the login, so it could not tell its own pull requests
+  # from anyone else's -- which matters now that reviews are possible:
+  # GitHub refuses self-approval, and the UI should say so before the
+  # click rather than surface a GraphQL refusal after it.
+  #
+  # MEASURED FREE: this query costs 1 point with and without this field.
+  viewer { login }
   authored: search(query: $q, type: ISSUE, first: 100) {
     issueCount
     nodes {

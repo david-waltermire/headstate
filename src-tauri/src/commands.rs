@@ -6,7 +6,7 @@ use crate::github::client::GitHubClient;
 use crate::github::model::{
     CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats,
 };
-use crate::github::mutate::PrAction;
+use crate::github::mutate::{PrAction, ReviewVerdict};
 use crate::store::{load_snapshot, open_db, settings};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
@@ -125,6 +125,96 @@ pub async fn act_on_pr(
             log::warn!("{repo}#{number} could not be {}: {e}", act.describe());
             Err(e.to_string())
         }
+    }
+}
+
+/// Who the token belongs to.
+///
+/// Cached forever by the caller: a login does not change during a
+/// session. Used to tell the user's own pull requests from everyone
+/// else's, which decides whether approving is even offered -- GitHub
+/// refuses self-approval.
+#[tauri::command]
+pub async fn get_viewer(client: State<'_, GhClient>) -> Result<String, String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    client.fetch_viewer().await.map_err(|e| e.to_string())
+}
+
+/// Submit a review on a pull request.
+///
+/// The first write path for a PR the user does not own. Body text is
+/// validated HERE as well as in the UI: a command is a public surface,
+/// and GitHub refusing an empty REQUEST_CHANGES after a round-trip is a
+/// worse error than refusing it before one.
+#[tauri::command]
+pub async fn review_pr(
+    client: State<'_, GhClient>,
+    waker: State<'_, crate::poll::Waker>,
+    id: String,
+    repo: String,
+    number: u64,
+    verdict: String,
+    body: String,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    let v = parse_verdict(&verdict)?;
+    if v.requires_body() && body.trim().is_empty() {
+        return Err(format!(
+            "GitHub requires a comment to {}.",
+            match v {
+                ReviewVerdict::RequestChanges => "request changes",
+                _ => "leave a review comment",
+            }
+        ));
+    }
+
+    match client.add_review(&id, v, &body).await {
+        Ok(()) => {
+            // Never log the body: review text is the user's words about
+            // someone else's work, and logs are not the place for it.
+            log::info!("{repo}#{number} {}", v.describe());
+            waker.0.notify_one();
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} could not be reviewed: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Comment on a pull request.
+#[tauri::command]
+pub async fn comment_on_pr(
+    client: State<'_, GhClient>,
+    id: String,
+    repo: String,
+    number: u64,
+    body: String,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    if body.trim().is_empty() {
+        return Err("A comment cannot be empty.".to_string());
+    }
+    match client.add_comment(&id, &body).await {
+        Ok(()) => {
+            log::info!("{repo}#{number} commented");
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} could not be commented on: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Map the frontend's verdict name onto the typed verdict.
+fn parse_verdict(v: &str) -> Result<ReviewVerdict, String> {
+    match v {
+        "approve" => Ok(ReviewVerdict::Approve),
+        "request_changes" => Ok(ReviewVerdict::RequestChanges),
+        "comment" => Ok(ReviewVerdict::Comment),
+        other => Err(format!("unknown review verdict: {other}")),
     }
 }
 
@@ -838,6 +928,28 @@ pub fn get_auth_state(state: State<'_, AuthState>) -> AuthState {
 
 #[cfg(test)]
 mod tests {
+    /// Every verdict the frontend can name must map, and nothing else
+    /// may. A typo in the UI must fail loudly here rather than silently
+    /// submitting the wrong verdict on someone else's pull request.
+    #[test]
+    fn verdict_names_round_trip_and_reject_anything_else() {
+        assert_eq!(parse_verdict("approve").unwrap(), ReviewVerdict::Approve);
+        assert_eq!(
+            parse_verdict("request_changes").unwrap(),
+            ReviewVerdict::RequestChanges
+        );
+        assert_eq!(parse_verdict("comment").unwrap(), ReviewVerdict::Comment);
+        assert!(
+            parse_verdict("APPROVE").is_err(),
+            "casing must not slip through"
+        );
+        assert!(
+            parse_verdict("dismiss").is_err(),
+            "dismiss is deliberately unreachable"
+        );
+        assert!(parse_verdict("").is_err());
+    }
+
     use super::*;
 
     /// Both commands must accept exactly the same action names. If they

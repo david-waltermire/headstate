@@ -246,6 +246,20 @@ pub fn map_rate_limit(v: &Value) -> Option<(u64, String)> {
     Some((remaining, reset))
 }
 
+/// The authenticated user's login.
+///
+/// The app ran entirely on `@me` search qualifiers and never learned who
+/// it was, which was fine while everything was read-only. It stops being
+/// fine once reviews exist: GitHub refuses self-approval, and the UI
+/// should say so before the click rather than surface a GraphQL refusal
+/// after it.
+///
+/// Returns None rather than a guess if the field is absent, so a caller
+/// gets "we do not know" instead of a wrong answer about authorship.
+pub fn map_viewer(v: &Value) -> Option<String> {
+    v["viewer"]["login"].as_str().map(str::to_string)
+}
+
 pub fn map_total(v: &Value) -> u64 {
     v["authored"]["issueCount"].as_u64().unwrap_or(0)
 }
@@ -400,6 +414,18 @@ pub fn map_cycle_trend(v: &Value) -> CycleTrend {
 
 #[cfg(test)]
 mod tests {
+    /// The login must come back verbatim, and its absence must be None
+    /// rather than an empty string -- "we could not ask" is not "nobody".
+    #[test]
+    fn viewer_login_is_read_or_honestly_absent() {
+        assert_eq!(
+            map_viewer(&json!({"viewer": {"login": "octocat"}})),
+            Some("octocat".to_string())
+        );
+        assert_eq!(map_viewer(&json!({})), None);
+        assert_eq!(map_viewer(&json!({"viewer": null})), None);
+    }
+
     use super::*;
     use crate::github::model::{CiState, MergeState, ReviewState};
     use serde_json::json;

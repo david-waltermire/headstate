@@ -39,6 +39,36 @@ export const getCached = () => invoke<PullRequest[]>("get_cached");
 /// not affect the poll loop's cadence.
 export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 
+/// The authenticated user's login.
+///
+/// Asked once and cached forever: it cannot change during a session.
+export const getViewer = () => invoke<string>("get_viewer");
+
+/// A review verdict. Mirrors the Rust `ReviewVerdict`; the strings must
+/// match `parse_verdict` in commands.rs exactly, which rejects anything
+/// else rather than guessing.
+///
+/// GitHub's schema also has DISMISS, deliberately unreachable here: it
+/// dismisses someone else's review, which nothing in the UI asks for.
+export type ReviewVerdictName = "approve" | "request_changes" | "comment";
+
+/// Submit a review on a pull request.
+///
+/// The first write to a PR the user does not own. `body` may be empty
+/// only for `approve`; the Rust side rejects the other two without it
+/// rather than letting GitHub refuse after a round-trip.
+export const reviewPr = (
+  id: string,
+  repo: string,
+  number: number,
+  verdict: ReviewVerdictName,
+  body: string,
+) => invoke<void>("review_pr", { id, repo, number, verdict, body });
+
+/// Comment on a pull request without reviewing it.
+export const commentOnPr = (id: string, repo: string, number: number, body: string) =>
+  invoke<void>("comment_on_pr", { id, repo, number, body });
+
 /// `Stats.merged_week`/`merged_month` are real; the other five fields
 /// always come back zero today. Does not persist to SQLite.
 export const getStats = () => invoke<Stats>("get_stats");
