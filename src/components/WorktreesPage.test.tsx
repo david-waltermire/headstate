@@ -22,6 +22,8 @@ vi.mock("sonner", () => ({
 }));
 
 vi.mock("../api/hooks", () => ({
+  // Idle: the progress line only appears mid-removal.
+  useRemovalProgress: () => null,
   useWorktrees: () => ({
     data: state.repos,
     isLoading: state.isLoading,

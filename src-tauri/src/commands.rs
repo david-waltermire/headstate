@@ -9,7 +9,7 @@ use crate::github::model::{
 use crate::github::mutate::{PrAction, ReviewVerdict};
 use crate::store::{load_snapshot, open_db, settings};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Enough for the UI to render a real first-run screen (e.g. "install gh
 /// and run `gh auth login`") rather than a generic error. `message` is
@@ -671,17 +671,36 @@ pub fn docker_start() -> Result<(), String> {
 /// worktree that went dirty since the scan is refused while the rest
 /// proceed.
 pub async fn remove_worktrees(
+    app: AppHandle,
     repo_path: String,
     worktree_paths: Vec<String>,
 ) -> Result<Vec<crate::worktrees::RemovalOutcome>, String> {
-    let outcomes = crate::worktrees::remove_worktrees(&repo_path, &worktree_paths);
-    let failed = outcomes.iter().filter(|o| o.error.is_some()).count();
-    log::info!(
-        "bulk removal: {} of {} removed",
-        outcomes.len() - failed,
-        outcomes.len()
-    );
-    Ok(outcomes)
+    // `spawn_blocking`, unlike the previous version. Removal is
+    // sequential git plumbing at a few hundred milliseconds each, so
+    // ~100 worktrees blocked the async runtime for about 30 seconds --
+    // which also stalled the poll loop and every other command. The
+    // single-worktree command already did this; the bulk one, which
+    // blocks far longer, did not.
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcomes = crate::worktrees::remove_worktrees_with_progress(
+            &repo_path,
+            &worktree_paths,
+            |done, total| {
+                // Counts only -- never paths. A progress event is not a
+                // place to leak what the user is working on.
+                let _ = app.emit("worktree-removal-progress", (done, total));
+            },
+        );
+        let failed = outcomes.iter().filter(|o| o.error.is_some()).count();
+        log::info!(
+            "bulk removal: {} of {} removed",
+            outcomes.len() - failed,
+            outcomes.len()
+        );
+        outcomes
+    })
+    .await
+    .map_err(|e| format!("bulk removal failed to run: {e}"))
 }
 
 #[tauri::command]

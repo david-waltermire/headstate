@@ -592,6 +592,51 @@ fn collect_inner(dir: &Path, depth: usize, out: &mut Vec<Repo>, with_safety: boo
 
 #[cfg(test)]
 mod tests {
+    /// Progress must be reported AFTER each removal, so the count means
+    /// "done" rather than "started". A bar that reaches 100% while work
+    /// is still running is worse than no bar at all.
+    ///
+    /// Uses paths that do not exist: each removal FAILS, which is
+    /// exactly the point -- progress must advance for failures too, or a
+    /// batch where several fail appears to stall.
+    #[test]
+    fn progress_counts_completed_removals_including_failures() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = dir.path().to_string_lossy().to_string();
+        let paths: Vec<String> = (0..3)
+            .map(|i| {
+                dir.path()
+                    .join(format!("nope-{i}"))
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+
+        let seen = std::cell::RefCell::new(Vec::new());
+        let outcomes = remove_worktrees_with_progress(&repo, &paths, |done, total| {
+            seen.borrow_mut().push((done, total));
+        });
+
+        assert_eq!(seen.into_inner(), vec![(1, 3), (2, 3), (3, 3)]);
+        assert_eq!(outcomes.len(), 3);
+        assert!(
+            outcomes.iter().all(|o| o.error.is_some()),
+            "these paths do not exist, so every removal should fail"
+        );
+    }
+
+    /// An empty batch must report nothing rather than a bare (0, 0),
+    /// which a UI would render as a stuck progress line.
+    #[test]
+    fn an_empty_batch_reports_no_progress() {
+        let seen = std::cell::RefCell::new(Vec::new());
+        let outcomes = remove_worktrees_with_progress("/tmp", &[], |d, t| {
+            seen.borrow_mut().push((d, t));
+        });
+        assert!(seen.into_inner().is_empty());
+        assert!(outcomes.is_empty());
+    }
+
     use super::*;
 
     const SAMPLE: &str = "\
@@ -1394,7 +1439,8 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
 
         // The fixture's branch is genuinely unmerged, so a bulk call
         // naming it must refuse rather than delete.
-        let outcomes = remove_worktrees(repo_s, &[wt.to_string_lossy().into_owned()]);
+        let outcomes =
+            remove_worktrees_with_progress(repo_s, &[wt.to_string_lossy().into_owned()], |_, _| {});
         assert_eq!(outcomes.len(), 1);
         assert!(
             outcomes[0].error.is_some(),
@@ -1411,12 +1457,13 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
         let (_t, repo, wt) = squash_merged_fixture(false);
         let repo_s = repo.to_str().unwrap();
 
-        let outcomes = remove_worktrees(
+        let outcomes = remove_worktrees_with_progress(
             repo_s,
             &[
                 "/nonexistent/path".to_string(),
                 wt.to_string_lossy().into_owned(),
             ],
+            |_, _| {},
         );
         assert_eq!(outcomes.len(), 2, "every input must get an outcome");
         assert!(outcomes.iter().all(|o| o.error.is_some()));
@@ -1835,12 +1882,35 @@ pub struct RemovalOutcome {
 /// repository's administrative files, so parallel removals in one repo
 /// contend on the same lock -- and at a few hundred milliseconds each
 /// the wall-clock saving would not repay the risk of interleaved writes.
-pub fn remove_worktrees(repo_path: &str, worktree_paths: &[String]) -> Vec<RemovalOutcome> {
+/// Remove worktrees, reporting after each one.
+///
+/// Removal is sequential at a few hundred milliseconds each, so ~100
+/// worktrees is around 30 seconds behind a single boolean "busy" flag.
+/// `on_progress` is called with (done, total) after every removal so the
+/// UI can say "Removed 34 of 106" instead of spinning silently.
+///
+/// A CALLBACK rather than emitting Tauri events here: this module is
+/// pure git plumbing and has no AppHandle, which is also what keeps it
+/// testable without a running app.
+pub fn remove_worktrees_with_progress(
+    repo_path: &str,
+    worktree_paths: &[String],
+    mut on_progress: impl FnMut(usize, usize),
+) -> Vec<RemovalOutcome> {
+    let total = worktree_paths.len();
     worktree_paths
         .iter()
-        .map(|p| RemovalOutcome {
-            path: p.clone(),
-            error: remove_worktree(repo_path, p).err(),
+        .enumerate()
+        .map(|(i, p)| {
+            let outcome = RemovalOutcome {
+                path: p.clone(),
+                error: remove_worktree(repo_path, p).err(),
+            };
+            // AFTER the removal, so the count means "done", not
+            // "started" -- a progress bar that reaches 100% before the
+            // work finishes is worse than none.
+            on_progress(i + 1, total);
+            outcome
         })
         .collect()
 }

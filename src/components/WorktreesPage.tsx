@@ -9,6 +9,7 @@ import {
   useWorktreeSafety,
   useWorktreeSizes,
   useWorktrees,
+  useRemovalProgress,
 } from "../api/hooks";
 import {
   formatSize,
@@ -302,6 +303,7 @@ export function WorktreesPage() {
   const [removing, setRemoving] = useState<string | null>(null);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const removalProgress = useRemovalProgress();
   const removeMany = useRemoveWorktrees();
   const forceRemove = useRemoveWorktreeForced();
   const { data: assessedPaths } = useAssessed();
@@ -404,8 +406,13 @@ export function WorktreesPage() {
             onClick={() => setBulkOpen(true)}
             className="rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10 disabled:opacity-50"
           >
+            {/* A count, not a spinner: ~100 worktrees is around 30
+                seconds of sequential deletion, and a bare "Removing…"
+                for that long is indistinguishable from a hang. */}
             {bulkBusy
-              ? "Removing…"
+              ? removalProgress
+                ? `Removed ${removalProgress.done} of ${removalProgress.total}…`
+                : "Removing…"
               : `Remove ${safeCount} safe worktree${safeCount === 1 ? "" : "s"}`}
           </button>
         ) : null}

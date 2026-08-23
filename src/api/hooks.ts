@@ -794,6 +794,37 @@ export function useAutostart() {
   return { enabled: query.data ?? false, set };
 }
 
+/// How far a bulk worktree removal has got, or null when idle.
+///
+/// The button previously showed a single boolean for what can be ~30
+/// seconds of sequential deletion, so a long batch was
+/// indistinguishable from a hang. The Rust side emits (done, total)
+/// after EACH removal -- including failures, or a batch where several
+/// fail appears to stall.
+export function useRemovalProgress(): { done: number; total: number } | null {
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<[number, number]>("worktree-removal-progress", (e) => {
+      const [done, total] = e.payload;
+      // Clears on the last one rather than leaving "106 of 106" on
+      // screen after the work is over.
+      setProgress(done >= total ? null : { done, total });
+    }).then((fn) => {
+      if (cancelled) safeUnlisten(fn);
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      safeUnlisten(unlisten);
+    };
+  }, []);
+
+  return progress;
+}
+
 /// Which desktop notifications the user wants.
 ///
 /// Seeds optimistically on write, like `usePollInterval`: the Rust side
