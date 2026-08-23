@@ -49,9 +49,13 @@ describe("shortcutFor (macOS)", () => {
     expect(shortcutFor(key("r", { metaKey: true }, input), true)).toBe("onRefresh");
   });
 
-  it("ignores plain letters", () => {
+  // Still true of UNMAPPED keys, which is what this always meant.
+  // `Enter` moved out of this list when it became "open the cursor row";
+  // the guarantee that matters is that an arbitrary letter does nothing.
+  it("ignores unmapped keys", () => {
     expect(shortcutFor(key("a"), true)).toBeNull();
-    expect(shortcutFor(key("Enter"), true)).toBeNull();
+    expect(shortcutFor(key("z"), true)).toBeNull();
+    expect(shortcutFor(key("Tab"), true)).toBeNull();
   });
 
   // The bug: metaKey is Cmd on macOS but the WINDOWS KEY elsewhere, so

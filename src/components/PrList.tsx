@@ -30,7 +30,7 @@ export function PrList({
   canWrite?: boolean;
   selectable?: boolean;
 }) {
-  const { checked, setChecked } = useFilters();
+  const { checked, setChecked, cursor } = useFilters();
 
   // Select-all acts on what is ON SCREEN, not the unfiltered list.
   // Selecting rows the user cannot see and then bulk-closing them is the
@@ -106,7 +106,7 @@ export function PrList({
           )}
         </div>
       ) : (
-        prs.map((pr) => (
+        prs.map((pr, i) => (
           <PrRow
             key={`${pr.repo}#${pr.number}`}
             pr={pr}
@@ -114,6 +114,7 @@ export function PrList({
             canWrite={canWrite}
             selectable={selectable}
             onRange={selectRange}
+            cursored={cursor === i}
           />
         ))
       )}

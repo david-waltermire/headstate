@@ -58,6 +58,14 @@ interface FilterStore {
   /// on screen, and restoring one from a previous session would extend a
   /// range from a row the user never touched.
   anchor: string | null;
+  /// Which visible row the keyboard cursor is on, or null for none.
+  ///
+  /// An INDEX into the visible list rather than a PR key, because the
+  /// list the user is arrowing through is the filtered, sorted one --
+  /// and a key would silently point at a row that filtering has removed.
+  /// Cleared with the view for the same reason as `checked`.
+  cursor: number | null;
+  setCursor: (cursor: number | null) => void;
   setAnchor: (key: string | null) => void;
   setChecked: (keys: string[]) => void;
   clearChecked: () => void;
@@ -118,12 +126,15 @@ export const useFilters = create<FilterStore>()(
       // Selection clears with the view: a working set assembled on My
       // PRs means nothing on the review list, and carrying it across
       // would let a later batch act on rows the user cannot see.
-      setView: (view) => set({ view, selectedPr: null, checked: [], anchor: null }),
+      setView: (view) =>
+        set({ view, selectedPr: null, checked: [], anchor: null, cursor: null }),
       setPanel: (panel) => set({ panel }),
       selectedPr: null,
       selectPr: (selectedPr) => set({ selectedPr }),
       checked: [],
       anchor: null,
+      cursor: null,
+      setCursor: (cursor) => set({ cursor }),
       setAnchor: (anchor) => set({ anchor }),
       toggleChecked: (key) =>
         set((s) => ({

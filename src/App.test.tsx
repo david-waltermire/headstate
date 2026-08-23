@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PullRequest } from "./types/pr";
 import { PR_FIXTURES, prWithState } from "./fixtures/prs";
 import { useFilters } from "./store/filters";
@@ -167,5 +167,55 @@ describe("App — priorities strip scoping", () => {
 
     const strip = screen.getByText(/Needs your attention/).closest("section");
     expect(strip?.textContent).toContain("Blocked but unlabelled");
+  });
+});
+
+/// The key MAPPING is tested in `lib/shortcuts.nav.test.ts`. These prove
+/// it is WIRED: a correct mapping that never moves the cursor is worth
+/// nothing to the user.
+describe("keyboard triage", () => {
+  beforeEach(() => useFilters.setState({ cursor: null, checked: [] }));
+
+  const press = (key: string) =>
+    fireEvent.keyDown(window, { key, bubbles: true });
+
+  it("puts the cursor on the first row on the first press", () => {
+    render(<App />);
+    press("j");
+    expect(useFilters.getState().cursor).toBe(0);
+  });
+
+  it("walks down and back up", () => {
+    render(<App />);
+    press("j");
+    press("j");
+    expect(useFilters.getState().cursor).toBe(1);
+    press("k");
+    expect(useFilters.getState().cursor).toBe(0);
+  });
+
+  // Clamped, not wrapped: wrapping from the bottom back to the top
+  // silently moves the eye across the whole screen.
+  it("stops at the top rather than wrapping", () => {
+    render(<App />);
+    press("j");
+    press("k");
+    press("k");
+    expect(useFilters.getState().cursor).toBe(0);
+  });
+
+  it("selects the cursor row with x", () => {
+    render(<App />);
+    press("j");
+    press("x");
+    expect(useFilters.getState().checked).toHaveLength(1);
+  });
+
+  // `x` with no cursor must do nothing rather than select row 0 -- the
+  // user has not pointed at anything yet.
+  it("does nothing on x before the cursor exists", () => {
+    render(<App />);
+    press("x");
+    expect(useFilters.getState().checked).toEqual([]);
   });
 });

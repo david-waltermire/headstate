@@ -11,6 +11,13 @@ export interface ShortcutHandlers {
   onRefresh: () => void;
   onHide: () => void;
   onFocusSearch: () => void;
+  /// Move a cursor through the visible list.
+  onNext: () => void;
+  onPrev: () => void;
+  /// Open the row under the cursor.
+  onOpen: () => void;
+  /// Check or uncheck the row under the cursor, for a bulk action.
+  onToggleSelect: () => void;
 }
 
 function isTyping(target: EventTarget | null): boolean {
@@ -64,6 +71,19 @@ export function shortcutFor(
   // the user is not already typing into something.
   if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
     return isTyping(e.target ?? null) ? null : "onFocusSearch";
+  }
+
+  // Bare letters and arrows, so they must never fire while typing --
+  // otherwise searching for "jack" moves the cursor four times -- and
+  // never with a modifier, which means the combination belongs to the
+  // platform or to another shortcut.
+  if (!e.metaKey && !e.ctrlKey && !e.altKey && !isTyping(e.target ?? null)) {
+    // `j`/`k` are the convention GitHub itself uses; the arrows are for
+    // everyone who does not know that.
+    if (e.key === "j" || e.key === "ArrowDown") return "onNext";
+    if (e.key === "k" || e.key === "ArrowUp") return "onPrev";
+    if (e.key === "Enter") return "onOpen";
+    if (e.key === "x") return "onToggleSelect";
   }
 
   return null;

@@ -152,6 +152,7 @@ export function PrRow({
   onOpen,
   canWrite = true,
   onRange,
+  cursored = false,
   selectable = false,
 }: {
   pr: PullRequest;
@@ -163,6 +164,8 @@ export function PrRow({
   /// the only thing that knows the ORDER rows are rendered in -- a row
   /// cannot compute a range it is only one element of.
   onRange?: (from: string, to: string) => void;
+  /// Whether the keyboard cursor is on this row.
+  cursored?: boolean;
   /// Show the bulk-selection checkbox. Off on the review view for the
   /// same reason `canWrite` is: every bulk action is a write.
   selectable?: boolean;
@@ -187,6 +190,11 @@ export function PrRow({
       className={`flex gap-3 border-b border-[#30363d] px-4 ${
         dense ? "py-1.5" : "py-3"
       } last:border-b-0 hover:bg-[#161b22] ${
+        // A ring rather than a background: the row already uses
+        // background for hover, and a cursor that looked like a hover
+        // would be indistinguishable from the mouse being somewhere.
+        cursored ? "ring-2 ring-inset ring-[#1f6feb]" : ""
+      } ${
         onOpen ? "cursor-pointer" : ""
       }`}
     >

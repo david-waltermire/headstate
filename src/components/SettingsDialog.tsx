@@ -155,6 +155,28 @@ export function SettingsDialog({
           ) : null}
         </div>
 
+        {/* Every one of these already worked and none was mentioned
+            anywhere in the UI. Escape is the notable one: it hides the
+            whole window to the tray, which is genuinely surprising the
+            first time someone presses it to dismiss a menu. */}
+        <div className="mt-5 flex flex-col gap-1">
+          <span className="text-sm font-medium">Keyboard</span>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[#8b949e]">
+            {[
+              ["j / k", "Move down / up the list"],
+              ["Enter", "Open the highlighted pull request"],
+              ["x", "Select the highlighted pull request"],
+              ["/", "Search"],
+              ["Esc", "Hide the window to the tray"],
+            ].map(([keys, what]) => (
+              <div key={keys} className="contents">
+                <dt className="font-mono text-[#e6edf3]">{keys}</dt>
+                <dd>{what}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"

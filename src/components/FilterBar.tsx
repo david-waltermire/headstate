@@ -68,7 +68,10 @@ export function FilterBar({ prs }: { prs: PullRequest[] }) {
         type="search"
         value={filters.query ?? ""}
         onChange={(e) => setFilter("query", e.target.value || undefined)}
-        placeholder="Search title, repo, or #number"
+        // The cheapest possible surfacing of a shortcut nobody could
+        // discover: shortcuts.ts implemented "/" from the start and
+        // NOTHING in the UI mentioned it.
+        placeholder="Search title, repo, or #number    /"
         aria-label="Search pull requests"
         className="w-64 rounded border border-[#30363d] bg-[#0d1117] px-2 py-1 text-sm text-[#e6edf3] placeholder:text-[#8b949e]"
       />

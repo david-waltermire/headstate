@@ -55,24 +55,6 @@ export default function App() {
   // The app had no keyboard affordances at all. These three need no
   // backend change: `refresh-requested` already exists and the window
   // already hides to the tray on close.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const action = shortcutFor(e);
-      if (!action) return;
-      e.preventDefault();
-      if (action === "onRefresh") {
-        void emit("refresh-requested", null);
-      } else if (action === "onHide") {
-        void getCurrentWindow().hide();
-      } else {
-        const el = document.querySelector<HTMLInputElement>('input[type="search"]');
-        el?.focus();
-        el?.select();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   // Splash dismissal deliberately does NOT live here. `App` only mounts
   // when auth succeeds, so dismissing on `isSuccess` left every
@@ -87,6 +69,61 @@ export default function App() {
   // so the two views share every component instead of duplicating them.
   const source = view === "to-review" ? reviewing : prs;
   const visible = sortPrs(applyFilters(source, filters), filters.sort);
+
+  // A cursor past the end of a newly-filtered list points at nothing.
+  // Clamping here rather than in the key handler means it is correct for
+  // rendering too, not just for the next key press.
+  const { cursor, setCursor } = useFilters();
+  useEffect(() => {
+    if (cursor !== null && cursor >= visible.length) {
+      setCursor(visible.length > 0 ? visible.length - 1 : null);
+    }
+  }, [cursor, visible.length, setCursor]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const action = shortcutFor(e);
+      if (!action) return;
+      e.preventDefault();
+      if (action === "onRefresh") {
+        void emit("refresh-requested", null);
+      } else if (action === "onHide") {
+        void getCurrentWindow().hide();
+      } else if (action === "onFocusSearch") {
+        const el = document.querySelector<HTMLInputElement>('input[type="search"]');
+        el?.focus();
+        el?.select();
+      } else {
+        // List navigation reads `visibleRef` rather than closing over
+        // `visible`: this effect mounts once, so a captured list would
+        // freeze at whatever was on screen at first render and the
+        // cursor would walk a stale list after any filter change.
+        const rows = visible;
+        if (rows.length === 0) return;
+        const { cursor, setCursor, toggleChecked } = useFilters.getState();
+        if (action === "onNext") {
+          // Clamped, not wrapped: wrapping from the bottom back to the
+          // top silently moves the eye across the whole screen.
+          setCursor(cursor === null ? 0 : Math.min(cursor + 1, rows.length - 1));
+        } else if (action === "onPrev") {
+          setCursor(cursor === null ? 0 : Math.max(cursor - 1, 0));
+        } else if (cursor !== null && rows[cursor]) {
+          const pr = rows[cursor];
+          if (action === "onOpen") {
+            selectPr({ repo: pr.repo, number: pr.number });
+          } else if (action === "onToggleSelect") {
+            toggleChecked(`${pr.repo}#${pr.number}`);
+          }
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // `visible` is a real dependency, not noise: the handler indexes
+    // into it, so a listener bound to a stale list would move the
+    // cursor through rows that are no longer on screen. Re-binding one
+    // window listener per filter change is cheap; a wrong cursor is not.
+  }, [selectPr, visible]);
 
   // The priorities strip is scoped to the selected repo, matching the page
   // it sits on: on `octocat/hello-world` you want that repo's blocked PRs,
