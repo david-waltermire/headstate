@@ -108,6 +108,7 @@ pub fn run() {
             commands::docker_running_containers,
             commands::docker_restart,
             commands::docker_start,
+            commands::assess_worktree,
             commands::claudify_command,
             commands::assessed_worktrees,
             commands::remove_worktree_forced,

@@ -237,10 +237,24 @@ mod live {
     #[test]
     #[ignore]
     fn live_assess_a_real_worktree() {
-        let home = std::env::var("HOME").unwrap();
-        let repo = format!("{home}/code/enclave/enclave-nonsl-tf");
-        let wt = format!("{home}/code/enclave/enclave-nonsl-tf-ci");
-        let a = assess(&repo, &wt, "ci/merge-group-triggers");
+        // Supplied by the environment rather than hardcoded. The paths
+        // that used to sit here named a private project, which is both a
+        // leak and useless to anyone else running this.
+        let (repo, wt, branch) = match (
+            std::env::var("HEADSTATE_LIVE_REPO"),
+            std::env::var("HEADSTATE_LIVE_WORKTREE"),
+            std::env::var("HEADSTATE_LIVE_BRANCH"),
+        ) {
+            (Ok(r), Ok(w), Ok(b)) => (r, w, b),
+            _ => {
+                println!(
+                    "set HEADSTATE_LIVE_REPO, HEADSTATE_LIVE_WORKTREE and \
+                     HEADSTATE_LIVE_BRANCH to run this"
+                );
+                return;
+            }
+        };
+        let a = assess(&repo, &wt, &branch);
         println!("--- ASSESSMENT ---\n{a:#?}");
         println!("--- PROMPT ---\n{}", a.prompt());
         println!("--- COMMAND ---\n{}", a.command("claude"));

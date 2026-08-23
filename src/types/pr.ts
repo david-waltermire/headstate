@@ -327,3 +327,22 @@ export interface DockerBuild {
   context: string | null;
   revision: string | null;
 }
+
+/// What the app already knows about a worktree's unmerged work.
+///
+/// Mirrors the Rust `Assessment`. Every field was already computed for
+/// the Claude Code handoff and then discarded except the shell string.
+export interface Assessment {
+  path: string;
+  branch: string;
+  commits_ahead: number | null;
+  files_changed: number | null;
+  insertions: number | null;
+  deletions: number | null;
+  /// Relative, as git prints it: "3 weeks ago".
+  last_activity: string | null;
+  /// Never pushed means these commits exist only on this machine.
+  has_upstream: boolean;
+  subjects: string[];
+  subjects_elided: number;
+}

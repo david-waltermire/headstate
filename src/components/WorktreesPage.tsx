@@ -10,6 +10,7 @@ import {
   useWorktreeSizes,
   useWorktrees,
   useRemovalProgress,
+  useAssessment,
 } from "../api/hooks";
 import {
   formatSize,
@@ -27,6 +28,8 @@ import {
 } from "../lib/worktrees";
 import { claudifyCommand } from "../api/tauri";
 import { relativeTime } from "../lib/time";
+import { assessmentSummary } from "../lib/assessment";
+import { rollupRepos } from "../lib/rollup";
 import { useActiveFilters, useFilters } from "../store/filters";
 import type { PullRequest, Worktree } from "../types/pr";
 import { toast } from "sonner";
@@ -57,6 +60,7 @@ function Skeleton({ className = "" }: { className?: string }) {
 
 function Row({
   wt,
+  repoPath,
   pr,
   onRemove,
   onClaudify,
@@ -82,13 +86,25 @@ function Row({
   /// Sizes arrive in their own pass, after safety. Tracked separately so
   /// a row whose safety has resolved does not keep waiting on its size.
   sizePending?: boolean;
+  /// The repo this worktree belongs to. Needed to assess it: git has to
+  /// be run from the repo, not the worktree.
+  repoPath: string;
 }) {
   const safe = isSafe(wt.safety);
   const pending = isPending(wt.safety);
   const claudifiable = canClaudify(wt.safety);
   const signal = worktreeSignal(pr);
+  // Fetched only once a row is opened: several git calls each, and
+  // there can be hundreds of rows on screen.
+  const [open, setOpen] = useState(false);
+  const { data: assessment, isLoading: assessing } = useAssessment(
+    open ? repoPath : null,
+    open ? wt.path : null,
+    open ? wt.branch : null,
+  );
   return (
-    <div className="flex items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">
+    <div className="border-b border-[#30363d] last:border-b-0">
+    <div className="flex items-baseline gap-3 px-4 py-2.5 text-sm">
       <span className="min-w-0 flex-1 truncate font-mono text-[#e6edf3]">
         {pathBasename(wt.path)}
         {wt.branch ? (
@@ -205,6 +221,48 @@ function Row({
           {removing ? "Removing…" : "Remove"}
         </button>
       )}
+      {/* The disclosure, not a second action: the row keeps its
+          one-action rule and this only reveals what the app already
+          knows. */}
+      {claudifiable ? (
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-expanded={open}
+          aria-label={`What is in ${pathBasename(wt.path)}`}
+          className="shrink-0 rounded border border-[#30363d] px-2 py-0.5 text-xs text-[#8b949e] hover:bg-[#161b22]"
+        >
+          {open ? "Hide" : "What's in it?"}
+        </button>
+      ) : null}
+    </div>
+    {open ? (
+      <div className="px-4 pb-2.5 text-xs text-[#8b949e]">
+        {assessing ? (
+          "Reading…"
+        ) : assessment ? (
+          <>
+            {/* An empty summary means git answered none of it, which is
+                worth saying rather than rendering a blank line. */}
+            <p>{assessmentSummary(assessment) || "Nothing could be measured here."}</p>
+            {assessment.subjects.length > 0 ? (
+              <ul className="mt-1 list-inside list-disc">
+                {assessment.subjects.map((subject, i) => (
+                  <li key={`${i}-${subject}`} className="truncate">
+                    {subject}
+                  </li>
+                ))}
+                {assessment.subjects_elided > 0 ? (
+                  <li className="list-none">and {assessment.subjects_elided} more</li>
+                ) : null}
+              </ul>
+            ) : null}
+          </>
+        ) : (
+          "Could not read this worktree."
+        )}
+      </div>
+    ) : null}
     </div>
   );
 }
@@ -336,6 +394,52 @@ export function WorktreesPage() {
         <p className="mx-auto mt-2 max-w-md text-sm text-[#8b949e]">
           Set the directories to scan in Settings, at the bottom right.
         </p>
+      </div>
+    );
+  }
+
+  // "All repositories": a genuine rollup rather than the first repo.
+  //
+  // Deliberately READ-ONLY. Safety classification is per repo and costs
+  // ~16s across all of them, so this view has no verdicts -- and every
+  // removal path in this app is gated on a verdict. Offering Remove here
+  // would mean either deleting without a safety check or blocking the
+  // view on a 16-second scan; showing where the disk went, and sending
+  // the user into the repo to act, is neither.
+  if (!filters.repo) {
+    const { worktrees, totalBytes, sizesComplete } = rollupRepos(repos);
+    return (
+      <div className="rounded-md border border-[#30363d]">
+        <div className="flex items-baseline justify-between border-b border-[#30363d] px-4 py-3">
+          <span className="text-sm font-semibold text-[#e6edf3]">
+            {worktrees.length} worktree{worktrees.length === 1 ? "" : "s"} across{" "}
+            {repos.length} repositor{repos.length === 1 ? "y" : "ies"}
+          </span>
+          <span className="text-xs text-[#8b949e]">
+            {/* "at least" while any size is still unmeasured: a total
+                that silently counts unknowns as zero is a confident
+                wrong answer. */}
+            {sizesComplete ? "" : "at least "}
+            {formatSize(totalBytes)}
+          </span>
+        </div>
+        {worktrees.map((wt) => (
+          <button
+            type="button"
+            key={wt.path}
+            onClick={() => setFilter("repo", wt.repoPath)}
+            title="Open this repository to act on it"
+            className="flex w-full items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-left text-sm last:border-b-0 hover:bg-[#161b22]"
+          >
+            <span className="w-40 shrink-0 truncate text-[#8b949e]">{wt.repoName}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-[#e6edf3]">
+              {pathBasename(wt.path)}
+            </span>
+            <span className="w-20 shrink-0 text-right tabular-nums text-xs text-[#8b949e]">
+              {wt.size_bytes === null ? "—" : formatSize(wt.size_bytes)}
+            </span>
+          </button>
+        ))}
       </div>
     );
   }
@@ -604,6 +708,7 @@ export function WorktreesPage() {
             <Row
               key={wt.path}
               wt={wt}
+              repoPath={selected?.path ?? ""}
               pr={prForWorktree(prs, selected?.identity ?? null, wt.branch)}
               assessed={assessed.has(wt.path)}
               onForce={setForcing}

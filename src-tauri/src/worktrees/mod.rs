@@ -15,7 +15,7 @@ mod assess;
 mod model;
 mod scan;
 
-pub use assess::assess;
+pub use assess::{assess, Assessment};
 pub use model::{Repo, Worktree};
 pub use scan::{
     classify_repo, head_oid, remove_worktree, remove_worktree_forced,

@@ -24,6 +24,8 @@ vi.mock("sonner", () => ({
 vi.mock("../api/hooks", () => ({
   // Idle: the progress line only appears mid-removal.
   useRemovalProgress: () => null,
+  // Not opened in these tests: the disclosure is closed by default.
+  useAssessment: () => ({ data: undefined, isLoading: false }),
   useWorktrees: () => ({
     data: state.repos,
     isLoading: state.isLoading,
@@ -86,7 +88,15 @@ describe("WorktreesPage", () => {
       assessed: [],
       prs: [],
     });
-    useFilters.setState({ filtersByView: { ...EMPTY }, view: "worktrees", panel: "list" });
+    // These exercise the PER-REPO view, so they select a repo. They used
+    // to rely on the `repos?.[0]` fallback -- which silently showed the
+    // first repo when no repo was chosen, and is exactly the bug the
+    // all-repos rollup replaced.
+    useFilters.setState({
+      filtersByView: { ...EMPTY, worktrees: { repo: "/code/proj" } },
+      view: "worktrees",
+      panel: "list",
+    });
     // Calls leak between tests otherwise, which makes "was not called"
     // assertions pass or fail depending on ordering.
     removeFn.mockClear();
@@ -705,6 +715,67 @@ describe("WorktreesPage", () => {
       fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
       const dialog = screen.getByRole("dialog");
       expect(within(dialog).queryByText("/code/a")).toBeNull();
+    });
+  });
+
+  /// "All repositories" fell through to `repos?.[0]` -- the FIRST repo,
+  /// which `sort_for_sidebar` makes the largest. So across 37 repos the
+  /// one question the view could not answer was the one needing every
+  /// repo at once.
+  describe("all repositories", () => {
+    const twoRepos = [
+      { identity: null, name: "proj-a", path: "/code/a", worktrees: [wt({ path: "/w/a", size_bytes: 10 })] },
+      { identity: null, name: "proj-b", path: "/code/b", worktrees: [wt({ path: "/w/b", size_bytes: 900 })] },
+    ];
+    const showAll = () => {
+      state.repos = twoRepos;
+      useFilters.setState({
+        filtersByView: { ...EMPTY, worktrees: {} },
+        view: "worktrees",
+        panel: "list",
+      });
+      return render(<WorktreesPage />);
+    };
+
+    it("lists worktrees from every repository, not just the first", () => {
+      showAll();
+      expect(screen.getByText("proj-a")).toBeTruthy();
+      expect(screen.getByText("proj-b")).toBeTruthy();
+    });
+
+    it("says how many repositories it spanned", () => {
+      showAll();
+      expect(screen.getByText(/2 worktrees across 2 repositories/i)).toBeTruthy();
+    });
+
+    it("puts the largest worktree first", () => {
+      showAll();
+      const names = screen.getAllByText(/^proj-[ab]$/).map((el) => el.textContent);
+      expect(names[0]).toBe("proj-b");
+    });
+
+    // Acting needs a safety verdict, and classification is per repo at
+    // ~16s across all of them -- so a row here navigates instead.
+    it("opens a repository rather than offering to remove from here", () => {
+      showAll();
+      expect(screen.queryByRole("button", { name: /^remove$/i })).toBeNull();
+      fireEvent.click(screen.getByText("proj-b"));
+      expect(useFilters.getState().filtersByView.worktrees.repo).toBe("/code/b");
+    });
+
+    // A total that counts unmeasured sizes as zero is a confident wrong
+    // answer, so it is labelled while any are still missing.
+    it("calls the total partial while a size is unmeasured", () => {
+      state.repos = [
+        { identity: null, name: "a", path: "/code/a", worktrees: [wt({ path: "/w/a", size_bytes: null })] },
+      ];
+      useFilters.setState({
+        filtersByView: { ...EMPTY, worktrees: {} },
+        view: "worktrees",
+        panel: "list",
+      });
+      render(<WorktreesPage />);
+      expect(screen.getByText(/at least/i)).toBeTruthy();
     });
   });
 });

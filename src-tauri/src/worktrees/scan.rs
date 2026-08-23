@@ -526,8 +526,8 @@ pub fn classify_repo(repo_path: &str) -> Result<Vec<Worktree>, String> {
 /// listing takes ~800ms.
 #[cfg(test)]
 ///
-/// One level deep by design: `~/code/enclave/enc-api` is found via
-/// `~/code/enclave`. Walking arbitrarily deep would descend into the
+/// One level deep by design: `~/code/acme/widget` is found via
+/// `~/code/acme`. Walking arbitrarily deep would descend into the
 /// worktrees themselves and into `node_modules`.
 pub fn scan_dirs(dirs: &[String]) -> Vec<Repo> {
     let mut repos = Vec::new();

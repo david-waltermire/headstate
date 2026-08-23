@@ -49,6 +49,7 @@ import {
   type UiPrefs,
   getAutostart,
   setAutostart,
+  assessWorktree,
   getNotifyPrefs,
   setNotifyPrefs,
   type NotifyPrefs,
@@ -823,6 +824,25 @@ export function useRemovalProgress(): { done: number; total: number } | null {
   }, []);
 
   return progress;
+}
+
+/// What one worktree is holding, fetched on demand.
+///
+/// `enabled` so it costs nothing until a row is actually opened:
+/// several git calls per worktree, and there can be hundreds of rows.
+/// A long `staleTime` because the answer only changes when the branch
+/// does, and the row is already keyed by path.
+export function useAssessment(
+  repoPath: string | null,
+  worktreePath: string | null,
+  branch: string | null,
+) {
+  return useQuery({
+    queryKey: ["assessment", repoPath, worktreePath],
+    queryFn: () => assessWorktree(repoPath!, worktreePath!, branch!),
+    enabled: repoPath !== null && worktreePath !== null && branch !== null,
+    staleTime: 5 * 60 * 1000,
+  });
 }
 
 /// Which desktop notifications the user wants.

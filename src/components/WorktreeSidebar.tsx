@@ -25,11 +25,27 @@ export function WorktreeSidebar({
   // Worktree count EXCLUDING the main checkout: it is not a worktree you
   // would ever remove, and counting it inflates every repo by one.
   const removable = (n: number) => Math.max(0, n - 1);
+  // Same rule as the per-repo counts: the main checkout is not a
+  // worktree anyone would remove, so it is not counted as one.
+  const allCount = (repos ?? []).reduce((n, r) => n + removable(r.worktrees.length), 0);
 
   return (
     <nav className="flex w-64 shrink-0 flex-col border-r border-[#30363d] p-3">
       <ViewSwitcher counts={viewCounts} />
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Missing entirely before: with no "all" entry, clearing the
+            repo filter fell through to `repos?.[0]` and silently showed
+            the FIRST repo -- so across 37 repos there was no way to ask
+            where the disk went. RepoSidebar has had a real all-repos row
+            all along. */}
+        <button
+          type="button"
+          onClick={() => setFilter("repo", undefined)}
+          className={rowClass(!filters.repo)}
+        >
+          <span>All repositories</span>
+          <span className="ml-2 shrink-0">{allCount}</span>
+        </button>
         {(repos ?? []).map((r) => (
           <button
             type="button"

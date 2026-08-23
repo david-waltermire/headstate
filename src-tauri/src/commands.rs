@@ -731,6 +731,33 @@ pub async fn remove_worktree_forced(
     Ok(())
 }
 
+/// Everything the app already knows about one worktree's unmerged work.
+///
+/// `claudify_command` has always computed this whole struct and then
+/// discarded all of it except a shell string -- so the app could say
+/// "+240/-18 across 11 files, 4 commits ahead, last touched 3 weeks
+/// ago" and instead asked the user to leave, paste a command into a
+/// terminal, and wait for an agent to rediscover it.
+///
+/// `canClaudify` counts 124 of 268 worktrees in that state, which is the
+/// largest single group. Claude Code stays for the genuine judgment
+/// calls; these numbers triage the easy majority first.
+///
+/// `spawn_blocking`: several git calls per worktree, and it is opened
+/// per row rather than per scan.
+#[tauri::command]
+pub async fn assess_worktree(
+    repo_path: String,
+    worktree_path: String,
+    branch: String,
+) -> Result<crate::worktrees::Assessment, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::worktrees::assess(&repo_path, &worktree_path, &branch)
+    })
+    .await
+    .map_err(|e| format!("could not assess this worktree: {e}"))
+}
+
 #[tauri::command]
 /// The shell command that hands a worktree to Claude Code.
 ///

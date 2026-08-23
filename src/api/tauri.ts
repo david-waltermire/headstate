@@ -8,6 +8,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Assessment,
   CycleTrend,
   DanglingVolume,
   DockerBuild,
@@ -55,6 +56,12 @@ export const setUiPrefs = (prefs: UiPrefs) => invoke<void>("set_ui_prefs", { pre
 export const getAutostart = () => invoke<boolean>("get_autostart");
 export const setAutostart = (enabled: boolean) =>
   invoke<void>("set_autostart", { enabled });
+/// What the app already knows about a worktree's unmerged work.
+///
+/// Per row rather than per scan: several git calls each, so this is
+/// asked only when a user actually opens a row.
+export const assessWorktree = (repoPath: string, worktreePath: string, branch: string) =>
+  invoke<Assessment>("assess_worktree", { repoPath, worktreePath, branch });
 
 /// Which desktop notifications the user wants.
 ///

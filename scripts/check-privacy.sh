@@ -18,7 +18,8 @@ set -euo pipefail
 # The only repository owners this project legitimately references.
 # `org` and `owner` are the generic placeholders used in format examples
 # (`- [org/repo#123] Title`), not real accounts.
-ALLOWED='octocat|pktstorm|tauri-apps|shadcn-ui|rust-lang|actions|dtolnay|Swatinem|org|owner'
+# `acme` is the synthetic placeholder this repo uses in path examples.
+ALLOWED='octocat|pktstorm|tauri-apps|shadcn-ui|rust-lang|actions|dtolnay|Swatinem|org|owner|acme'
 
 # Ticket-ID-shaped tokens (PREFIX-NUMBER) that are legitimate public
 # identifiers, not internal tracker references.
@@ -137,6 +138,21 @@ emails=$(scan '[A-Za-z][A-Za-z0-9._%+-]*@[A-Za-z][-A-Za-z0-9.]*\.[A-Za-z]{2,6}' 
          | grep -vE '^git@' \
          | sed -E 's/^[^@]+@//' || true)
 
+# Local checkout paths that name a real project directory.
+#
+# The gap this closes: `~/code/acme/widget` in a doc comment, and a
+# hardcoded `format!("{home}/code/acme/widget")` in an ignored live
+# test, both sat in tracked files while every other pattern here
+# reported clean. None of them look for a FILESYSTEM PATH -- they look
+# for `owner/repo`, remote URLs, and emails -- so a private project name
+# spelled as a directory walked straight through.
+#
+# Anchored on a `code/`-style parent so it cannot match ordinary
+# relative paths in prose or imports (`src/lib/x`, `api/hooks.ts`). Two
+# segments after it, which is the shape that actually names something.
+paths=$(scan '(~|\{home\}|\$HOME|/Users/[A-Za-z0-9._-]+)/(code|src|dev|projects|work|repos)/[A-Za-z0-9][-A-Za-z0-9_.]*/[A-Za-z0-9][-A-Za-z0-9_.]*' \
+        | sed -E 's#^.*/(code|src|dev|projects|work|repos)/##' || true)
+
 # Slack/Atlassian workspace URLs. The workspace name is the owner-like
 # token; anchored on the literal SaaS domain suffix so it can't match
 # arbitrary `*.com` prose.
@@ -159,7 +175,14 @@ other_matches=$(printf '%s\n%s\n%s\n' "$emails" "$saas" "$tickets" \
         | grep -vE '^[[:space:]]*$' \
         | sort -u || true)
 
-if [ -n "$owner_matches" ] || [ -n "$other_matches" ]; then
+# Checkout paths reuse the owner allow-list: `~/code/pktstorm/headstate`
+# is this project's own and must not trip the gate.
+path_matches=$(printf '%s\n' "$paths" \
+        | grep -vE '^[[:space:]]*$' \
+        | grep -vE "^($ALLOWED)/" \
+        | sort -u || true)
+
+if [ -n "$owner_matches" ] || [ -n "$other_matches" ] || [ -n "$path_matches" ]; then
   echo "ERROR: possible private references found:"
   if [ -n "$owner_matches" ]; then
     echo "  repository owners not on the allow-list:"
@@ -168,6 +191,10 @@ if [ -n "$owner_matches" ] || [ -n "$other_matches" ]; then
   if [ -n "$other_matches" ]; then
     echo "  emails / ticket IDs / SaaS workspaces:"
     echo "$other_matches" | sed 's/^/    /'
+  fi
+  if [ -n "$path_matches" ]; then
+    echo "  local checkout paths naming a real project:"
+    echo "$path_matches" | sed 's/^/    /'
   fi
   echo
   echo "Use synthetic fixtures (octocat/hello-world, AcmeCorp, example.internal),"
