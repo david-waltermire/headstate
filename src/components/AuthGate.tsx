@@ -103,6 +103,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
     <div className="flex h-screen items-center justify-center bg-[#0d1117] text-[#e6edf3]">
       <div className="max-w-md space-y-4">
         <h1 className="text-xl font-semibold">Headstate needs the GitHub CLI</h1>
+        {/* What the app IS, which this screen never said. It explained
+            only how to install `gh`, and the one statement of scope
+            lived in an empty-list branch most users never see -- so
+            anyone WITH pull requests skipped straight past the single
+            most important fact about the data they were about to be
+            shown. Above the error because it is the reason to fix it. */}
+        <p className="text-sm text-[#e6edf3]">
+          Headstate watches the pull requests you opened and the ones waiting on
+          your review, and tells you when one breaks.
+        </p>
         <p className="text-sm text-[#8b949e]">{data?.message}</p>
         <pre className="rounded bg-[#161b22] p-3 text-sm">
           brew install gh{"\n"}gh auth login
