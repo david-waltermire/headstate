@@ -216,8 +216,14 @@ impl GitHubClient {
 
         match attempt {
             Err(e) if first > PAGE_REDUCED && server_gave_up(&e) => {
+                // The SHAPE of the failure, not just that one happened.
+                // A reported log showed every poll failing for an hour
+                // and the app never said which request, how large, or
+                // how long it took -- so three fixes were reasoned from
+                // the error text alone and none of them was the cause.
                 log::warn!(
-                    "GitHub could not answer a {first}-item query ({e}); retrying with {PAGE_REDUCED}"
+                    "GitHub could not answer a {first}-item pull request query ({e}); \
+                     retrying with {PAGE_REDUCED}"
                 );
                 self.graphql_partial_ok(&json!({
                     "query": PRS_QUERY,
@@ -372,7 +378,16 @@ impl GitHubClient {
     }
 
     pub async fn fetch_prs_with_total(&self) -> Result<(Vec<PullRequest>, u64), ClientError> {
+        let started = std::time::Instant::now();
         let v = self.fetch_prs_page(PAGE_FULL).await?;
+        // How long GitHub took, and what it was asked for. A slow
+        // response is the leading indicator of the timeout that follows,
+        // and neither was recorded anywhere. Counts and timings only --
+        // never repository names or titles.
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_secs(5) {
+            log::warn!("the pull request query took {:.1}s", elapsed.as_secs_f32());
+        }
         // Warn before the budget is actually gone, so the user learns
         // about it from a message rather than from a wall of failures.
         if let Some((remaining, reset)) = map_rate_limit(&v) {
@@ -489,11 +504,40 @@ impl GitHubClient {
     }
 
     /// A sample of the most recent merged PRs, for the insight cards.
+    /// The merged-PR sample behind the insight cards.
+    ///
+    /// The most expensive query the app makes: `additions`, `deletions`
+    /// and `changedFiles` are computed per pull request, so GitHub
+    /// calculates a diff for each of 100. MEASURED live at 6.5s, against
+    /// 2.7s for the same query without those three fields -- they are
+    /// roughly 60% of it, and a reported log showed this query returning
+    /// 124 RESOURCE_LIMITS_EXCEEDED errors.
+    ///
+    /// The fields stay: the insight cards genuinely display them. The
+    /// SAMPLE shrinks on failure instead, and only on failure -- halving
+    /// it moved the mean from 321 to 356 lines in one measurement, which
+    /// is a real accuracy cost to pay only when the alternative is no
+    /// answer at all.
     pub async fn fetch_merged_detail(&self) -> Result<MergedDetail, ClientError> {
-        let v = self
-            .graphql_partial_ok(&json!({ "query": MERGED_DETAIL_QUERY }))
-            .await?;
+        let v = match self.merged_detail_page(PAGE_FULL).await {
+            Err(e) if server_gave_up(&e) => {
+                log::warn!(
+                    "GitHub could not answer a {PAGE_FULL}-item merged query ({e}); \
+                     retrying with {PAGE_REDUCED} -- the averages will be over a smaller sample"
+                );
+                self.merged_detail_page(PAGE_REDUCED).await?
+            }
+            other => other?,
+        };
         Ok(map_merged_detail(&v))
+    }
+
+    async fn merged_detail_page(&self, first: u32) -> Result<serde_json::Value, ClientError> {
+        self.graphql_partial_ok(&json!({
+            "query": MERGED_DETAIL_QUERY,
+            "variables": { "first": first },
+        }))
+        .await
     }
 }
 
@@ -744,6 +788,36 @@ mod tests {
         assert!(msg.contains("could not answer"), "{msg}");
         // And it is still weather, so one blip stays quiet.
         assert!(err.is_transient(), "{msg}");
+    }
+
+    /// The most expensive query the app makes, and the one a reported
+    /// log showed returning 124 RESOURCE_LIMITS_EXCEEDED errors. It
+    /// needs the same fallback the pull request query got.
+    #[tokio::test]
+    async fn the_merged_sample_shrinks_when_github_gives_up() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("\"first\":100"))
+            .respond_with(ResponseTemplate::new(502).set_body_raw("", "text/html"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("\"first\":50"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"merged": {"nodes": []}}
+            })))
+            .mount(&server)
+            .await;
+
+        // Reaching the reduced page at all is the assertion: the full
+        // one 502s, and without the fallback this is an error.
+        assert!(client_for(&server)
+            .await
+            .fetch_merged_detail()
+            .await
+            .is_ok());
     }
 
     #[tokio::test]

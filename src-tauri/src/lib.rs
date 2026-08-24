@@ -209,6 +209,24 @@ pub fn run() {
             );
 
             if let Some(client) = gh_client {
+                // WHICH account, not just that there is one. A reported
+                // failure took four rounds partly because the log said
+                // "authenticated: true" and nothing else -- so whether
+                // two machines were even using the same account could
+                // not be established from it.
+                //
+                // A login is a public GitHub handle, not a credential;
+                // the token is never logged. Fire-and-forget so a slow
+                // or failed lookup cannot delay startup.
+                {
+                    let c = client.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match c.fetch_viewer().await {
+                            Ok(login) => log::info!("signed in as {login}"),
+                            Err(e) => log::warn!("could not read the signed-in account: {e}"),
+                        }
+                    });
+                }
                 let focused = Arc::new(AtomicBool::new(true));
                 app.manage(Focused(focused.clone()));
                 poll::spawn(handle, client, focused, waker, interval, needs_gh);

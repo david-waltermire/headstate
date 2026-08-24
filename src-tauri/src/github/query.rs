@@ -76,9 +76,9 @@ query($week: String!, $month: String!) {
 /// feeds are labelled with their sample size in the UI rather than being
 /// presented as lifetime figures.
 pub const MERGED_DETAIL_QUERY: &str = r#"
-query {
+query($first: Int!) {
   rateLimit { cost remaining resetAt }
-  merged: search(query: "is:pr author:@me is:merged", type: ISSUE, first: 100) {
+  merged: search(query: "is:pr author:@me is:merged", type: ISSUE, first: $first) {
     nodes {
       ... on PullRequest {
         number

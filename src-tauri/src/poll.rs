@@ -536,7 +536,7 @@ pub fn spawn(
                     // is downstream. Counts only -- never titles, never
                     // repository names.
                     log::info!(
-                        "poll ok: {} open, {} need attention",
+                        "poll ok: {} open, {} need attention (of {total} matching)",
                         prs.len(),
                         needs_attention_count(&prs)
                     );
