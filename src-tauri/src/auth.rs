@@ -1,9 +1,16 @@
 //! Authentication.
 //!
-//! The token comes from `gh auth token` and is held in memory only: never
-//! written to SQLite, never logged, never sent anywhere but api.github.com.
-//! Delegating credential storage to `gh` means Headstate carries no
-//! credential-handling code of its own.
+//! The token comes from `GH_TOKEN`/`GITHUB_TOKEN` if either is set, and
+//! otherwise from `gh auth token`. Either way it is held in memory only:
+//! never written to SQLite, never logged, never sent anywhere but
+//! api.github.com.
+//!
+//! Reading those variables is not credential STORAGE -- Headstate still
+//! stores nothing, and `gh` remains the only place a login is persisted.
+//! It exists because a desktop launch inherits the session environment
+//! rather than the shell's, so a token exported in a shell profile is
+//! invisible to the `gh` subprocess and the user is told they are not
+//! logged in when they are.
 
 use std::process::{Command, Output};
 
@@ -33,19 +40,50 @@ pub enum AuthError {
 /// tested without spawning anything.
 pub fn read_token_from(out: Output) -> Result<String, AuthError> {
     if !out.status.success() {
-        return Err(AuthError::GhNotLoggedIn(
-            String::from_utf8_lossy(&out.stderr).trim().to_string(),
-        ));
+        return Err(AuthError::GhNotLoggedIn(with_env_hint(
+            &String::from_utf8_lossy(&out.stderr),
+        )));
     }
     let token = String::from_utf8_lossy(&out.stdout).trim().to_string();
     // A zero exit with empty stdout would otherwise become an empty bearer
     // token and fail much later as a confusing 401.
     if token.is_empty() {
-        return Err(AuthError::GhNotLoggedIn(
-            "gh returned an empty token".into(),
-        ));
+        return Err(AuthError::GhNotLoggedIn(with_env_hint(
+            "gh returned an empty token",
+        )));
     }
     Ok(token)
+}
+
+/// `gh`'s own words, plus the route it cannot know about.
+///
+/// MEASURED: with no credential at all, `gh auth token` exits 1 and
+/// writes "no oauth token found for github.com" to STDERR -- so the
+/// failure branch, not the empty-stdout one, is where an
+/// unauthenticated user actually lands. Both get this hint, because
+/// which branch fires depends on the `gh` version rather than on
+/// anything the user did.
+///
+/// `gh`'s message stays first and verbatim: it is accurate, and it is
+/// what a user will search for. What it cannot say is that Headstate
+/// may simply not be able to SEE a token the user has set -- an app
+/// launched from a desktop menu inherits the session environment, not
+/// the shell's, so a variable exported in a shell profile is invisible
+/// to it. That is the case this whole change exists for, and a message
+/// that only says "not logged in" tells such a user something false.
+fn with_env_hint(gh_says: &str) -> String {
+    let said = gh_says.trim();
+    let prefix = if said.is_empty() {
+        String::new()
+    } else {
+        format!("{said}. ")
+    };
+    format!(
+        "{prefix}Run `gh auth login`, or if you authenticate with GITHUB_TOKEN, \
+         make sure that variable is set where Headstate is launched from -- an \
+         app started from a desktop menu does not see variables exported in \
+         your shell profile."
+    )
 }
 
 /// Every location searched, for the not-found message.
@@ -242,7 +280,48 @@ pub fn find_gh_in(fallbacks: &[&str]) -> Option<std::path::PathBuf> {
     None
 }
 
+/// A token from the environment, in the order `gh` itself prefers.
+///
+/// `gh auth token` already honours these, and a subprocess inherits the
+/// environment -- so on a TERMINAL launch this changes nothing. It
+/// matters for a DESKTOP launch, where the app inherits the session
+/// environment rather than the shell's: a `GITHUB_TOKEN` exported in
+/// `~/.bashrc` is simply not there for `gh` to find, and a user whose
+/// only credential is that variable is told they are not logged in.
+///
+/// GH_TOKEN wins over GITHUB_TOKEN because that is `gh`'s own
+/// precedence. Diverging would hand the app a different token from the
+/// one the user's terminal uses, which is worse than supporting neither.
+///
+/// Empty and whitespace-only values are NOT credentials: they would
+/// otherwise become an empty bearer token and fail as a confusing 401
+/// much later -- the same failure the empty-stdout guard on the `gh`
+/// path already exists to prevent.
+fn token_from_env() -> Option<String> {
+    ["GH_TOKEN", "GITHUB_TOKEN"]
+        .iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .map(|v| v.trim().to_string())
+        .find(|v| !v.is_empty())
+}
+
+/// The token, from the environment or from `gh`.
+///
+/// NOT unit-tested end to end, deliberately. `gh auth token` inherits
+/// the same variables this reads and returns the same string, so on any
+/// machine with `gh` installed the two paths are indistinguishable by
+/// result -- and `find_gh` searches hardcoded fallback directories, so
+/// emptying PATH does not make `gh` unreachable either. Two attempts at
+/// such a test passed with the environment lookup deleted.
+///
+/// `token_from_env` carries the rules that CAN be tested: precedence,
+/// trimming, and rejecting empty values.
 pub fn read_token() -> Result<String, AuthError> {
+    // Before shelling out: if the token is already here, `gh` would only
+    // hand back the same value, and it may not be installed at all.
+    if let Some(token) = token_from_env() {
+        return Ok(token);
+    }
     let gh = find_gh().ok_or_else(|| AuthError::GhNotFound {
         searched: searched_locations(),
     })?;
@@ -298,6 +377,71 @@ pub fn build_client(token: &str) -> Result<octocrab::Octocrab, AuthError> {
 
 #[cfg(test)]
 mod tests {
+    /// A user whose ONLY credential is `GITHUB_TOKEN` gets nothing from
+    /// a desktop launch: the app inherits the session environment, not
+    /// the shell's, so a variable exported in `~/.bashrc` is simply not
+    /// there for the `gh` subprocess to inherit. Reading it directly is
+    /// what makes a terminal launch, a `.desktop` Environment= entry,
+    /// and CI all work.
+    #[test]
+    fn a_token_in_the_environment_is_used() {
+        temp_env::with_vars(
+            [
+                ("GH_TOKEN", None::<&str>),
+                ("GITHUB_TOKEN", Some("ghp_from_env")),
+            ],
+            || assert_eq!(token_from_env().as_deref(), Some("ghp_from_env")),
+        );
+    }
+
+    /// `gh` prefers GH_TOKEN over GITHUB_TOKEN, and so must this -- or a
+    /// user with both set gets a different token from the app than from
+    /// their terminal, which is worse than not supporting either.
+    #[test]
+    fn gh_token_wins_over_github_token() {
+        temp_env::with_vars(
+            [
+                ("GH_TOKEN", Some("ghp_gh")),
+                ("GITHUB_TOKEN", Some("ghp_github")),
+            ],
+            || assert_eq!(token_from_env().as_deref(), Some("ghp_gh")),
+        );
+    }
+
+    /// An empty or whitespace-only variable is NOT a credential. Treating
+    /// it as one produces an empty bearer token and a 401 much later,
+    /// which is the same confusing failure the empty-stdout guard on the
+    /// `gh` path already exists to prevent.
+    #[test]
+    fn an_empty_variable_is_not_a_token() {
+        temp_env::with_vars(
+            [("GH_TOKEN", Some("")), ("GITHUB_TOKEN", Some("   "))],
+            || assert_eq!(token_from_env(), None),
+        );
+    }
+
+    /// Surrounding whitespace is stripped, matching how the `gh` path
+    /// already trims its stdout. A trailing newline from a `.env` file
+    /// must not become part of the bearer token.
+    #[test]
+    fn a_token_is_trimmed() {
+        temp_env::with_vars(
+            [
+                ("GH_TOKEN", None::<&str>),
+                ("GITHUB_TOKEN", Some("  ghp_padded\n")),
+            ],
+            || assert_eq!(token_from_env().as_deref(), Some("ghp_padded")),
+        );
+    }
+
+    #[test]
+    fn no_variables_means_no_token() {
+        temp_env::with_vars(
+            [("GH_TOKEN", None::<&str>), ("GITHUB_TOKEN", None::<&str>)],
+            || assert_eq!(token_from_env(), None),
+        );
+    }
+
     use super::*;
     use std::process::{ExitStatus, Output};
 
@@ -340,10 +484,57 @@ mod tests {
         assert!(matches!(err, AuthError::GhNotLoggedIn(_)));
     }
 
+    /// MEASURED: with no credential, `gh auth token` exits 1 and writes
+    /// "no oauth token found for github.com" to STDERR. So this -- not
+    /// the empty-stdout branch -- is where an unauthenticated user
+    /// actually lands, and it is the message they will read.
+    #[test]
+    fn a_failed_gh_still_explains_the_environment_route() {
+        let err =
+            read_token_from(output(1, "", "no oauth token found for github.com")).unwrap_err();
+        let msg = err.to_string();
+        // gh's own words survive: accurate, and what a user will search.
+        assert!(msg.contains("no oauth token found"), "{msg}");
+        assert!(
+            msg.contains("gh auth login"),
+            "must name the login route: {msg}"
+        );
+        assert!(
+            msg.contains("GITHUB_TOKEN"),
+            "must name the env-var route: {msg}"
+        );
+    }
+
+    /// A failure with nothing on stderr must not produce a message that
+    /// opens with a stray separator.
+    #[test]
+    fn a_silent_failure_still_gives_guidance() {
+        let msg = read_token_from(output(1, "", "")).unwrap_err().to_string();
+        assert!(msg.contains("gh auth login"), "{msg}");
+        assert!(!msg.contains(": ."), "no empty prefix: {msg}");
+    }
+
+    /// A zero exit with empty stdout. NOT what `gh` does today -- it
+    /// exits 1 and writes to stderr, which the test above covers -- but
+    /// a version that returned success with nothing would otherwise
+    /// produce an empty bearer token and a confusing 401 much later.
     #[test]
     fn empty_stdout_is_logged_out_not_a_valid_token() {
         let err = read_token_from(output(0, "   \n", "")).unwrap_err();
         assert!(matches!(err, AuthError::GhNotLoggedIn(_)));
+
+        // Both branches carry the guidance, because which one fires
+        // depends on the `gh` version rather than on anything the user
+        // did.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("gh auth login"),
+            "must name the login route: {msg}"
+        );
+        assert!(
+            msg.contains("GITHUB_TOKEN"),
+            "must name the env-var route: {msg}"
+        );
     }
 
     #[cfg(unix)]
