@@ -32,19 +32,28 @@ pub enum ClientError {
     /// wrong thing.
     #[error("GitHub could not answer (it returned a {0} rather than data). This usually clears on its own.")]
     NotJson(String),
-    /// GitHub answered, resolved the nodes, and refused the fields.
+    /// GitHub answered but could not resolve part of what was asked.
     ///
-    /// The SAML-SSO shape: a token that has not been authorised for an
-    /// organisation gets HTTP 200 with partial data and a
-    /// RESOURCE_LIMITS_EXCEEDED error per refused field. Nothing else
-    /// treats that as a failure, so the user saw an empty list under a
-    /// green status bar.
+    /// `RESOURCE_LIMITS_EXCEEDED` is a BUDGET error -- the query
+    /// exceeded a node or per-field time limit -- not an authorisation
+    /// one. v3.2.4 shipped a message blaming SAML SSO, which was wrong:
+    /// a SAML refusal is type FORBIDDEN with a `saml_failure` hint, and
+    /// the app uses the same token `gh` does, so a working `gh` rules
+    /// authorisation out entirely.
+    ///
+    /// It arrives as HTTP 200 with partial data, so nothing else treats
+    /// it as a failure and the user saw an empty list under a green
+    /// status bar.
+    ///
+    /// The message deliberately does NOT tell the user to do anything.
+    /// The previous one sent them to `gh auth login`, which cannot fix a
+    /// budget error -- a confident wrong instruction is worse than
+    /// admitting the app is asking for too much.
     #[error(
-        "GitHub refused {0} field(s). If your organisation uses SAML single sign-on, \
-         your token needs to be authorised for it: run `gh auth login` again and \
-         approve the organisation when prompted."
+        "GitHub could not return {0} of the fields requested; the query asks for more \
+         than it will compute at once. Some pull requests may be missing or incomplete."
     )]
-    Forbidden(usize),
+    OverBudget(usize),
     /// A concurrent chunk task panicked or was cancelled. Surfaced rather
     /// than ignored: silently dropping a chunk would render a short series
     /// that looks like real data.
@@ -97,7 +106,7 @@ impl ClientError {
             // NOT transient. An unauthorised token fails identically on
             // every tick, and waiting for a second opinion just delays
             // the one message the user can act on.
-            ClientError::Forbidden(_) => false,
+            ClientError::OverBudget(_) => false,
         }
     }
 }
@@ -611,11 +620,30 @@ async fn graphql_partial_ok(
             let mut distinct: Vec<&str> = types.clone();
             distinct.sort_unstable();
             distinct.dedup();
+            // One EXAMPLE message, not just the types. Diagnosing this
+            // stalled for days because the log recorded
+            // "RESOURCE_LIMITS_EXCEEDED" 124 times and never the text,
+            // which is where GitHub says WHICH limit and often which
+            // field. One is enough -- they repeat -- and it is capped so
+            // a long message cannot flood the log.
+            //
+            // GitHub's own words, and it does not name repositories in
+            // them; the privacy rule still holds for everything the app
+            // writes itself.
+            let example: String = errs
+                .first()
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("")
+                .chars()
+                .take(200)
+                .collect();
             log::warn!(
                 "GraphQL returned {} error(s) alongside usable data; \
-                 some results may be missing. Types: {:?}",
+                 some results may be missing. Types: {:?}. Example: {}",
                 errs.len(),
-                distinct
+                distinct,
+                example
             );
 
             // RESOURCE_LIMITS_EXCEEDED on an SSO-protected org is not a
@@ -630,7 +658,7 @@ async fn graphql_partial_ok(
             // guessable: `gh auth login` again and authorise the token
             // for the organisation.
             if types.contains(&"RESOURCE_LIMITS_EXCEEDED") {
-                return Err(ClientError::Forbidden(errs.len()));
+                return Err(ClientError::OverBudget(errs.len()));
             }
 
             Ok(d.clone())
@@ -1088,17 +1116,18 @@ mod tests {
         assert_eq!(prs[0].number, 42);
     }
 
-    /// RESOURCE_LIMITS_EXCEEDED means the token was refused the fields.
+    /// RESOURCE_LIMITS_EXCEEDED is a BUDGET error, and the message must
+    /// not claim otherwise.
     ///
-    /// Reported from an enterprise account whose token was not
-    /// authorised for SAML SSO: 124 of these arrived as HTTP 200 with
-    /// partial data, so nothing treated it as a failure and the user saw
-    /// an empty list under a green status bar for days.
-    ///
-    /// It is the one error here the user can actually fix, and the fix
-    /// is not guessable from "some results may be missing".
+    /// v3.2.4 shipped a message blaming SAML SSO and telling the user to
+    /// run `gh auth login`. That was wrong: a SAML refusal is type
+    /// FORBIDDEN, and the app uses the same token `gh` does -- so a
+    /// working `gh` rules authorisation out. Sending someone to
+    /// re-authenticate over a budget error is worse than saying nothing,
+    /// which is why this asserts the WRONG advice is absent as well as
+    /// the right description being present.
     #[tokio::test]
-    async fn an_sso_refusal_is_reported_rather_than_swallowed() {
+    async fn an_over_budget_response_is_reported_without_bad_advice() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
@@ -1114,13 +1143,17 @@ mod tests {
 
         let err = client_for(&server).await.fetch_prs().await.unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("single sign-on"), "must name the cause: {msg}");
-        assert!(msg.contains("gh auth login"), "must name the fix: {msg}");
-        // Waiting cannot help, so it must not be suppressed as weather.
         assert!(
-            !err.is_transient(),
-            "an unauthorised token fails every tick"
+            msg.contains("could not return"),
+            "must say what happened: {msg}"
         );
+        assert!(
+            !msg.contains("sign-on") && !msg.contains("gh auth login"),
+            "must not send the user to re-authenticate over a budget error: {msg}"
+        );
+        // The same query fails the same way next tick, so waiting for a
+        // second opinion only delays the message.
+        assert!(!err.is_transient(), "an over-budget query fails every tick");
     }
 
     /// A partial success keeps its data AND surfaces the errors.
