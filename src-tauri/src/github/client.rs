@@ -32,6 +32,19 @@ pub enum ClientError {
     /// wrong thing.
     #[error("GitHub could not answer (it returned a {0} rather than data). This usually clears on its own.")]
     NotJson(String),
+    /// GitHub answered, resolved the nodes, and refused the fields.
+    ///
+    /// The SAML-SSO shape: a token that has not been authorised for an
+    /// organisation gets HTTP 200 with partial data and a
+    /// RESOURCE_LIMITS_EXCEEDED error per refused field. Nothing else
+    /// treats that as a failure, so the user saw an empty list under a
+    /// green status bar.
+    #[error(
+        "GitHub refused {0} field(s). If your organisation uses SAML single sign-on, \
+         your token needs to be authorised for it: run `gh auth login` again and \
+         approve the organisation when prompted."
+    )]
+    Forbidden(usize),
     /// A concurrent chunk task panicked or was cancelled. Surfaced rather
     /// than ignored: silently dropping a chunk would render a short series
     /// that looks like real data.
@@ -81,6 +94,10 @@ impl ClientError {
             // server gave up rather than objected, so the next tick may
             // well succeed.
             ClientError::NotJson(_) => true,
+            // NOT transient. An unauthorised token fails identically on
+            // every tick, and waiting for a second opinion just delays
+            // the one message the user can act on.
+            ClientError::Forbidden(_) => false,
         }
     }
 }
@@ -269,7 +286,14 @@ impl GitHubClient {
                 "query": PRS_QUERY,
                 "variables": {
                     "q": "is:pr is:open author:@me",
-                    "reviewing": "is:pr is:open review-requested:@me"
+                    "reviewing": "is:pr is:open review-requested:@me",
+                    // REQUIRED. `$first` is `Int!`, so omitting it makes
+                    // GitHub reject the whole query -- "Variable $first
+                    // of type Int! was provided invalid value" -- with
+                    // no data at all. It was introduced when the page
+                    // size became a variable and this call site was
+                    // missed, which broke the review queue outright.
+                    "first": PAGE_FULL,
                 }
             }))
             .await?;
@@ -581,12 +605,34 @@ async fn graphql_partial_ok(
                 .iter()
                 .filter_map(|e| e.get("type").and_then(|t| t.as_str()))
                 .collect();
+            // The types repeat -- 124 errors is usually one cause, not
+            // 124 -- so report the distinct set and a count rather than
+            // printing the same string a hundred times.
+            let mut distinct: Vec<&str> = types.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
             log::warn!(
                 "GraphQL returned {} error(s) alongside usable data; \
                  some results may be missing. Types: {:?}",
                 errs.len(),
-                types
+                distinct
             );
+
+            // RESOURCE_LIMITS_EXCEEDED on an SSO-protected org is not a
+            // rate limit and not a timeout: the token resolves the node
+            // and is then refused the fields. It arrives as HTTP 200
+            // with partial data, so nothing else in the app treats it as
+            // a failure -- the user sees a short or empty list under a
+            // green status bar and no explanation.
+            //
+            // Surfaced rather than only logged, because it is the one
+            // error here the user can actually fix, and the fix is not
+            // guessable: `gh auth login` again and authorise the token
+            // for the organisation.
+            if types.contains(&"RESOURCE_LIMITS_EXCEEDED") {
+                return Err(ClientError::Forbidden(errs.len()));
+            }
+
             Ok(d.clone())
         }
         (Some(d), _) => Ok(d.clone()),
@@ -788,6 +834,31 @@ mod tests {
         assert!(msg.contains("could not answer"), "{msg}");
         // And it is still weather, so one blip stays quiet.
         assert!(err.is_transient(), "{msg}");
+    }
+
+    /// `$first` is non-null, so every call site must pass it.
+    ///
+    /// It became a variable when the page size did, and
+    /// `fetch_prs_and_reviewing` was missed -- GitHub then rejected that
+    /// query outright ("Variable $first of type Int! was provided
+    /// invalid value") and the review queue returned nothing at all.
+    /// This asserts the review path specifically, since that is the one
+    /// that broke.
+    #[tokio::test]
+    async fn every_call_site_supplies_the_page_size() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("\"first\":"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"authored": {"nodes": []}, "reviewing": {"nodes": []}}
+            })))
+            .mount(&server)
+            .await;
+
+        // Unmatched requests 404 in wiremock, so a call that omits
+        // `first` fails here rather than passing silently.
+        assert!(client_for(&server).await.fetch_reviewing().await.is_ok());
     }
 
     /// The most expensive query the app makes, and the one a reported
@@ -1015,6 +1086,41 @@ mod tests {
         let prs = client_for(&server).await.fetch_prs().await.unwrap();
         assert_eq!(prs.len(), 3, "a partial success must not blank the list");
         assert_eq!(prs[0].number, 42);
+    }
+
+    /// RESOURCE_LIMITS_EXCEEDED means the token was refused the fields.
+    ///
+    /// Reported from an enterprise account whose token was not
+    /// authorised for SAML SSO: 124 of these arrived as HTTP 200 with
+    /// partial data, so nothing treated it as a failure and the user saw
+    /// an empty list under a green status bar for days.
+    ///
+    /// It is the one error here the user can actually fix, and the fix
+    /// is not guessable from "some results may be missing".
+    #[tokio::test]
+    async fn an_sso_refusal_is_reported_rather_than_swallowed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "authored": { "nodes": [] } },
+                "errors": [
+                    {"type": "RESOURCE_LIMITS_EXCEEDED", "message": "refused"},
+                    {"type": "RESOURCE_LIMITS_EXCEEDED", "message": "refused"}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server).await.fetch_prs().await.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("single sign-on"), "must name the cause: {msg}");
+        assert!(msg.contains("gh auth login"), "must name the fix: {msg}");
+        // Waiting cannot help, so it must not be suppressed as weather.
+        assert!(
+            !err.is_transient(),
+            "an unauthorised token fails every tick"
+        );
     }
 
     /// A partial success keeps its data AND surfaces the errors.
