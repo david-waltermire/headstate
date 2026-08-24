@@ -73,6 +73,7 @@ pub fn run() {
             commands::get_reviewing,
             commands::get_pr_detail,
             commands::act_on_pr,
+            commands::build_target,
             commands::get_viewer,
             commands::rerun_checks,
             commands::get_ui_prefs,

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, type ReactNode } from "react";
 import { clearPollError, usePollError, useStoreError } from "../api/hooks";
+import { ReportLink } from "./ReportLink";
 import { getAuthState } from "../api/tauri";
 import { dismissSplash } from "../splash";
 
@@ -69,6 +70,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
           >
             <span className="flex-1">
             Background refresh failed: {pollError}
+            {/* The errors that most need reporting are exactly the ones
+                a user cannot diagnose, and the banner offered nothing.
+                Opens a PREFILLED form rather than posting: the user is
+                the only one who can confirm nothing sensitive survived
+                scrubbing. */}
+            <ReportLink error={pollError} />
             {/* The token is read once at startup and held for the process
                 lifetime, so a revoked or expired one 401s forever with the
                 list silently going stale. A relaunch is the actual fix;

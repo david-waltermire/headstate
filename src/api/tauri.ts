@@ -86,6 +86,12 @@ export const setNotifyPrefs = (prefs: NotifyPrefs) =>
 export const rerunChecks = (repo: string, number: number, runId: number) =>
   invoke<void>("rerun_checks", { repo, number, runId });
 
+/// The platform and architecture this build was compiled for.
+///
+/// From Rust compile-time constants rather than the webview, so it
+/// cannot disagree with the binary the user is running.
+export const buildTarget = () => invoke<[string, string]>("build_target");
+
 /// The authenticated user's login.
 ///
 /// Asked once and cached forever: it cannot change during a session.

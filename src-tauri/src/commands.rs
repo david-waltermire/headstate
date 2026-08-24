@@ -169,6 +169,19 @@ pub async fn rerun_checks(
     }
 }
 
+/// The platform this build is running on.
+///
+/// Compile-time constants, so this cannot disagree with the binary. Used
+/// by the error report, where both diagnoses so far needed to know the
+/// platform and neither could get it from the error text.
+#[tauri::command]
+pub fn build_target() -> (String, String) {
+    (
+        std::env::consts::OS.to_string(),
+        std::env::consts::ARCH.to_string(),
+    )
+}
+
 /// Who the token belongs to.
 ///
 /// Cached forever by the caller: a login does not change during a
