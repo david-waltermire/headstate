@@ -18,7 +18,7 @@ use chrono::{DateTime, Duration, Utc};
 /// has to name which list it is reading and cannot silently take the wrong
 /// one when a third is added.
 pub const PRS_QUERY: &str = r#"
-query($q: String!, $reviewing: String!) {
+query($q: String!, $reviewing: String!, $first: Int!) {
   rateLimit { cost remaining resetAt }
   # Who we are. The app previously relied entirely on `@me` qualifiers and
   # never learned the login, so it could not tell its own pull requests
@@ -28,7 +28,7 @@ query($q: String!, $reviewing: String!) {
   #
   # MEASURED FREE: this query costs 1 point with and without this field.
   viewer { login }
-  authored: search(query: $q, type: ISSUE, first: 100) {
+  authored: search(query: $q, type: ISSUE, first: $first) {
     issueCount
     nodes {
       ... on PullRequest {
@@ -44,7 +44,7 @@ query($q: String!, $reviewing: String!) {
       }
     }
   }
-  reviewing: search(query: $reviewing, type: ISSUE, first: 100) {
+  reviewing: search(query: $reviewing, type: ISSUE, first: $first) {
     issueCount
     nodes {
       ... on PullRequest {

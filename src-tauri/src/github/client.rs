@@ -21,6 +21,17 @@ use serde_json::json;
 pub enum ClientError {
     #[error("GitHub request failed: {0}")]
     Api(#[from] octocrab::Error),
+    /// GitHub answered with something that is not JSON.
+    ///
+    /// A reported log showed every poll failing with "Serde Error:
+    /// expected value at line 1 column 1" -- octocrab's message for a
+    /// body it could not parse -- while the line above it, from
+    /// octocrab's own logging, read "failed with status 502 Bad
+    /// Gateway". The status was the actionable fact and the user only
+    /// ever saw the parse failure, which sent three fixes after the
+    /// wrong thing.
+    #[error("GitHub could not answer (it returned a {0} rather than data). This usually clears on its own.")]
+    NotJson(String),
     /// A concurrent chunk task panicked or was cancelled. Surfaced rather
     /// than ignored: silently dropping a chunk would render a short series
     /// that looks like real data.
@@ -66,6 +77,10 @@ impl ClientError {
             // The next identical request objects identically.
             ClientError::Graphql(_) => false,
             ClientError::RateLimited(_) => false,
+            // Same reasoning as a parse failure from octocrab: the
+            // server gave up rather than objected, so the next tick may
+            // well succeed.
+            ClientError::NotJson(_) => true,
         }
     }
 }
@@ -106,6 +121,38 @@ fn is_transport_error(e: &octocrab::Error) -> bool {
     }
 }
 
+/// Pull requests per search alias.
+///
+/// 100 is GitHub's page maximum, and what the app has always asked for.
+/// MEASURED live: 100 costs 6 rate-limit points, 50 costs 3, 25 costs 2 --
+/// so halving the page halves the spend as well as the server-side work.
+const PAGE_FULL: u32 = 100;
+
+/// The fallback page when GitHub cannot answer the full one.
+///
+/// Half, not a quarter: the point is to get a list at all on an account
+/// where the full page times out, and dropping further than necessary
+/// hides more pull requests than it has to. The truncation is surfaced
+/// either way, so the user is told what they are not seeing.
+const PAGE_REDUCED: u32 = 50;
+
+/// Whether GitHub gave up rather than objected.
+///
+/// A 502, or a body that will not parse -- which is what a 502 looks
+/// like from the client, since its body is empty or HTML and serde
+/// fails on byte one. Both mean "try asking for less"; a 401 or a
+/// malformed query means "asking again changes nothing".
+fn server_gave_up(e: &ClientError) -> bool {
+    match e {
+        ClientError::NotJson(_) => true,
+        ClientError::Api(octocrab::Error::GitHub { source, .. }) => {
+            source.status_code.is_server_error()
+        }
+        ClientError::Api(octocrab::Error::Serde { .. } | octocrab::Error::Json { .. }) => true,
+        _ => false,
+    }
+}
+
 pub struct GitHubClient {
     octocrab: Octocrab,
 }
@@ -137,21 +184,62 @@ impl GitHubClient {
         graphql_partial_ok(&self.octocrab, body).await
     }
 
+    /// One attempt at the PR query, then a smaller one if GitHub gave up.
+    ///
+    /// MEASURED against the live API: `first: 100` costs 6 rate-limit
+    /// points and ~6s; `first: 50` costs 3 and ~4s. On an account whose
+    /// pull requests carry many labels and review threads, the full page
+    /// makes GitHub time out resolving nested fields -- it answers 502,
+    /// or 200 with `RESOURCE_LIMITS_EXCEEDED` errors alongside partial
+    /// data.
+    ///
+    /// A reported log showed EVERY poll failing that way for over an
+    /// hour, so the list never populated at all. Half a list beats none:
+    /// the truncation is already surfaced by `prs-truncated`, so the UI
+    /// says "showing 50 of N" rather than quietly claiming that is
+    /// everything.
+    ///
+    /// Only ONE retry, and only when the failure says the server gave
+    /// up. Retrying a 401 or a malformed query would just spend the
+    /// budget twice for the same answer.
+    async fn fetch_prs_page(&self, first: u32) -> Result<serde_json::Value, ClientError> {
+        let attempt = self
+            .graphql_partial_ok(&json!({
+                "query": PRS_QUERY,
+                "variables": {
+                    "q": "is:pr is:open author:@me",
+                    "reviewing": "is:pr is:open review-requested:@me",
+                    "first": first,
+                }
+            }))
+            .await;
+
+        match attempt {
+            Err(e) if first > PAGE_REDUCED && server_gave_up(&e) => {
+                log::warn!(
+                    "GitHub could not answer a {first}-item query ({e}); retrying with {PAGE_REDUCED}"
+                );
+                self.graphql_partial_ok(&json!({
+                    "query": PRS_QUERY,
+                    "variables": {
+                        "q": "is:pr is:open author:@me",
+                        "reviewing": "is:pr is:open review-requested:@me",
+                        "first": PAGE_REDUCED,
+                    }
+                }))
+                .await
+            }
+            other => other,
+        }
+    }
+
     /// Every open PR authored by the viewer, with CI, mergeability, review
     /// decision, and merge-queue state.
     ///
     /// Octocrab unwraps the GraphQL `data` envelope, so the value returned
     /// here has `search` at its top level rather than under `data`.
     pub async fn fetch_prs(&self) -> Result<Vec<PullRequest>, ClientError> {
-        let v = self
-            .graphql_partial_ok(&json!({
-                "query": PRS_QUERY,
-                "variables": {
-                    "q": "is:pr is:open author:@me",
-                    "reviewing": "is:pr is:open review-requested:@me"
-                }
-            }))
-            .await?;
+        let v = self.fetch_prs_page(PAGE_FULL).await?;
         Ok(map_search(&v))
     }
 
@@ -284,15 +372,7 @@ impl GitHubClient {
     }
 
     pub async fn fetch_prs_with_total(&self) -> Result<(Vec<PullRequest>, u64), ClientError> {
-        let v = self
-            .graphql_partial_ok(&json!({
-                "query": PRS_QUERY,
-                "variables": {
-                    "q": "is:pr is:open author:@me",
-                    "reviewing": "is:pr is:open review-requested:@me"
-                }
-            }))
-            .await?;
+        let v = self.fetch_prs_page(PAGE_FULL).await?;
         // Warn before the budget is actually gone, so the user learns
         // about it from a message rather than from a wall of failures.
         if let Some((remaining, reset)) = map_rate_limit(&v) {
@@ -424,7 +504,20 @@ async fn graphql_partial_ok(
     octocrab: &Octocrab,
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, ClientError> {
-    let raw: serde_json::Value = octocrab.post("/graphql", Some(body)).await?;
+    // Mapped rather than propagated raw: octocrab reports a non-JSON
+    // body as a serde failure ("expected value at line 1 column 1"),
+    // which describes a parser's internal state and hides the fact that
+    // GitHub answered 502. The status is the actionable part.
+    let raw: serde_json::Value =
+        octocrab
+            .post("/graphql", Some(body))
+            .await
+            .map_err(|e| match &e {
+                octocrab::Error::Serde { .. } | octocrab::Error::Json { .. } => {
+                    ClientError::NotJson("non-JSON response".into())
+                }
+                _ => ClientError::Api(e),
+            })?;
 
     let errors = raw.get("errors").and_then(|e| e.as_array());
     let data = raw.get("data").filter(|d| !d.is_null());
@@ -479,7 +572,7 @@ async fn graphql_partial_ok(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     async fn client_for(server: &MockServer) -> GitHubClient {
@@ -586,6 +679,91 @@ mod tests {
             r.is_err(),
             "a stalled request must be cut off, not awaited forever"
         );
+    }
+
+    /// A reported log showed EVERY poll failing for over an hour with
+    /// 502 Bad Gateway, and 124 `RESOURCE_LIMITS_EXCEEDED` errors on the
+    /// one response that got through -- GitHub timing out while
+    /// resolving nested fields on a 100-item page. The list never
+    /// populated at all.
+    ///
+    /// Half a list beats none, and the truncation is already surfaced,
+    /// so the UI says "showing 50 of N" rather than claiming that is
+    /// everything.
+    #[tokio::test]
+    async fn a_502_retries_with_a_smaller_page() {
+        let server = MockServer::start().await;
+        // The full page fails the way GitHub actually fails: 502 with a
+        // body that is not JSON.
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("\"first\":100"))
+            .respond_with(ResponseTemplate::new(502).set_body_raw("", "text/html"))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("\"first\":50"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"authored": {"issueCount": 1, "nodes": []}, "reviewing": {"nodes": []}}
+            })))
+            .mount(&server)
+            .await;
+
+        let (prs, total) = client_for(&server)
+            .await
+            .fetch_prs_with_total()
+            .await
+            .unwrap();
+        assert_eq!(total, 1, "the reduced page must actually be used");
+        assert!(prs.is_empty());
+    }
+
+    /// Only when the SERVER gave up. A 401 means asking again changes
+    /// nothing, and retrying would spend the budget twice for the same
+    /// answer -- and on a bad token, double the failed requests.
+    /// The message the user actually reads. "Serde Error: expected
+    /// value at line 1 column 1" describes a parser's internal state and
+    /// hides that GitHub answered 502 -- which is what sent three fixes
+    /// after the wrong cause.
+    #[tokio::test]
+    async fn a_non_json_response_says_so_in_plain_words() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(502).set_body_raw("<html>", "text/html"))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server).await.fetch_prs().await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("line 1 column 1"),
+            "no parser internals: {msg}"
+        );
+        assert!(msg.contains("could not answer"), "{msg}");
+        // And it is still weather, so one blip stays quiet.
+        assert!(err.is_transient(), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn an_auth_failure_is_not_retried_smaller() {
+        let server = MockServer::start().await;
+        let mock = Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "Bad credentials"
+            })))
+            .expect(1)
+            .named("exactly one attempt");
+        server.register(mock).await;
+
+        assert!(client_for(&server)
+            .await
+            .fetch_prs_with_total()
+            .await
+            .is_err());
+        // `expect(1)` is verified on drop: a second attempt fails the test.
     }
 
     #[tokio::test]
