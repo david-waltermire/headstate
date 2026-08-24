@@ -1,3 +1,4 @@
+import { ExternalLink } from "./ExternalLink";
 import { getVersion } from "@tauri-apps/api/app";
 import { latestRelease } from "../api/tauri";
 import { Settings } from "lucide-react";
@@ -141,15 +142,13 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
       {/* Unobtrusive on purpose: an update is worth knowing about, not
           worth interrupting for. */}
       {newer ? (
-        <a
+        <ExternalLink
           href="https://github.com/pktstorm/headstate/releases/latest"
-          target="_blank"
-          rel="noreferrer noopener"
           className="text-[#58a6ff] hover:underline"
           title={`Headstate ${newer} is available`}
         >
           v{newer} available
-        </a>
+        </ExternalLink>
       ) : null}
 
       <button

@@ -1,3 +1,4 @@
+import { ExternalLink } from "./ExternalLink";
 import {
   Check,
   CircleDot,
@@ -240,7 +241,7 @@ export function PrRow({
         <div className="flex flex-wrap items-center gap-2">
           {/* The title opens the DETAIL VIEW, not github.com.
               
-              It used to be an `<a target="_blank">` that stopped
+              It used to be an `<ExternalLink >` that stopped
               propagation, so clicking the most obvious target in the row
               launched a browser tab and never reached `onOpen`. That
               read as a To review bug because `canWrite` is false there,
@@ -254,15 +255,12 @@ export function PrRow({
           {onOpen ? (
             <span className="font-semibold text-[#e6edf3]">{pr.title}</span>
           ) : (
-            <a
+            <ExternalLink
               href={pr.url}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => e.stopPropagation()}
               className="font-semibold text-[#e6edf3] hover:text-[#4493f8]"
             >
               {pr.title}
-            </a>
+            </ExternalLink>
           )}
           {/* The number moves up in dense mode: it lives on the prose
               line otherwise, and that line is gone here. Without it a

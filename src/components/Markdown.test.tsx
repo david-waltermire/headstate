@@ -1,4 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { vi } from "vitest";
+const openUrl = vi.fn<(url: string) => Promise<void>>(() => Promise.resolve());
+vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (u: string) => openUrl(u) }));
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { Markdown } from "./Markdown";
 
@@ -42,11 +45,17 @@ describe("Markdown", () => {
   });
 
   // A link must never navigate the app webview itself.
+  // The intent is unchanged -- a link must open the user's browser, not
+  // navigate the app -- but `target="_blank"` was never the mechanism
+  // that achieved it. In a packaged Tauri window there is no browser
+  // context to open a tab in, so the attribute did nothing; it only
+  // appeared to work in `tauri dev`, where the webview IS a browser.
   it("opens links in the system browser, not the app", () => {
     const { container } = render(<Markdown>{"[click](https://example.com)"}</Markdown>);
     const a = container.querySelector("a");
-    expect(a?.getAttribute("target")).toBe("_blank");
-    expect(a?.getAttribute("rel")).toContain("noopener");
+    expect(a?.getAttribute("href")).toBe("https://example.com");
+    fireEvent.click(a as Element);
+    expect(openUrl).toHaveBeenCalledWith("https://example.com");
   });
 
   it("survives an empty body", () => {

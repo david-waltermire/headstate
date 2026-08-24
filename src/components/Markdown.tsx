@@ -1,3 +1,4 @@
+import { ExternalLink } from "./ExternalLink";
 import rehypeSanitize from "rehype-sanitize";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,7 +10,7 @@ import remarkGfm from "remark-gfm";
 ///
 /// - `rehype-sanitize` strips scripts, event handlers and iframes. A
 ///   maintained sanitiser, not a hand-rolled regex.
-/// - Links open in the SYSTEM BROWSER via `target="_blank"`, never in the
+/// - Links open in the SYSTEM BROWSER via the opener plugin, never in the
 ///   app webview, so a link can never navigate the app itself.
 /// - The token lives in Rust memory and is never exposed to the webview,
 ///   so rendered content has nothing to read even if it could run.
@@ -24,14 +25,17 @@ export function Markdown({ children }: { children: string }) {
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSanitize]}
         components={{
-          a: ({ ...props }) => (
-            <a
-              {...props}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="text-[#4493f8] hover:underline"
-            />
-          ),
+          // `href` is optional in react-markdown's props but required
+          // by ExternalLink, and an anchor with no target is not a link
+          // -- render it as plain text rather than inventing a URL.
+          a: ({ href, children }) =>
+            href ? (
+              <ExternalLink href={href} className="text-[#4493f8] hover:underline">
+                {children}
+              </ExternalLink>
+            ) : (
+              <span>{children}</span>
+            ),
           code: ({ ...props }) => (
             <code {...props} className="rounded bg-[#161b22] px-1 py-0.5 font-mono text-xs" />
           ),

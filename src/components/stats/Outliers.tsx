@@ -1,3 +1,4 @@
+import { ExternalLink } from "../ExternalLink";
 import { Card } from "@/components/ui/card";
 import type { MergedPr } from "@/types/pr";
 
@@ -29,11 +30,9 @@ function OutlierList({
       <div className="text-xs text-[#8b949e]">{hint}</div>
       <div className="mt-3 flex flex-col gap-1">
         {prs.map((pr) => (
-          <a
+          <ExternalLink
             key={`${pr.repo}#${pr.number}`}
             href={pr.url}
-            target="_blank"
-            rel="noreferrer"
             className="flex items-baseline gap-3 rounded px-2 py-1.5 text-sm hover:bg-[#161b22]"
           >
             <span className="min-w-0 flex-1 truncate text-[#e6edf3]">{pr.title}</span>
@@ -41,7 +40,7 @@ function OutlierList({
             <span className="shrink-0 tabular-nums text-xs text-[#8b949e]">
               {format(pr)}
             </span>
-          </a>
+          </ExternalLink>
         ))}
       </div>
     </Card>

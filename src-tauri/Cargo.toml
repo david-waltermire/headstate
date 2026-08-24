@@ -48,6 +48,11 @@ tauri-plugin-notification = "2.3.3"
 # Start at login. A tray app whose value is a live badge while hidden is
 # weakened by requiring a manual launch every boot.
 tauri-plugin-autostart = "2.5.1"
+# Opening a URL in the user's browser. A plain `target="_blank"` anchor
+# does nothing in a packaged Tauri window -- there is no browser context
+# to open a tab in -- so every external link in the app was inert. It
+# works in `tauri dev`, which is why nobody noticed.
+tauri-plugin-opener = "2"
 
 [dev-dependencies]
 temp-env = "0.3"

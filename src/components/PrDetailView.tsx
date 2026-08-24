@@ -1,4 +1,5 @@
-import { ArrowLeft, Trash2, Bot, Check, CircleDot, CircleSlash, ExternalLink, X } from "lucide-react";
+import { ExternalLink } from "./ExternalLink";
+import { ArrowLeft, Trash2, Bot, Check, CircleDot, CircleSlash, ExternalLink as ExternalLinkIcon, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   useCommentOnPr,
@@ -42,14 +43,12 @@ function CheckRow({ name, state, url }: { name: string; state: string; url: stri
   // No link when GitHub gives no URL, rather than an anchor that goes
   // nowhere.
   return url ? (
-    <a
+    <ExternalLink
       href={url}
-      target="_blank"
-      rel="noreferrer noopener"
       className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-[#161b22]"
     >
       {body}
-    </a>
+    </ExternalLink>
   ) : (
     <div className="flex items-center gap-2 px-2 py-1.5 text-sm">{body}</div>
   );
@@ -268,15 +267,13 @@ export function PrDetailView({
       ) : null}
 
       <div className="flex items-center gap-2">
-        <a
+        <ExternalLink
           href={pr.url}
-          target="_blank"
-          rel="noreferrer noopener"
           className="flex w-fit items-center gap-1.5 rounded border border-[#30363d] px-3 py-1.5 text-sm hover:bg-[#161b22]"
         >
-          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+          <ExternalLinkIcon className="h-3.5 w-3.5" aria-hidden="true" />
           View on GitHub
-        </a>
+        </ExternalLink>
         {/* Worth more here than on a row: this view has the per-check
             names and URLs, so the prompt names the jobs that actually
             failed rather than saying the checks were not loaded. */}

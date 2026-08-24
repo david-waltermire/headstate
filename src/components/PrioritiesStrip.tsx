@@ -1,3 +1,4 @@
+import { ExternalLink } from "./ExternalLink";
 import { AlertTriangle } from "lucide-react";
 import type { PullRequest } from "@/types/pr";
 import { needsAttention } from "@/lib/derive";
@@ -79,14 +80,12 @@ export function PrioritiesStrip({
               </div>
             ) : (
               <div className="px-4 py-2">
-                <a
+                <ExternalLink
                   href={pr.url}
-                  target="_blank"
-                  rel="noreferrer"
                   className="text-[#e6edf3] hover:text-[#4493f8]"
                 >
                   {pr.title}
-                </a>
+                </ExternalLink>
                 <span className="ml-2 text-xs text-[#8b949e]">
                   {pr.repo}#{pr.number} — {blockedReasons(pr).join(" and ")}
                 </span>

@@ -46,6 +46,7 @@ pub fn run() {
         // rotating file beside it. Never log the token, and never log a
         // repository owner -- see CONTRIBUTING and check-privacy.sh.
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init())
         // No launch args: the app already opens hidden-to-tray on its
         // own terms, and passing --hidden here would be a second, easily
         // divergent source of truth for that behaviour.

@@ -1,10 +1,11 @@
+import { ExternalLink } from "./ExternalLink";
 import { useEffect, useState } from "react";
 import { reportUrl } from "../lib/reportError";
 
 /// "Report this" on an error banner.
 ///
 /// An anchor, not a button that opens something: the app reaches the
-/// browser through `target="_blank"` everywhere else, and the URL is a
+/// browser through `ExternalLink` everywhere else, and the URL is a
 /// prefilled FORM rather than a submission -- the user is the only one
 /// who can confirm nothing sensitive survived scrubbing, and filing
 /// publicly on someone's behalf without showing them is not something an
@@ -30,13 +31,11 @@ export function ReportLink({ error }: { error: string }) {
 
   if (url === null) return null;
   return (
-    <a
+    <ExternalLink
       href={url}
-      target="_blank"
-      rel="noreferrer"
       className="ml-2 underline hover:no-underline"
     >
       Report this
-    </a>
+    </ExternalLink>
   );
 }

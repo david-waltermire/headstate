@@ -1,4 +1,5 @@
-import { Bot, Copy, ExternalLink, MoreHorizontal } from "lucide-react";
+import { ExternalLink } from "./ExternalLink";
+import { Bot, Copy, ExternalLink as ExternalLinkIcon, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useActOnPr, useSetAutoMerge, useUpdatePrBranch } from "../api/hooks";
@@ -243,17 +244,15 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
             <Copy className="h-3.5 w-3.5" aria-hidden="true" />
             Copy branch name
           </button>
-          <a
+          <ExternalLink
             role="menuitem"
             href={pr.url}
-            target="_blank"
-            rel="noreferrer noopener"
             onClick={() => setOpen(false)}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-[#e6edf3] hover:bg-[#21262d]"
           >
-            <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+            <ExternalLinkIcon className="h-3.5 w-3.5" aria-hidden="true" />
             View on GitHub
-          </a>
+          </ExternalLink>
         </div>
       ) : null}
 

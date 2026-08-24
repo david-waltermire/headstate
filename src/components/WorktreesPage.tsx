@@ -1,3 +1,4 @@
+import { ExternalLink } from "./ExternalLink";
 import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import {
@@ -148,15 +149,12 @@ function Row({
             never showed it here. Display only: a wrong pairing must not
             be able to authorise a deletion. */}
         {pr ? (
-          <a
+          <ExternalLink
             href={pr.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            onClick={(e) => e.stopPropagation()}
             className="text-[#58a6ff] hover:underline"
           >
             {" · "}#{pr.number}
-          </a>
+          </ExternalLink>
         ) : null}
         {/* Why you would come back to this checkout. Display only, like
             the number itself: a wrong pairing must never authorise a

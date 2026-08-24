@@ -12,9 +12,9 @@ import { buildReport, issueUrl } from "./report";
 /// a report that never opens, so an unknown field says so rather than
 /// aborting.
 ///
-/// Returns a URL rather than opening one: the app reaches the browser
-/// through plain `target="_blank"` anchors everywhere else, and adding a
-/// shell-open plugin for this would be a new capability for no gain.
+/// Returns a URL rather than opening one: the caller renders it as an
+/// `ExternalLink`, which is how every external link in the app reaches
+/// the browser.
 export async function reportUrl(error: string): Promise<string> {
   const version = await getVersion().catch(() => "unknown");
   const [platform, arch] = await buildTarget().catch(() => ["unknown", "unknown"]);
