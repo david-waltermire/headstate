@@ -79,6 +79,25 @@ impl ClientError {
 fn is_transport_error(e: &octocrab::Error) -> bool {
     match e {
         octocrab::Error::Service { .. } | octocrab::Error::Hyper { .. } => true,
+        // A body that will not parse is the same network fault as a
+        // dropped connection, not GitHub objecting to anything.
+        //
+        // Reported from a fresh install: two banners within 30 seconds,
+        // "client error (SendRequest)" and "expected value at line 1
+        // column 1". The first was already suppressed as weather; the
+        // second fell through to `_ => false`, was treated as
+        // actionable, and surfaced immediately -- so the same fault
+        // alarmed the user because half of it happened to arrive as a
+        // parse failure. serde's "expected value at line 1 column 1" is
+        // its message for an EMPTY or non-JSON body: a truncated
+        // response, a captive portal, a proxy answering with HTML.
+        //
+        // The trade, stated so it is a decision and not an oversight: a
+        // PERSISTENT parse failure -- GitHub changing a field type --
+        // now takes two ticks to report rather than one. That is the
+        // same trade `Service` already accepts, and the alternative is
+        // alarming every user whose network hiccups once.
+        octocrab::Error::Serde { .. } | octocrab::Error::Json { .. } => true,
         // 5xx is the server having a bad time, which the next tick may
         // well survive. 4xx is us being wrong, and repeating will not
         // help.
@@ -501,6 +520,38 @@ mod tests {
             .await;
 
         assert!(client_for(&server).await.fetch_prs().await.is_err());
+    }
+
+    /// Reported from a fresh install: two banners within 30 seconds,
+    /// "client error (SendRequest)" and "expected value at line 1
+    /// column 1". Both are the SAME network fault. The first was already
+    /// suppressed as weather; the second was treated as actionable and
+    /// surfaced immediately.
+    ///
+    /// Served through a real mock rather than constructed by hand:
+    /// octocrab's `Serde` variant has no public constructor, and going
+    /// through an actual truncated response proves the classification
+    /// applies to what the client genuinely produces rather than to an
+    /// error I built to match it.
+    #[tokio::test]
+    async fn a_truncated_response_is_treated_as_weather() {
+        let server = MockServer::start().await;
+        // An empty 200 body: what a captive portal, a proxy, or a
+        // half-open connection produces. serde's "expected value at
+        // line 1 column 1" is exactly its message for this.
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw("", "application/json"))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server).await.fetch_prs().await.unwrap_err();
+        assert!(
+            err.is_transient(),
+            "a truncated response must wait for a second opinion, not alarm the user: {err}"
+        );
+        // `should_surface` is private to the poll module and asserts the
+        // consequence there; what this owns is the classification.
     }
 
     #[tokio::test]

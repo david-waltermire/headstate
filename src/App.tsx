@@ -7,6 +7,7 @@ import {
   useReviewing,
   useViewCadence,
   useTruncation,
+  usePollError,
 } from "./api/hooks";
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
@@ -51,6 +52,7 @@ export default function App() {
   useRefreshRequested();
   useViewCadence(view);
   const truncatedTotal = useTruncation();
+  const pollError = usePollError();
   const { data: reviewing = [] } = useReviewing();
 
   // The app had no keyboard affordances at all. These three need no
@@ -279,6 +281,11 @@ export default function App() {
                 onOpen={(pr) => selectPr({ repo: pr.repo, number: pr.number })}
                 canWrite={view === "my-prs"}
                 selectable={view === "my-prs"}
+                // A poll failure with a SUCCESSFUL but empty cache read
+                // is the fresh-install case: `isError` above covers a
+                // rejected query, and this covers "the query returned
+                // the empty snapshot because no poll has ever landed".
+                unreachable={pollError !== null && source.length === 0}
               />
             )}
           </div>

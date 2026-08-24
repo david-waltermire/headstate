@@ -19,6 +19,7 @@ export function PrList({
   onOpen,
   canWrite = true,
   selectable = false,
+  unreachable = false,
 }: {
   prs: PullRequest[];
   hasFilters?: boolean;
@@ -29,6 +30,13 @@ export function PrList({
   onOpen?: (pr: PullRequest) => void;
   canWrite?: boolean;
   selectable?: boolean;
+  /// The last poll failed and there is nothing cached to fall back on.
+  ///
+  /// On a first launch there is no snapshot, so a failed poll leaves
+  /// this list genuinely empty -- and "No open pull requests" is then a
+  /// confident answer to a question the app could not ask. Same rule
+  /// the rejected-query and truncated-list cases already follow.
+  unreachable?: boolean;
 }) {
   const { checked, setChecked, cursor } = useFilters();
 
@@ -95,6 +103,14 @@ export function PrList({
         <div className="px-4 py-12 text-center text-sm text-[#8b949e]">
           {hasFilters ? (
             "No pull requests match these filters."
+          ) : unreachable ? (
+            <>
+              <p className="text-[#e6edf3]">Could not reach GitHub.</p>
+              <p className="mt-1">
+                This list is empty because the last refresh failed, so the app
+                does not know what is open.
+              </p>
+            </>
           ) : (
             <>
               <p className="text-[#e6edf3]">No open pull requests.</p>

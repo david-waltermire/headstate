@@ -595,6 +595,26 @@ pub fn spawn(
 
 #[cfg(test)]
 mod tests {
+    /// The consequence of classifying a parse failure as transient: one
+    /// stays quiet, two in a row is still named.
+    ///
+    /// A `Timeout` stands in for the parse failure because octocrab's
+    /// `Serde` variant has no public constructor -- both are transient,
+    /// and `should_surface` reads only that property, so this asserts
+    /// the exact rule that governs the reported case. The
+    /// classification itself is tested against a real truncated
+    /// response in `github::client`.
+    #[test]
+    fn a_transient_failure_is_named_only_when_it_repeats() {
+        let e = ClientError::Timeout(90);
+        assert!(e.is_transient());
+        assert!(!should_surface(&e, 1), "one blip is weather");
+        assert!(
+            should_surface(&e, FAILURES_BEFORE_BANNER),
+            "two in a row is a problem"
+        );
+    }
+
     /// Defaults must reproduce the behaviour from before this setting
     /// existed: nothing hidden, and close hides to the tray. An upgrade
     /// must not change what the app does for someone who never opens
