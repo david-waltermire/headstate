@@ -30,8 +30,17 @@ ignore = [
 
 [licenses]
 version = 2
+# CDLA-Permissive-2.0 covers `webpki-roots`, which is the Mozilla CA
+# bundle -- a DATA licence for the certificate list rather than a code
+# licence. It is permissive with no copyleft and no attribution
+# obligation, in the same category as CC0-1.0 already on this list.
+#
+# It arrives with the bundled TLS roots, which the app needs because
+# reading certificates from the host keychain made it fail on machines
+# whose trust store it could not read.
 allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",
-         "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "MPL-2.0", "CC0-1.0"]
+         "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib", "MPL-2.0", "CC0-1.0",
+         "CDLA-Permissive-2.0"]
 
 [bans]
 multiple-versions = "warn"

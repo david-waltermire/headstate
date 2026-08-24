@@ -17,9 +17,26 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2.11", features = ["tray-icon", "image-png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# `rustls-webpki-tokio` is load-bearing, not decoration. Without it
+# hyper-rustls falls back to its default feature `native-tokio`, which is
+# `rustls-native-certs` -- certificates read from the SYSTEM KEYCHAIN at
+# runtime. `load_native_certs` returns errors rather than panicking, so a
+# keychain that is empty, restricted by MDM, or unreadable to a sandboxed
+# app yields ZERO roots: every TLS handshake fails, and the user sees a
+# transport or parse error with nothing to act on.
+#
+# That is machine-dependent by construction, which is why a release build
+# failed on one Mac while a dev build of the same commit worked on
+# another.
+#
+# The app talks to exactly one host over public CAs, so it does not need
+# the user's trust store. The trade: a bundled root store does NOT pick up
+# an enterprise MITM proxy's custom CA, so anyone behind one would need
+# the native store instead. Silent failure on an ordinary machine is the
+# worse of the two, but this is a choice rather than an oversight.
 octocrab = { version = "0.54", default-features = false, features = [
   "follow-redirect", "retry", "rustls", "timeout", "tracing",
-  "default-client", "rustls-ring", "jwt-aws-lc-rs",
+  "default-client", "rustls-ring", "rustls-webpki-tokio", "jwt-aws-lc-rs",
 ] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 tokio = { version = "1.53", features = ["full"] }

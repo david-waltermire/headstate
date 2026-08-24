@@ -2,7 +2,7 @@
 //! calls these commands and listens for the `prs-updated` event that
 //! [`crate::poll`] emits in the background.
 
-use crate::github::client::GitHubClient;
+use crate::github::client::{ClientError, GitHubClient};
 use crate::github::model::{
     CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats,
 };
@@ -63,7 +63,20 @@ pub fn get_cached(app: AppHandle) -> Result<Vec<PullRequest>, String> {
 #[tauri::command]
 pub async fn refresh_now(client: State<'_, GhClient>) -> Result<Vec<PullRequest>, String> {
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
-    client.fetch_prs().await.map_err(|e| e.to_string())
+    // Bounded like the poll loop's fetch. This is the COLD-START path --
+    // `usePullRequests` calls it whenever the cache is empty, which is
+    // exactly a fresh install -- and it had no overall timeout at all.
+    //
+    // The transport timeouts on the client are not enough on their own,
+    // for the reason its own comment gives: a server that trickles bytes
+    // keeps a read alive indefinitely without ever tripping one. With
+    // `retry` enabled each attempt restarts them, so a machine that
+    // cannot complete a handshake sat on "Loading pull requests" for
+    // minutes rather than failing with something to act on.
+    match tokio::time::timeout(crate::poll::FETCH_TIMEOUT, client.fetch_prs()).await {
+        Ok(res) => res.map_err(|e| e.to_string()),
+        Err(_) => Err(ClientError::Timeout(crate::poll::FETCH_TIMEOUT.as_secs()).to_string()),
+    }
 }
 
 #[tauri::command]

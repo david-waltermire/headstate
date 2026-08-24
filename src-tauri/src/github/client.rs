@@ -554,6 +554,40 @@ mod tests {
         // consequence there; what this owns is the classification.
     }
 
+    /// A server that accepts the connection and then never answers must
+    /// not hang the caller forever.
+    ///
+    /// Reported: a fresh install sat on "Loading pull requests" for
+    /// minutes. `refresh_now` -- the cold-start path, taken whenever the
+    /// cache is empty -- had no overall timeout, and the client's
+    /// transport timeouts do not cover it: the client's own comment says
+    /// a server that trickles bytes keeps a read alive indefinitely, and
+    /// with `retry` enabled each attempt restarts them.
+    ///
+    /// Uses a 1-second bound rather than the real 90 so the test is
+    /// fast; what it asserts is that the timeout FIRES, which is the
+    /// property `refresh_now` now depends on.
+    #[tokio::test]
+    async fn a_stalled_response_is_bounded_by_a_timeout() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data": {}}))
+                    .set_delay(std::time::Duration::from_secs(30)),
+            )
+            .mount(&server)
+            .await;
+
+        let client = client_for(&server).await;
+        let r = tokio::time::timeout(std::time::Duration::from_secs(1), client.fetch_prs()).await;
+        assert!(
+            r.is_err(),
+            "a stalled request must be cut off, not awaited forever"
+        );
+    }
+
     #[tokio::test]
     async fn fetch_stats_maps_the_aliased_counts() {
         let server = MockServer::start().await;
