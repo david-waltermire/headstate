@@ -57,7 +57,18 @@ export default function App() {
   // The LIST only where it is rendered. The badge below uses a count
   // query instead, so Docker and Worktrees no longer fetch 100 pull
   // requests to display a number.
-  const { data: reviewing = [] } = useReviewing(view === "to-review");
+  // `isLoading` is taken from the query that feeds the CURRENT view.
+  // Only the authored query's was used, and it has already resolved by
+  // the time anyone reaches To review -- so switching there showed an
+  // empty list with no indication anything was happening, for as long
+  // as the request took.
+  const {
+    data: reviewing = [],
+    isLoading: reviewingLoading,
+    isError: reviewingError,
+    error: reviewingErr,
+    refetch: refetchReviewing,
+  } = useReviewing(view === "to-review");
   const { data: reviewingCount = 0 } = useReviewingCount();
 
   // The app had no keyboard affordances at all. These three need no
@@ -255,7 +266,7 @@ export default function App() {
                 repo#number, so narrowing a filter after selecting must
                 not shrink the batch out from under the user. */}
             {view === "my-prs" ? <BulkBar prs={source} /> : null}
-            {isLoading ? (
+            {(view === "to-review" ? reviewingLoading : isLoading) ? (
               // `get_cached` returns `[]` both for "never polled" and for
               // "authenticated, first poll (~3s) still in flight" -- an
               // empty PrList would misreport the latter as "no pull
@@ -265,7 +276,7 @@ export default function App() {
               <div className="rounded-md border border-[#30363d] px-4 py-12 text-center text-sm text-[#8b949e]">
                 Loading pull requests…
               </div>
-            ) : isError ? (
+            ) : (view === "to-review" ? reviewingError : isError) ? (
               // The same reasoning one step further. A REJECTED query also
               // leaves `prs` at its `[]` default, so without this branch the
               // list renders "0 Open -- no pull requests match these
@@ -274,9 +285,18 @@ export default function App() {
               // emitted by the background loop, and a failure here means the
               // foreground fetch itself never produced data.
               <QueryError
-                title="Could not load your pull requests"
-                message={errorMessage(error)}
-                onRetry={() => void refetch()}
+                title={
+                  view === "to-review"
+                    ? "Could not load the pull requests awaiting your review"
+                    : "Could not load your pull requests"
+                }
+                // The failing query's OWN error and retry. Reporting the
+                // authored query's here would show a stale message and
+                // a retry that refetches the wrong list.
+                message={errorMessage(view === "to-review" ? reviewingErr : error)}
+                onRetry={() =>
+                  void (view === "to-review" ? refetchReviewing() : refetch())
+                }
               />
             ) : (
               <PrList

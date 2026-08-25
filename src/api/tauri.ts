@@ -44,6 +44,7 @@ export const refreshNow = () => invoke<PullRequest[]>("refresh_now");
 export interface UiPrefs {
   hidden_views: string[];
   close_hides_to_tray: boolean;
+  announce_updates: boolean;
 }
 
 export const getUiPrefs = () => invoke<UiPrefs>("get_ui_prefs");

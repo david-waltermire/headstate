@@ -67,9 +67,19 @@ export function SettingsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      {/* The dialog caps its own height at the viewport, and this
+          splits it so the BODY scrolls while the buttons stay put.
+          Without it a tall settings list pushed OK and Cancel below the
+          window edge on an unmaximised window -- not merely hard to
+          reach, invisible and unclickable. */}
+      <DialogContent className="flex max-w-lg flex-col">
         <DialogTitle>Settings</DialogTitle>
 
+        {/* The scrolling region. `min-h-0` is load-bearing: a flex child
+            defaults to min-height:auto and refuses to shrink below its
+            content, so without it the body pushes the footer out of the
+            dialog instead of scrolling -- which is the bug. */}
+        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <div className="mt-4 flex flex-col gap-1">
           <label htmlFor="poll-interval" className="text-sm font-medium">
             Check GitHub every
@@ -222,6 +232,16 @@ export function SettingsDialog({
             />
             Start Headstate at login
           </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={ui?.announce_updates ?? true}
+              onChange={() =>
+                ui && void setUi({ ...ui, announce_updates: !ui.announce_updates })
+              }
+            />
+            Tell me when a new version is available
+          </label>
           {autostartError ? (
             <p role="alert" className="text-xs text-[#f85149]">
               {autostartError}
@@ -251,7 +271,11 @@ export function SettingsDialog({
           </dl>
         </div>
 
-        <div className="mt-5 flex justify-end gap-2">
+        </div>
+
+        {/* Outside the scrolling region, so OK and Cancel are always
+            reachable however long the list grows. */}
+        <div className="mt-5 flex shrink-0 justify-end gap-2">
           <button
             type="button"
             onClick={close}

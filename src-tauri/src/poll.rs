@@ -207,6 +207,19 @@ pub struct UiPrefs {
     pub hidden_views: Vec<String>,
     /// Whether the close button hides to the tray instead of quitting.
     pub close_hides_to_tray: bool,
+    /// Whether a new release announces itself with a dialog.
+    ///
+    /// `serde(default)` so a settings row written before this field
+    /// existed still deserialises -- without it, adding a field would
+    /// make every stored value unreadable and silently reset every
+    /// other preference alongside it.
+    #[serde(default = "default_true")]
+    pub announce_updates: bool,
+}
+
+/// Serde needs a function, not a literal, for a defaulted bool.
+fn default_true() -> bool {
+    true
 }
 
 impl Default for UiPrefs {
@@ -217,6 +230,11 @@ impl Default for UiPrefs {
             // change behaviour for someone who never opens Settings.
             hidden_views: Vec::new(),
             close_hides_to_tray: true,
+            // Announcing is the point of checking. The status bar has
+            // always shown the hint and it was easy to miss; a user who
+            // finds the dialog intrusive can turn it off, which is what
+            // the setting is for.
+            announce_updates: true,
         }
     }
 }
@@ -625,6 +643,22 @@ mod tests {
         let d = UiPrefs::default();
         assert!(d.hidden_views.is_empty());
         assert!(d.close_hides_to_tray);
+    }
+
+    /// A settings row written BEFORE `announce_updates` existed must
+    /// still deserialise, and must not silently reset the preferences
+    /// stored alongside it.
+    ///
+    /// Without `serde(default)` the whole struct fails to parse, the
+    /// read falls back to `Default`, and a user who had hidden Docker
+    /// and turned off close-to-tray quietly gets both back.
+    #[test]
+    fn prefs_stored_before_this_field_existed_still_load() {
+        let old = r#"{"hidden_views":["docker"],"close_hides_to_tray":false}"#;
+        let p: UiPrefs = serde_json::from_str(old).expect("old rows must still parse");
+        assert_eq!(p.hidden_views, vec!["docker"]);
+        assert!(!p.close_hides_to_tray, "the stored choice must survive");
+        assert!(p.announce_updates, "a missing field takes the default");
     }
 
     /// Hidden views are a list of ids, not a bool per view, so a build

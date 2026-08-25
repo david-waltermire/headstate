@@ -1,6 +1,8 @@
 import { ExternalLink } from "./ExternalLink";
 import { getVersion } from "@tauri-apps/api/app";
 import { latestRelease } from "../api/tauri";
+import { UpdateDialog } from "./UpdateDialog";
+import { useUiPrefs } from "../api/hooks";
 import { Settings } from "lucide-react";
 import { useEffect, useState } from "react";
 import { usePollError, usePollInterval, usePollState } from "../api/hooks";
@@ -73,6 +75,16 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
   // showing it, since it is what they would quote in a bug report.
   const [version, setVersion] = useState<string | null>(null);
   const [newer, setNewer] = useState<string | null>(null);
+  const { prefs: ui } = useUiPrefs();
+  // Which version's announcement has been dismissed. localStorage, not
+  // the settings table: it is a transient acknowledgement of one
+  // release, not a preference, and it is meaningless on another machine.
+  const [dismissed, setDismissed] = useState<string | null>(() =>
+    localStorage.getItem("headstate-update-dismissed"),
+  );
+  useEffect(() => {
+    if (dismissed !== null) localStorage.setItem("headstate-update-dismissed", dismissed);
+  }, [dismissed]);
   useEffect(() => {
     let live = true;
     getVersion().then(
@@ -100,6 +112,18 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
   }, []);
 
   return (
+    <>
+    {/* Per VERSION, not per launch: nagging about a release someone has
+        already declined is how a notice trains people to dismiss it
+        unread. `announce_updates` turns the dialog off entirely without
+        touching the status-bar hint, which stays either way. */}
+    {newer && (ui?.announce_updates ?? true) ? (
+      <UpdateDialog
+        version={newer}
+        open={dismissed !== newer}
+        onDismiss={() => setDismissed(newer)}
+      />
+    ) : null}
     <div className="flex shrink-0 items-center gap-3 border-t border-[#30363d] bg-[#0d1117] px-4 py-1.5 text-xs text-[#8b949e]">
       <span className="flex items-center gap-1.5">
         <span className={`h-1.5 w-1.5 rounded-full ${DOT[status]}`} aria-hidden="true" />
@@ -163,5 +187,6 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
     </div>
+    </>
   );
 }
