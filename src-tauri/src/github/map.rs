@@ -248,7 +248,26 @@ pub fn map_search(v: &Value) -> Vec<PullRequest> {
 pub fn map_list(v: &Value, alias: &str) -> Vec<PullRequest> {
     v[alias]["nodes"]
         .as_array()
-        .map(|a| a.iter().filter_map(map_node).collect())
+        .map(|a| {
+            let mapped: Vec<PullRequest> = a.iter().filter_map(map_node).collect();
+            // Dropping a node is SILENT and it is how a refused field
+            // empties a list: GitHub nulls the fields it could not
+            // compute, `map_node` requires title/url/repository, and
+            // `filter_map` discards whatever is left. With 79 fields
+            // refused, that can be the whole page -- reported as "No
+            // open pull requests", which is a confident wrong answer.
+            //
+            // Counts only, never titles or repository names.
+            if mapped.len() < a.len() {
+                log::warn!(
+                    "dropped {} of {} pull requests: GitHub returned them without \
+                     the fields needed to render one",
+                    a.len() - mapped.len(),
+                    a.len()
+                );
+            }
+            mapped
+        })
         .unwrap_or_default()
 }
 

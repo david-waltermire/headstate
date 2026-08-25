@@ -62,9 +62,14 @@ export function CourtStrip({
         >
           {theirs.length} waiting on others
         </button>
-      ) : (
-        <span className="text-xs text-[#8b949e]">{total} open</span>
-      )}
+      ) : null}
+      {/* The denominator, always. The two courts are NOT complements --
+          a draft and a queued pull request are in neither -- so showing
+          only "3 needs you · 6 waiting on others" against a sidebar
+          reading 12 looks like an arithmetic bug rather than a
+          deliberate exclusion. Naming the total makes the gap legible
+          instead of suspicious. */}
+      <span className="text-xs text-[#8b949e]">of {total} open</span>
     </section>
   );
 }

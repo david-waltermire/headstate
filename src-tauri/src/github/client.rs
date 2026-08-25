@@ -173,6 +173,15 @@ pub struct GitHubClient {
 /// complete response stops reporting a shortfall that no longer exists.
 pub static REFUSED_FIELDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// How many fields GitHub refused, read off the response it came with.
+///
+/// `graphql_partial_ok` stashes the count under a key the mapper
+/// ignores, so it travels with its own response rather than through
+/// shared state that the next request would overwrite.
+fn refused_fields(v: &serde_json::Value) -> usize {
+    v["__refused"].as_u64().unwrap_or(0) as usize
+}
+
 impl GitHubClient {
     pub fn new(octocrab: Octocrab) -> Self {
         Self { octocrab }
@@ -265,6 +274,31 @@ impl GitHubClient {
     /// the snapshot cache, poll loop and existing commands keep their
     /// shapes; the poll loop fetches both in one request via
     /// `fetch_prs_and_reviewing`.
+    /// Fails rather than returning an empty list GitHub did not mean.
+    ///
+    /// When GitHub refuses fields it nulls the NODES, and the mapper
+    /// drops any it cannot render -- so a heavily refused page maps to
+    /// ZERO pull requests. Returning that as success caches an empty
+    /// list as a valid answer, and because the query is fresh for a
+    /// minute, coming back to the view shows "No open pull requests"
+    /// indefinitely rather than refetching. That is the reported
+    /// behaviour: the first load shows a short list, and every return
+    /// after it shows nothing.
+    ///
+    /// An error is honest here and, unlike an empty success, retries.
+    fn reject_empty_after_refusals(
+        prs: Vec<PullRequest>,
+        refused: usize,
+    ) -> Result<Vec<PullRequest>, ClientError> {
+        if prs.is_empty() && refused > 0 {
+            return Err(ClientError::Graphql(format!(
+                "GitHub refused {refused} field(s) and returned no usable pull requests. \
+                 This usually clears on the next refresh."
+            )));
+        }
+        Ok(prs)
+    }
+
     pub async fn fetch_reviewing(&self) -> Result<Vec<PullRequest>, ClientError> {
         // Its OWN request, not both lists. It used to call
         // `fetch_prs_and_reviewing`, so opening To review paid for the
@@ -275,8 +309,14 @@ impl GitHubClient {
         // Same shrinking fallback as the authored path: 71 items is
         // nearly twice 40, which is why My pull requests recovered on
         // that account and To review did not.
+        // Read the counter for THIS request, before anything else can
+        // touch it. Reading it later would race the next poll, and in
+        // the test suite it raced other tests.
         let v = self.search_page_with_fallback(REVIEW_REQUESTED).await?;
-        Ok(map_list(&v, "authored"))
+        // Counted from THIS response, not from shared state. A global
+        // counter raced the next poll -- and, in the test suite, other
+        // tests running in parallel.
+        Self::reject_empty_after_refusals(map_list(&v, "authored"), refused_fields(&v))
     }
 
     /// How many pull requests await the user's review.
@@ -679,6 +719,13 @@ async fn graphql_partial_ok(
             // trying to solve.
             if types.contains(&"RESOURCE_LIMITS_EXCEEDED") {
                 REFUSED_FIELDS.store(errs.len(), std::sync::atomic::Ordering::Relaxed);
+                // Also on the response, so a caller can read the count
+                // for the request it actually made.
+                let mut d = d.clone();
+                if let Some(obj) = d.as_object_mut() {
+                    obj.insert("__refused".into(), errs.len().into());
+                }
+                return Ok(d);
             }
 
             Ok(d.clone())
@@ -894,6 +941,9 @@ mod tests {
     /// that broke.
     #[tokio::test]
     async fn every_call_site_supplies_the_page_size() {
+        // Process-global counter: a previous test's refusals would
+        // otherwise make this empty fixture look like a refused page.
+        REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
@@ -918,6 +968,9 @@ mod tests {
     /// did not.
     #[tokio::test]
     async fn the_review_queue_does_not_fetch_the_authored_list() {
+        // Process-global counter: a previous test's refusals would
+        // otherwise make this empty fixture look like a refused page.
+        REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
@@ -1159,6 +1212,61 @@ mod tests {
         let prs = client_for(&server).await.fetch_prs().await.unwrap();
         assert_eq!(prs.len(), 3, "a partial success must not blank the list");
         assert_eq!(prs[0].number, 42);
+    }
+
+    /// A page GitHub refused so heavily that NOTHING maps must not be
+    /// cached as "you have no pull requests".
+    ///
+    /// Reported: the first load of To review showed a short list, and
+    /// every return to it afterwards showed "No open pull requests"
+    /// indefinitely. GitHub nulls the nodes whose fields it refused, the
+    /// mapper drops what it cannot render, and an empty success is fresh
+    /// for a minute -- so the view never refetched.
+    ///
+    /// An error is honest and, unlike an empty success, retries.
+    #[tokio::test]
+    async fn a_wholly_refused_page_is_an_error_not_an_empty_list() {
+        REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            // Nodes present but unrenderable, which is what a refusal
+            // produces: the mapper drops every one.
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"authored": {"nodes": [{"number": 1}, {"number": 2}]}},
+                "errors": [{"type": "RESOURCE_LIMITS_EXCEEDED", "message": "refused"}]
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server)
+            .await
+            .fetch_reviewing()
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("refused"), "{err}");
+    }
+
+    /// A genuinely empty queue is still success. Turning "you have
+    /// nothing to review" into an error would be its own wrong answer.
+    #[tokio::test]
+    async fn an_honestly_empty_queue_is_not_an_error() {
+        REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"authored": {"nodes": []}}
+            })))
+            .mount(&server)
+            .await;
+
+        assert!(client_for(&server)
+            .await
+            .fetch_reviewing()
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     /// Partial data is KEPT, not escalated to an error.

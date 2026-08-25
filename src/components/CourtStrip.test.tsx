@@ -53,6 +53,28 @@ describe("CourtStrip", () => {
     expect(screen.getByText(/1 waiting on others/i)).toBeTruthy();
   });
 
+  // The two courts are NOT complements: a draft and a queued pull
+  // request are in neither. Reported as "3 needs you, 6 waiting on
+  // others" beside a sidebar reading 12, which looks like arithmetic
+  // going wrong rather than a deliberate exclusion.
+  it("names the total, so the gap is legible rather than suspicious", () => {
+    render(
+      <CourtStrip
+        authored={[
+          pr({ ci: "failure" }),
+          pr({ number: 2, review: "review_required" }),
+          pr({ number: 3, is_draft: true }),
+        ]}
+        reviewing={[]}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/1 needs you/)).toBeTruthy();
+    expect(screen.getByText(/1 waiting on others/)).toBeTruthy();
+    // The draft is in neither court, and the denominator says so.
+    expect(screen.getByText(/of 3 open/)).toBeTruthy();
+  });
+
   it("opens the list scoped to my court when clicked", () => {
     const onSelect = vi.fn();
     render(<CourtStrip authored={[pr({ ci: "failure" })]} reviewing={[]} onSelect={onSelect} />);
