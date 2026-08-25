@@ -35,6 +35,7 @@ import {
   removeWorktrees,
   sizeWorktrees,
   getReviewing,
+  countReviewing,
   getStats,
   refreshNow,
   setPollInterval,
@@ -869,10 +870,29 @@ export function useNotifyPrefs() {
 /// The app previously queried only `author:@me`, so it could say nothing
 /// about the queue the user is the bottleneck for -- the largest gap for a
 /// daily driver. Same 60s staleness as the authored list.
-export function useReviewing() {
+export function useReviewing(enabled = true) {
   return useQuery({
     queryKey: ["reviewing"],
     queryFn: getReviewing,
+    // Only the view that RENDERS these pull requests fetches them. It
+    // used to run on every view -- including Docker and Worktrees, which
+    // show none -- purely so a sidebar badge could display its length.
+    // That is a 100-node query for a number, and on a slow account it
+    // failed there too.
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+/// How many pull requests await the user's review.
+///
+/// The badge's own query, so it does not depend on the list being
+/// fetched. MEASURED: 1 rate-limit point and ~0.9s, against 6 and ~4s
+/// for the list it replaces here.
+export function useReviewingCount() {
+  return useQuery({
+    queryKey: ["reviewing-count"],
+    queryFn: countReviewing,
     staleTime: 60_000,
   });
 }

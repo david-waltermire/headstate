@@ -35,6 +35,8 @@ vi.mock("./api/hooks", () => ({
     set: () => Promise.resolve(),
   }),
   useReviewing: () => ({ data: mockReviewing(), isLoading: false }),
+  // The badge's own cheap query, separate from the list.
+  useReviewingCount: () => ({ data: mockReviewing().length }),
   // PrDetailView's hooks: App's mock replaces the whole module, so
   // rendering the detail branch needs every hook it calls.
   usePrDetail: () => ({ data: undefined, isLoading: true, isError: false, refetch: () => {} }),

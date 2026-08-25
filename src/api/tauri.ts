@@ -92,6 +92,13 @@ export const rerunChecks = (repo: string, number: number, runId: number) =>
 /// cannot disagree with the binary the user is running.
 export const buildTarget = () => invoke<[string, string]>("build_target");
 
+/// How many pull requests await the user's review.
+///
+/// A count, not a list: the sidebar badge needs a number on every view,
+/// and asking for the list costs 6 rate-limit points and ~4s against 1
+/// and ~0.9s for this.
+export const countReviewing = () => invoke<number>("count_reviewing");
+
 /// The authenticated user's login.
 ///
 /// Asked once and cached forever: it cannot change during a session.

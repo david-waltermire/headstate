@@ -304,6 +304,21 @@ query($owner: String!, $repo: String!, $number: Int!) {
   }
 }"#;
 
+/// How many pull requests a search matches, and nothing else.
+///
+/// `issueCount` alone: no nodes, so none of the per-pull-request fields
+/// that make the list query expensive are resolved at all. This exists
+/// because the sidebar badge needs a NUMBER, and fetching 100 fully
+/// populated pull requests to render one was both the largest wasted
+/// request in the app and a way to fail on a view that shows no pull
+/// requests at all.
+pub const COUNT_QUERY: &str = r#"
+query($q: String!) {
+  rateLimit { cost remaining resetAt }
+  matching: search(query: $q, type: ISSUE) { issueCount }
+}
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;

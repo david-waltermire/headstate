@@ -11,7 +11,7 @@ use super::map::{
 use super::model::{CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats};
 use super::query::{
     cycle_trend_query, history_query_range, history_query_range_with_periods, periods_query,
-    HISTORY_CHUNK_DAYS, MERGED_DETAIL_QUERY, PRS_QUERY, PR_DETAIL_QUERY, STATS_QUERY,
+    COUNT_QUERY, HISTORY_CHUNK_DAYS, MERGED_DETAIL_QUERY, PRS_QUERY, PR_DETAIL_QUERY, STATS_QUERY,
 };
 use chrono::{DateTime, Duration, Utc};
 use octocrab::Octocrab;
@@ -284,6 +284,24 @@ impl GitHubClient {
     /// `fetch_prs_and_reviewing`.
     pub async fn fetch_reviewing(&self) -> Result<Vec<PullRequest>, ClientError> {
         Ok(self.fetch_prs_and_reviewing().await?.1)
+    }
+
+    /// How many pull requests await the user's review.
+    ///
+    /// A COUNT, not a list. The sidebar badge needs a number, and
+    /// fetching 100 fully populated pull requests to render one was the
+    /// largest wasted request in the app -- it ran on EVERY view,
+    /// including Docker and Worktrees, which show no pull requests at
+    /// all. MEASURED: 1 rate-limit point and ~0.9s, against 6 and ~4s
+    /// for the list.
+    pub async fn count_reviewing(&self) -> Result<u64, ClientError> {
+        let v = self
+            .graphql_partial_ok(&json!({
+                "query": COUNT_QUERY,
+                "variables": { "q": "is:pr is:open review-requested:@me" },
+            }))
+            .await?;
+        Ok(v["matching"]["issueCount"].as_u64().unwrap_or(0))
     }
 
     /// Both lists from ONE request.

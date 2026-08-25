@@ -1073,6 +1073,17 @@ pub fn set_poll_interval(
     applied
 }
 
+/// How many pull requests await the user's review.
+///
+/// The sidebar badge needs a number on EVERY view, including ones that
+/// show no pull requests. Asking for the count rather than the list
+/// costs 1 rate-limit point against 6, and ~0.9s against ~4s.
+#[tauri::command]
+pub async fn count_reviewing(client: State<'_, GhClient>) -> Result<u64, String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    client.count_reviewing().await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn get_reviewing(client: State<'_, GhClient>) -> Result<Vec<PullRequest>, String> {
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;

@@ -5,6 +5,7 @@ import {
   usePullRequests,
   useRefreshRequested,
   useReviewing,
+  useReviewingCount,
   useViewCadence,
   useTruncation,
   usePollError,
@@ -53,7 +54,11 @@ export default function App() {
   useViewCadence(view);
   const truncatedTotal = useTruncation();
   const pollError = usePollError();
-  const { data: reviewing = [] } = useReviewing();
+  // The LIST only where it is rendered. The badge below uses a count
+  // query instead, so Docker and Worktrees no longer fetch 100 pull
+  // requests to display a number.
+  const { data: reviewing = [] } = useReviewing(view === "to-review");
+  const { data: reviewingCount = 0 } = useReviewingCount();
 
   // The app had no keyboard affordances at all. These three need no
   // backend change: `refresh-requested` already exists and the window
@@ -152,11 +157,11 @@ export default function App() {
     <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3]">
       <div className="flex min-h-0 flex-1">
       {view === "docker" ? (
-        <DockerSidebar viewCounts={{ "to-review": reviewing.length }} />
+        <DockerSidebar viewCounts={{ "to-review": reviewingCount }} />
       ) : view === "worktrees" ? (
-        <WorktreeSidebar viewCounts={{ "to-review": reviewing.length }} />
+        <WorktreeSidebar viewCounts={{ "to-review": reviewingCount }} />
       ) : (
-        <RepoSidebar prs={source} viewCounts={{ "to-review": reviewing.length }} />
+        <RepoSidebar prs={source} viewCounts={{ "to-review": reviewingCount }} />
       )}
       <main className="flex-1 overflow-auto">
         <header className="flex items-center gap-2 border-b border-[#30363d] px-4 py-3">
