@@ -25,11 +25,21 @@ describe("ReportLink", () => {
     expect(body).toContain("macos");
   });
 
-  // A link that does nothing when clicked is worse than none: it is not
-  // rendered until the URL exists.
-  it("shows nothing until the report is ready", () => {
+  // This DELIBERATELY reverses an earlier assertion. The old test read
+  // "shows nothing until the report is ready", on the reasoning that a
+  // link which does nothing when clicked is worse than none.
+  //
+  // That reasoning made the reported bug: the environment lookups are
+  // IPC calls, and one that never answers left the link permanently
+  // absent. "Report this does nothing" was not a dead click -- there
+  // was no element to click.
+  //
+  // It now renders immediately with a URL carrying just the error, and
+  // upgrades once the environment is known.
+  it("is clickable immediately, before the environment is known", () => {
     render(<ReportLink error="boom" />);
-    expect(screen.queryByRole("link", { name: /report this/i })).toBeNull();
+    const link = screen.getByRole("link", { name: /report this/i });
+    expect(decodeURIComponent(link.getAttribute("href") ?? "")).toContain("boom");
   });
 
   it("scrubs a token before it reaches the URL", async () => {

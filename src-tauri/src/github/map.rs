@@ -216,7 +216,20 @@ fn map_node(node: &Value) -> Option<PullRequest> {
         merge: merge_state(node),
         merge_status: merge_status(node),
         review: review_state(node),
-        in_merge_queue: node["isInMergeQueue"].as_bool().unwrap_or(false),
+        // Queued means WAITING, not merely present. `isInMergeQueue`
+        // stays true for an entry the queue has rejected -- state
+        // UNMERGEABLE -- so a declined pull request reported as calmly
+        // queued and got the amber merge-queue icon while actually
+        // being stuck.
+        //
+        // An absent entry falls back to the flag: `mergeQueueEntry` is
+        // null on repositories without a merge queue, where
+        // `isInMergeQueue` is false anyway.
+        in_merge_queue: node["isInMergeQueue"].as_bool().unwrap_or(false)
+            && !matches!(
+                node["mergeQueueEntry"]["state"].as_str(),
+                Some("UNMERGEABLE") | Some("LOCKED")
+            ),
         labels: labels(node),
         comment_count: node["totalCommentsCount"].as_u64().unwrap_or(0),
         unresolved_threads: unresolved_threads(node),
@@ -428,6 +441,65 @@ pub fn map_cycle_trend(v: &Value) -> CycleTrend {
 
 #[cfg(test)]
 mod tests {
+    /// Reported: a pull request labelled `auto-merge-declined` showed
+    /// the amber "In merge queue" icon.
+    ///
+    /// `isInMergeQueue` stays TRUE for an entry the queue has rejected,
+    /// so the app reported it as calmly queued while it was actually
+    /// stuck. Queued must mean WAITING, not merely present.
+    #[test]
+    fn a_rejected_queue_entry_does_not_count_as_queued() {
+        for state in ["UNMERGEABLE", "LOCKED"] {
+            let v = json!({"authored": {"nodes": [{
+                "number": 1, "title": "t", "url": "u",
+                "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
+                "repository": {"nameWithOwner": "octocat/hello-world"},
+                "isInMergeQueue": true,
+                "mergeQueueEntry": {"state": state}
+            }]}});
+            assert!(
+                !map_list(&v, "authored")[0].in_merge_queue,
+                "{state} is not waiting in a queue"
+            );
+        }
+    }
+
+    #[test]
+    fn a_waiting_queue_entry_still_counts_as_queued() {
+        for state in ["QUEUED", "AWAITING_CHECKS", "MERGEABLE"] {
+            let v = json!({"authored": {"nodes": [{
+                "number": 1, "title": "t", "url": "u",
+                "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
+                "repository": {"nameWithOwner": "octocat/hello-world"},
+                "isInMergeQueue": true,
+                "mergeQueueEntry": {"state": state}
+            }]}});
+            assert!(
+                map_list(&v, "authored")[0].in_merge_queue,
+                "{state} is waiting"
+            );
+        }
+    }
+
+    /// `mergeQueueEntry` is null on a repository with no merge queue,
+    /// where `isInMergeQueue` is false anyway -- the flag must still be
+    /// what decides, not the absent entry.
+    #[test]
+    fn an_absent_entry_falls_back_to_the_flag() {
+        let node = |q: bool| {
+            json!({"authored": {"nodes": [{
+                "number": 1, "title": "t", "url": "u",
+                "createdAt": "2026-01-01T00:00:00Z", "updatedAt": "2026-01-01T00:00:00Z",
+                "repository": {"nameWithOwner": "octocat/hello-world"},
+                "isInMergeQueue": q
+            }]}})
+        };
+        let queued = node(true);
+        assert!(map_list(&queued, "authored")[0].in_merge_queue);
+        let not = node(false);
+        assert!(!map_list(&not, "authored")[0].in_merge_queue);
+    }
+
     /// The workflow run id is what makes re-running possible, and it
     /// is OPTIONAL by design: a plain commit status and a check run from
     /// a non-Actions app both have no workflow run. None must mean

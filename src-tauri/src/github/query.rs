@@ -17,16 +17,21 @@ use chrono::{DateTime, Duration, Utc};
 /// `search` is aliased to `authored` rather than left bare, so the mapper
 /// has to name which list it is reading and cannot silently take the wrong
 /// one when a third is added.
+/// One search's worth of pull requests.
+///
+/// ONE search per request. It used to carry both the authored and
+/// review-requested searches as aliases, so every caller paid for both:
+/// on a reported account with 40 authored and 71 review-requested, that
+/// is 111 fully populated pull requests fetched whenever either list was
+/// wanted. My pull requests recovered on that account once the page
+/// shrank; To review did not, because 71 is nearly twice 40.
+///
+/// The alias stays named `authored` whatever the search is -- the mapper
+/// reads it by that name, and renaming it per caller would mean the
+/// query and the mapper could disagree.
 pub const PRS_QUERY: &str = r#"
-query($q: String!, $reviewing: String!, $first: Int!) {
+query($q: String!, $first: Int!) {
   rateLimit { cost remaining resetAt }
-  # Who we are. The app previously relied entirely on `@me` qualifiers and
-  # never learned the login, so it could not tell its own pull requests
-  # from anyone else's -- which matters now that reviews are possible:
-  # GitHub refuses self-approval, and the UI should say so before the
-  # click rather than surface a GraphQL refusal after it.
-  #
-  # MEASURED FREE: this query costs 1 point with and without this field.
   viewer { login }
   authored: search(query: $q, type: ISSUE, first: $first) {
     issueCount
@@ -38,29 +43,20 @@ query($q: String!, $reviewing: String!, $first: Int!) {
         author { login }
         repository { nameWithOwner }
         mergeable mergeStateStatus reviewDecision isInMergeQueue totalCommentsCount
+        # `isInMergeQueue` stays TRUE for an entry the queue has
+        # rejected, so a pull request that was declined rendered as
+        # calmly queued -- the amber "In merge queue" icon on something
+        # that is actually stuck. The entry's own state is what
+        # distinguishes them.
+        mergeQueueEntry { state }
         labels(first: 20) { nodes { name color } }
         reviewThreads(first: 20) { nodes { isResolved isOutdated } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
   }
-  reviewing: search(query: $reviewing, type: ISSUE, first: $first) {
-    issueCount
-    nodes {
-      ... on PullRequest {
-        id number title url isDraft createdAt updatedAt
-        headRefName headRefOid baseRefName
-        headRef { id }
-        author { login }
-        repository { nameWithOwner }
-        mergeable mergeStateStatus reviewDecision isInMergeQueue totalCommentsCount
-        labels(first: 20) { nodes { name color } }
-        reviewThreads(first: 20) { nodes { isResolved isOutdated } }
-        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-      }
-    }
-  }
-}"#;
+}
+"#;
 
 /// The dashboard counters, as one aliased query costing 1 point.
 /// `$week` and `$month` are ISO dates.

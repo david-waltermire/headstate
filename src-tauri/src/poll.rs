@@ -994,9 +994,10 @@ mod tests {
             .map(|c| q.matches(c).count() as u64)
             .sum::<u64>();
         assert_eq!(
-            cost, 6,
+            cost, 3,
             "PRS_QUERY cost changed; re-measure against the live API \
-             (it was 6 points on 2026-08-23) before updating this number"
+             (it was 3 points on 2026-08-25, for ONE search -- the query \
+              carried two aliases and cost 6 until they were split)"
         );
 
         // The FLOOR, not the default: a user picking the fastest allowed

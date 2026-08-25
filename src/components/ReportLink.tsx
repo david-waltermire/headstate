@@ -1,6 +1,7 @@
 import { ExternalLink } from "./ExternalLink";
 import { useEffect, useState } from "react";
-import { reportUrl } from "../lib/reportError";
+import { errorOnlyReport, reportUrl } from "../lib/reportError";
+import { issueUrl } from "../lib/report";
 
 /// "Report this" on an error banner.
 ///
@@ -12,10 +13,18 @@ import { reportUrl } from "../lib/reportError";
 /// app should do.
 ///
 /// The URL is built asynchronously (version and platform come from the
-/// backend), so the link only appears once it is ready. A brief absence
-/// beats a link that does nothing when clicked.
+/// backend), but the link renders IMMEDIATELY with a URL that carries
+/// only the error. It used to render nothing until the lookups
+/// resolved, so an IPC call that never answered left the link
+/// permanently absent -- which is what "Report this does nothing"
+/// actually was: not a dead click, a missing element.
+///
+/// The richer URL replaces it once the environment is known. Worst case
+/// the user files a report without the platform line, which is far
+/// better than not being able to file one.
 export function ReportLink({ error }: { error: string }) {
-  const [url, setUrl] = useState<string | null>(null);
+  // Seeded, not null: there is always something to file.
+  const [url, setUrl] = useState<string>(() => issueUrl(errorOnlyReport(error)));
 
   useEffect(() => {
     let live = true;
@@ -29,7 +38,6 @@ export function ReportLink({ error }: { error: string }) {
     };
   }, [error]);
 
-  if (url === null) return null;
   return (
     <ExternalLink
       href={url}

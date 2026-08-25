@@ -16,7 +16,41 @@ import { buildReport, issueUrl } from "./report";
 /// `ExternalLink`, which is how every external link in the app reaches
 /// the browser.
 export async function reportUrl(error: string): Promise<string> {
-  const version = await getVersion().catch(() => "unknown");
-  const [platform, arch] = await buildTarget().catch(() => ["unknown", "unknown"]);
+  const [version, target] = await Promise.all([
+    settled(getVersion(), "unknown"),
+    settled(buildTarget(), ["unknown", "unknown"] as [string, string]),
+  ]);
+  const [platform, arch] = target;
   return issueUrl(buildReport({ version, platform, arch, error }));
+}
+
+/// A report with just the error, for the instant the banner appears.
+///
+/// The environment lookups are asynchronous; this is what the link
+/// carries until they answer, so it is never absent.
+export function errorOnlyReport(error: string): string {
+  return buildReport({
+    version: "unknown",
+    platform: "unknown",
+    arch: "unknown",
+    error,
+  });
+}
+
+/// A promise's value, a fallback if it rejects, and a fallback if it
+/// never settles at all.
+///
+/// `.catch` covers rejection but NOT a hang, and an IPC call that never
+/// answers left `reportUrl` pending forever -- so the link, which only
+/// renders once the URL resolves, never appeared. That is what "Report
+/// this does nothing" looked like: not a dead click, an absent element.
+///
+/// Two seconds: these are local lookups, not network calls. If they have
+/// not answered by then they are not going to, and a report naming an
+/// unknown platform is worth far more than no report.
+function settled<T>(p: Promise<T>, fallback: T): Promise<T> {
+  return Promise.race([
+    p.catch(() => fallback),
+    new Promise<T>((resolve) => setTimeout(() => resolve(fallback), 2000)),
+  ]);
 }

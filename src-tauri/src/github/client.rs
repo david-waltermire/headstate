@@ -154,6 +154,11 @@ fn is_transport_error(e: &octocrab::Error) -> bool {
 /// so halving the page halves the spend as well as the server-side work.
 const PAGE_FULL: u32 = 100;
 
+/// The two searches the app runs, named once so the poll path and the
+/// review path cannot drift apart.
+const AUTHORED_OPEN: &str = "is:pr is:open author:@me";
+const REVIEW_REQUESTED: &str = "is:pr is:open review-requested:@me";
+
 /// The fallback page when GitHub cannot answer the full one.
 ///
 /// Half, not a quarter: the point is to get a list at all on an account
@@ -228,41 +233,34 @@ impl GitHubClient {
     /// Only ONE retry, and only when the failure says the server gave
     /// up. Retrying a 401 or a malformed query would just spend the
     /// budget twice for the same answer.
-    async fn fetch_prs_page(&self, first: u32) -> Result<serde_json::Value, ClientError> {
-        let attempt = self
-            .graphql_partial_ok(&json!({
-                "query": PRS_QUERY,
-                "variables": {
-                    "q": "is:pr is:open author:@me",
-                    "reviewing": "is:pr is:open review-requested:@me",
-                    "first": first,
-                }
-            }))
-            .await;
-
-        match attempt {
-            Err(e) if first > PAGE_REDUCED && server_gave_up(&e) => {
-                // The SHAPE of the failure, not just that one happened.
-                // A reported log showed every poll failing for an hour
-                // and the app never said which request, how large, or
-                // how long it took -- so three fixes were reasoned from
-                // the error text alone and none of them was the cause.
+    /// One search, with a smaller page if GitHub gives up on the first.
+    ///
+    /// The retry is only for a failure that means the SERVER gave up --
+    /// a 5xx or an unparseable body. A 401 or a malformed query means
+    /// asking again changes nothing and would spend the budget twice.
+    async fn search_page_with_fallback(
+        &self,
+        query: &str,
+    ) -> Result<serde_json::Value, ClientError> {
+        match self.search_page(query, PAGE_FULL).await {
+            Err(e) if server_gave_up(&e) => {
                 log::warn!(
-                    "GitHub could not answer a {first}-item pull request query ({e}); \
+                    "GitHub could not answer a {PAGE_FULL}-item query ({e}); \
                      retrying with {PAGE_REDUCED}"
                 );
-                self.graphql_partial_ok(&json!({
-                    "query": PRS_QUERY,
-                    "variables": {
-                        "q": "is:pr is:open author:@me",
-                        "reviewing": "is:pr is:open review-requested:@me",
-                        "first": PAGE_REDUCED,
-                    }
-                }))
-                .await
+                self.search_page(query, PAGE_REDUCED).await
             }
             other => other,
         }
+    }
+
+    /// One search, one request.
+    async fn search_page(&self, query: &str, first: u32) -> Result<serde_json::Value, ClientError> {
+        self.graphql_partial_ok(&json!({
+            "query": PRS_QUERY,
+            "variables": { "q": query, "first": first },
+        }))
+        .await
     }
 
     /// Every open PR authored by the viewer, with CI, mergeability, review
@@ -271,7 +269,7 @@ impl GitHubClient {
     /// Octocrab unwraps the GraphQL `data` envelope, so the value returned
     /// here has `search` at its top level rather than under `data`.
     pub async fn fetch_prs(&self) -> Result<Vec<PullRequest>, ClientError> {
-        let v = self.fetch_prs_page(PAGE_FULL).await?;
+        let v = self.search_page_with_fallback(AUTHORED_OPEN).await?;
         Ok(map_search(&v))
     }
 
@@ -283,7 +281,17 @@ impl GitHubClient {
     /// shapes; the poll loop fetches both in one request via
     /// `fetch_prs_and_reviewing`.
     pub async fn fetch_reviewing(&self) -> Result<Vec<PullRequest>, ClientError> {
-        Ok(self.fetch_prs_and_reviewing().await?.1)
+        // Its OWN request, not both lists. It used to call
+        // `fetch_prs_and_reviewing`, so opening To review paid for the
+        // authored list as well -- and on a reported account with 40
+        // authored and 71 review-requested, that is 111 pull requests
+        // fully populated in one query when 71 were wanted.
+        //
+        // Same shrinking fallback as the authored path: 71 items is
+        // nearly twice 40, which is why My pull requests recovered on
+        // that account and To review did not.
+        let v = self.search_page_with_fallback(REVIEW_REQUESTED).await?;
+        Ok(map_list(&v, "authored"))
     }
 
     /// How many pull requests await the user's review.
@@ -298,33 +306,31 @@ impl GitHubClient {
         let v = self
             .graphql_partial_ok(&json!({
                 "query": COUNT_QUERY,
-                "variables": { "q": "is:pr is:open review-requested:@me" },
+                "variables": { "q": REVIEW_REQUESTED },
             }))
             .await?;
         Ok(v["matching"]["issueCount"].as_u64().unwrap_or(0))
     }
 
-    /// Both lists from ONE request.
+    /// Both lists, as two CONCURRENT requests.
+    ///
+    /// Two requests rather than one aliased query: the aliased form made
+    /// every caller pay for both searches, so opening To review fetched
+    /// the authored list too. Concurrent, so the wall-clock is one
+    /// request rather than the sum.
     pub async fn fetch_prs_and_reviewing(
         &self,
     ) -> Result<(Vec<PullRequest>, Vec<PullRequest>), ClientError> {
-        let v = self
-            .graphql_partial_ok(&json!({
-                "query": PRS_QUERY,
-                "variables": {
-                    "q": "is:pr is:open author:@me",
-                    "reviewing": "is:pr is:open review-requested:@me",
-                    // REQUIRED. `$first` is `Int!`, so omitting it makes
-                    // GitHub reject the whole query -- "Variable $first
-                    // of type Int! was provided invalid value" -- with
-                    // no data at all. It was introduced when the page
-                    // size became a variable and this call site was
-                    // missed, which broke the review queue outright.
-                    "first": PAGE_FULL,
-                }
-            }))
-            .await?;
-        Ok((map_list(&v, "authored"), map_list(&v, "reviewing")))
+        let (authored, reviewing) = tokio::join!(
+            self.search_page_with_fallback(AUTHORED_OPEN),
+            self.search_page_with_fallback(REVIEW_REQUESTED),
+        );
+        // Both map from the `authored` alias: the query has one search,
+        // named that whatever it is searching for.
+        Ok((
+            map_list(&authored?, "authored"),
+            map_list(&reviewing?, "authored"),
+        ))
     }
 
     /// Median cycle time this week against last, in one request.
@@ -430,7 +436,7 @@ impl GitHubClient {
 
     pub async fn fetch_prs_with_total(&self) -> Result<(Vec<PullRequest>, u64), ClientError> {
         let started = std::time::Instant::now();
-        let v = self.fetch_prs_page(PAGE_FULL).await?;
+        let v = self.search_page_with_fallback(AUTHORED_OPEN).await?;
         // How long GitHub took, and what it was asked for. A slow
         // response is the leading indicator of the timeout that follows,
         // and neither was recorded anywhere. Counts and timings only --
@@ -904,6 +910,31 @@ mod tests {
 
         // Unmatched requests 404 in wiremock, so a call that omits
         // `first` fails here rather than passing silently.
+        assert!(client_for(&server).await.fetch_reviewing().await.is_ok());
+    }
+
+    /// To review fetches ONLY the review queue.
+    ///
+    /// It used to call `fetch_prs_and_reviewing`, so opening that view
+    /// also fetched the authored list -- on a reported account, 111
+    /// fully populated pull requests when 71 were wanted. That is why My
+    /// pull requests recovered there once the page shrank and To review
+    /// did not.
+    #[tokio::test]
+    async fn the_review_queue_does_not_fetch_the_authored_list() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("review-requested"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"authored": {"nodes": []}}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // Any request NOT matching `review-requested` is unmatched and
+        // 404s, so fetching the authored list too fails this.
         assert!(client_for(&server).await.fetch_reviewing().await.is_ok());
     }
 
