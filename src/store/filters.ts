@@ -112,6 +112,16 @@ export const useFilters = create<FilterStore>()(
             ...s.filtersByView,
             [s.view]: { ...s.filtersByView[s.view], [key]: value },
           },
+          // Choosing a REPO is navigation -- it is how the sidebar
+          // changes page -- so it must leave the detail view. Selecting
+          // a repository and still staring at one pull request from a
+          // different one meant clicking "Back to list" every time, and
+          // the sidebar appeared to do nothing.
+          //
+          // Only `repo`. The other keys narrow the list you are looking
+          // at, and closing the detail view on a label filter would
+          // throw away what the user is reading.
+          ...(key === "repo" ? { selectedPr: null } : {}),
         })),
       // Preset navigation replaces the filter set wholesale, so a click
       // never inherits a filter the user forgot was active and shows a
