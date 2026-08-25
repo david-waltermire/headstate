@@ -558,6 +558,16 @@ pub fn spawn(
                         prs.len(),
                         needs_attention_count(&prs)
                     );
+                    // Fields GitHub refused on this fetch, then cleared:
+                    // a later complete response must stop reporting a
+                    // shortfall that no longer exists. Emitted even when
+                    // zero, so the banner disappears on recovery rather
+                    // than sticking until relaunch.
+                    let refused = crate::github::client::REFUSED_FIELDS.swap(0, Ordering::Relaxed);
+                    if let Err(e) = app.emit("prs-incomplete", refused) {
+                        log::warn!("failed to emit prs-incomplete: {e}");
+                    }
+
                     consecutive_failures = 0;
                     persist_and_emit(&app, &prs);
                     if has_checking(&prs) {

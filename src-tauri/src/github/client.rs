@@ -32,28 +32,6 @@ pub enum ClientError {
     /// wrong thing.
     #[error("GitHub could not answer (it returned a {0} rather than data). This usually clears on its own.")]
     NotJson(String),
-    /// GitHub answered but could not resolve part of what was asked.
-    ///
-    /// `RESOURCE_LIMITS_EXCEEDED` is a BUDGET error -- the query
-    /// exceeded a node or per-field time limit -- not an authorisation
-    /// one. v3.2.4 shipped a message blaming SAML SSO, which was wrong:
-    /// a SAML refusal is type FORBIDDEN with a `saml_failure` hint, and
-    /// the app uses the same token `gh` does, so a working `gh` rules
-    /// authorisation out entirely.
-    ///
-    /// It arrives as HTTP 200 with partial data, so nothing else treats
-    /// it as a failure and the user saw an empty list under a green
-    /// status bar.
-    ///
-    /// The message deliberately does NOT tell the user to do anything.
-    /// The previous one sent them to `gh auth login`, which cannot fix a
-    /// budget error -- a confident wrong instruction is worse than
-    /// admitting the app is asking for too much.
-    #[error(
-        "GitHub could not return {0} of the fields requested; the query asks for more \
-         than it will compute at once. Some pull requests may be missing or incomplete."
-    )]
-    OverBudget(usize),
     /// A concurrent chunk task panicked or was cancelled. Surfaced rather
     /// than ignored: silently dropping a chunk would render a short series
     /// that looks like real data.
@@ -103,10 +81,6 @@ impl ClientError {
             // server gave up rather than objected, so the next tick may
             // well succeed.
             ClientError::NotJson(_) => true,
-            // NOT transient. An unauthorised token fails identically on
-            // every tick, and waiting for a second opinion just delays
-            // the one message the user can act on.
-            ClientError::OverBudget(_) => false,
         }
     }
 }
@@ -187,6 +161,17 @@ fn server_gave_up(e: &ClientError) -> bool {
 pub struct GitHubClient {
     octocrab: Octocrab,
 }
+
+/// How many fields GitHub refused on the last request, or 0.
+///
+/// A module-level counter rather than a return value: the partial-data
+/// path is buried in a shared helper that every query goes through, and
+/// threading an extra channel out of all of them would touch every
+/// signature to carry one advisory number.
+///
+/// Read and cleared by the poll loop after each fetch, so a later
+/// complete response stops reporting a shortfall that no longer exists.
+pub static REFUSED_FIELDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 impl GitHubClient {
     pub fn new(octocrab: Octocrab) -> Self {
@@ -681,8 +666,19 @@ async fn graphql_partial_ok(
             // error here the user can actually fix, and the fix is not
             // guessable: `gh auth login` again and authorise the token
             // for the organisation.
+            // NOT an error. v3.2.5 escalated this to one, which broke
+            // the rule stated three comments above -- "one repository's
+            // failed resolver must not blank the whole list" -- and did
+            // exactly that: a user who had been seeing a partial review
+            // queue started seeing nothing at all.
+            //
+            // GitHub returned usable data alongside the complaint, and a
+            // short list beats an empty one. The count is carried out to
+            // the UI separately so the shortfall is VISIBLE rather than
+            // silent, which was the real problem the escalation was
+            // trying to solve.
             if types.contains(&"RESOURCE_LIMITS_EXCEEDED") {
-                return Err(ClientError::OverBudget(errs.len()));
+                REFUSED_FIELDS.store(errs.len(), std::sync::atomic::Ordering::Relaxed);
             }
 
             Ok(d.clone())
@@ -1165,23 +1161,32 @@ mod tests {
         assert_eq!(prs[0].number, 42);
     }
 
-    /// RESOURCE_LIMITS_EXCEEDED is a BUDGET error, and the message must
-    /// not claim otherwise.
+    /// Partial data is KEPT, not escalated to an error.
     ///
-    /// v3.2.4 shipped a message blaming SAML SSO and telling the user to
-    /// run `gh auth login`. That was wrong: a SAML refusal is type
-    /// FORBIDDEN, and the app uses the same token `gh` does -- so a
-    /// working `gh` rules authorisation out. Sending someone to
-    /// re-authenticate over a budget error is worse than saying nothing,
-    /// which is why this asserts the WRONG advice is absent as well as
-    /// the right description being present.
+    /// v3.2.5 turned RESOURCE_LIMITS_EXCEEDED into a hard failure so the
+    /// user would stop seeing a silently-short list. It made things
+    /// worse: a user who had been seeing a partial review queue started
+    /// seeing nothing at all, with "could not return 86 of the fields
+    /// requested" where the list used to be.
+    ///
+    /// It also broke the rule this function's own comment states -- one
+    /// repository's failed resolver must not blank the whole list.
+    ///
+    /// The shortfall is still surfaced, via `REFUSED_FIELDS`, so it is
+    /// visible without being fatal.
     #[tokio::test]
-    async fn an_over_budget_response_is_reported_without_bad_advice() {
+    async fn an_over_budget_response_keeps_the_data_it_got() {
+        REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/graphql"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "data": { "authored": { "nodes": [] } },
+                "data": {"authored": {"nodes": [{
+                    "number": 1, "title": "t", "url": "u",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "updatedAt": "2026-01-01T00:00:00Z",
+                    "repository": {"nameWithOwner": "octocat/hello-world"}
+                }]}},
                 "errors": [
                     {"type": "RESOURCE_LIMITS_EXCEEDED", "message": "refused"},
                     {"type": "RESOURCE_LIMITS_EXCEEDED", "message": "refused"}
@@ -1190,19 +1195,21 @@ mod tests {
             .mount(&server)
             .await;
 
-        let err = client_for(&server).await.fetch_prs().await.unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("could not return"),
-            "must say what happened: {msg}"
+        let prs = client_for(&server)
+            .await
+            .fetch_prs()
+            .await
+            .expect("must not fail");
+        assert_eq!(
+            prs.len(),
+            1,
+            "the pull request GitHub DID return must survive"
         );
-        assert!(
-            !msg.contains("sign-on") && !msg.contains("gh auth login"),
-            "must not send the user to re-authenticate over a budget error: {msg}"
+        assert_eq!(
+            REFUSED_FIELDS.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "the shortfall must still be reported"
         );
-        // The same query fails the same way next tick, so waiting for a
-        // second opinion only delays the message.
-        assert!(!err.is_transient(), "an over-budget query fails every tick");
     }
 
     /// A partial success keeps its data AND surfaces the errors.

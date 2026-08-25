@@ -8,6 +8,7 @@ import {
   useReviewingCount,
   useViewCadence,
   useTruncation,
+  useIncomplete,
   usePollError,
 } from "./api/hooks";
 import { FilterBar } from "./components/FilterBar";
@@ -54,6 +55,7 @@ export default function App() {
   useRefreshRequested();
   useViewCadence(view);
   const truncatedTotal = useTruncation();
+  const refusedFields = useIncomplete();
   const pollError = usePollError();
   // The LIST only where it is rendered. The badge below uses a count
   // query instead, so Docker and Worktrees no longer fetch 100 pull
@@ -273,6 +275,18 @@ export default function App() {
                 Scoped to the sidebar selection like the strip above. */}
             {view === "my-prs" ? <TriageChips prs={scopedForStrip} /> : null}
             {view === "to-review" ? <ReviewChips prs={scopedForStrip} /> : null}
+            {/* GitHub answered with usable data and a complaint that it
+                could not compute all of it. The list is real but short,
+                and saying so beats hiding it -- or, as v3.2.5 did,
+                discarding the data and showing nothing at all. */}
+            {refusedFields > 0 ? (
+              <p className="mb-3 rounded-md border border-[#d29922]/40 bg-[#d29922]/5 px-4 py-2 text-xs text-[#d29922]">
+                GitHub could not compute {refusedFields} field
+                {refusedFields === 1 ? "" : "s"} on the last refresh, so some pull
+                requests may be missing details or absent. It usually recovers on
+                the next one.
+              </p>
+            ) : null}
             <FilterBar prs={source} />
             {/* Fed the UNFILTERED list on purpose: selection is keyed by
                 repo#number, so narrowing a filter after selecting must

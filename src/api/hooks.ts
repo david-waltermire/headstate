@@ -902,6 +902,36 @@ export function useReviewingCount() {
 /// `null` in the normal case. The Rust loop emits `prs-truncated` only
 /// above the 100-PR page size, so this stays quiet for almost everyone
 /// while making the cap visible to the accounts it actually affects.
+/// How many fields GitHub refused on the last poll, or 0.
+///
+/// Advisory, like `useTruncation`. GitHub answered with usable data and
+/// a complaint that it could not compute all of it; the list is real but
+/// short, and saying so beats either hiding it or -- as v3.2.5 did --
+/// discarding the data and showing nothing.
+export function useIncomplete(): number {
+  const [refused, setRefused] = useState(0);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
+    listen<number>("prs-incomplete", (e) => setRefused(e.payload)).then(
+      (fn) => {
+        if (cancelled) safeUnlisten(fn);
+        else unlisten = fn;
+      },
+      // Same tolerance as truncation: an advisory notice must not break
+      // the page when the event bridge is absent.
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+      safeUnlisten(unlisten);
+    };
+  }, []);
+
+  return refused;
+}
+
 export function useTruncation(): number | null {
   const [total, setTotal] = useState<number | null>(null);
 

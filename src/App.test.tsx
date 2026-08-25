@@ -9,6 +9,7 @@ import { useFilters } from "./store/filters";
 // exercise the wiring, not the backend.
 const mockPrs = vi.fn<() => PullRequest[]>(() => []);
 const mockReviewing = vi.fn<() => PullRequest[]>(() => []);
+const mockRefused = vi.fn<() => number>(() => 0);
 
 vi.mock("./api/hooks", () => ({
   // Defaults, matching the Rust side: nothing hidden, close hides.
@@ -25,6 +26,8 @@ vi.mock("./api/hooks", () => ({
   usePollError: () => null,
   useRefreshRequested: () => undefined,
   useTruncation: () => null,
+  // No refused fields: the advisory banner stays hidden.
+  useIncomplete: () => mockRefused(),
   useViewCadence: () => undefined,
   usePollState: () => "idle",
   usePollInterval: () => ({ seconds: 120, set: () => Promise.resolve(120) }),
@@ -283,5 +286,43 @@ describe("opening a pull request from To review", () => {
     useFilters.setState({ selectedPr: { repo: "someone/else", number: 71 } });
     render(<App />);
     expect(screen.getByRole("button", { name: /back to list/i })).toBeTruthy();
+  });
+});
+
+
+/// v3.2.5 escalated a partial response to a hard error, so a user who
+/// had been seeing a short review queue started seeing nothing at all.
+/// The data is kept now, and the shortfall is said out loud instead.
+describe("an incomplete refresh", () => {
+  beforeEach(() => {
+    mockRefused.mockReturnValue(0);
+    mockPrs.mockReturnValue([]);
+    useFilters.setState({
+      view: "my-prs",
+      panel: "list",
+      selectedPr: null,
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+    });
+  });
+
+  it("says so when GitHub refused some fields", () => {
+    mockRefused.mockReturnValue(86);
+    render(<App />);
+    expect(screen.getByText(/could not compute 86 fields/i)).toBeTruthy();
+  });
+
+  // Silence is the normal case; a banner that is always there stops
+  // being read.
+  it("stays quiet when nothing was refused", () => {
+    render(<App />);
+    expect(screen.queryByText(/could not compute/i)).toBeNull();
+  });
+
+  // The whole point of the fix: the list is still there.
+  it("still renders the pull requests it did receive", () => {
+    mockRefused.mockReturnValue(86);
+    mockPrs.mockReturnValue([{ ...PR_FIXTURES[0], title: "Survived" }]);
+    render(<App />);
+    expect(screen.getByText("Survived")).toBeTruthy();
   });
 });
