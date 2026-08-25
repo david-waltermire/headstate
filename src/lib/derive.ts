@@ -42,6 +42,36 @@ export function readyToQueue(pr: PullRequest): boolean {
   return !pr.is_draft && pr.ci === "success" && pr.review === "approved" && !pr.in_merge_queue;
 }
 
+/// Ready to be reviewed right now.
+///
+/// The review queue's counterpart to `needsAttention`: what a reviewer
+/// can pick up without wasting anyone's time.
+///
+/// Deliberately NOT `awaitingReview`, which asks whether the AUTHOR is
+/// waiting on a review. This asks whether the review is worth GIVING
+/// yet, which is a different question with a different answer on a
+/// conflicted or queued pull request.
+///
+/// `ci === "none"` counts as ready: a repository with no checks
+/// configured has nothing to wait for, and excluding it would empty
+/// this section entirely for anyone not running CI. But `pending` does
+/// NOT -- "ready" means the checks passed, not that they have not failed
+/// yet, and a run in progress may still go red.
+///
+/// Conflicts exclude it because the diff a reviewer reads is not the
+/// diff that will land. An existing review verdict excludes it because
+/// this section is what is still WAITING.
+export function readyForReview(pr: PullRequest): boolean {
+  return (
+    !pr.is_draft &&
+    (pr.ci === "success" || pr.ci === "none") &&
+    pr.merge !== "conflicted" &&
+    pr.review !== "approved" &&
+    pr.review !== "changes_requested" &&
+    !pr.in_merge_queue
+  );
+}
+
 /// Needs MY attention as a reviewer.
 ///
 /// Deliberately NOT `needsAttention`, which means blocked on you as the

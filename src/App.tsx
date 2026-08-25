@@ -13,6 +13,7 @@ import {
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
+import { ReadyStrip } from "./components/ReadyStrip";
 import { CourtStrip } from "./components/CourtStrip";
 import { PrDetailView } from "./components/PrDetailView";
 import { BulkBar } from "./components/BulkBar";
@@ -252,6 +253,17 @@ export default function App() {
             ) : null}
             {view === "my-prs" ? (
               <PrioritiesStrip
+                prs={scopedForStrip}
+                onOpen={(pr) => selectPr({ repo: pr.repo, number: pr.number })}
+              />
+            ) : null}
+            {/* The review queue's counterpart to the attention strip:
+                what a reviewer can pick up right now. Scoped to the
+                sidebar selection for the same reason -- on one
+                repository you want that repository's work, not a list
+                dominated by nine others. */}
+            {view === "to-review" ? (
+              <ReadyStrip
                 prs={scopedForStrip}
                 onOpen={(pr) => selectPr({ repo: pr.repo, number: pr.number })}
               />
