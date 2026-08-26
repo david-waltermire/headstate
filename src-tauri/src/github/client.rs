@@ -326,14 +326,14 @@ impl GitHubClient {
         // Read the counter for THIS request, before anything else can
         // touch it. Reading it later would race the next poll, and in
         // the test suite it raced other tests.
-        // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3).
+        // DIAGNOSTIC LOGGING (Settings > diagnostic log).
         let started = std::time::Instant::now();
         let v = self.search_page_with_fallback(REVIEW_REQUESTED).await?;
         // Counted from THIS response, not from shared state. A global
         // counter raced the next poll -- and, in the test suite, other
         // tests running in parallel.
         let mapped = map_list(&v, "authored");
-        log::info!(
+        crate::diag!(
             "[diag] fetch_reviewing total {}ms mapped={}",
             started.elapsed().as_millis(),
             mapped.len()
@@ -391,7 +391,7 @@ impl GitHubClient {
     pub async fn fetch_prs_and_reviewing(
         &self,
     ) -> Result<(Vec<PullRequest>, Vec<PullRequest>), ClientError> {
-        // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). These two run
+        // DIAGNOSTIC LOGGING (Settings > diagnostic log). These two run
         // concurrently, so a total far above the slower of the two
         // means they are NOT actually overlapping -- which would point
         // at connection-pool or rate-limiter serialization rather than
@@ -401,7 +401,7 @@ impl GitHubClient {
             self.search_page_with_fallback(AUTHORED_OPEN),
             self.search_page_with_fallback(REVIEW_REQUESTED),
         );
-        log::info!(
+        crate::diag!(
             "[diag] fetch_prs_and_reviewing both searches settled in {}ms",
             started.elapsed().as_millis()
         );
@@ -709,7 +709,7 @@ async fn graphql_partial_ok(
     // body as a serde failure ("expected value at line 1 column 1"),
     // which describes a parser's internal state and hides the fact that
     // GitHub answered 502. The status is the actionable part.
-    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). The POST is where
+    // DIAGNOSTIC LOGGING (Settings > diagnostic log). The POST is where
     // octocrab's retry middleware lives: `max_retries: 3` with a
     // 60-second minimum wait on a rate-limit response, so ONE call here
     // can legitimately take minutes while every layer above it simply
@@ -718,7 +718,7 @@ async fn graphql_partial_ok(
     // since a slow failure is as interesting as a slow success.
     let http_started = std::time::Instant::now();
     let posted: Result<serde_json::Value, _> = octocrab.post("/graphql", Some(body)).await;
-    log::info!(
+    crate::diag!(
         "[diag] graphql POST {} after {}ms",
         if posted.is_ok() { "ok" } else { "failed" },
         http_started.elapsed().as_millis()

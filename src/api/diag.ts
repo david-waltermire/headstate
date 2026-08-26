@@ -1,8 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect } from "react";
 
-/// TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). Removed with the rest of the
-/// diagnostics once the To review slowness is understood.
+/// Diagnostic timing log, off unless the user turns it on in Settings.
+///
+/// Added in v3.5.3 to diagnose a slow review query on one machine, and
+/// kept as a switch rather than removed: the next "it is slow on my
+/// machine" report wants exactly this log, and asking someone to
+/// install a special build to produce it is far worse than a checkbox.
+///
+/// The Rust side owns the on/off decision (`crate::diag`), so this
+/// always sends and the command drops the line when logging is off.
+/// Duplicating the flag here would mean two sources of truth for one
+/// setting, and the IPC call is cheap against the work being measured.
 ///
 /// Writes through the Rust side so frontend and backend lines land in
 /// ONE file, in order. That ordering is the whole point: the reported
@@ -41,7 +50,7 @@ export function timed<T>(name: string, fn: () => Promise<T>): () => Promise<T> {
   };
 }
 
-/// TEMPORARY DIAGNOSTIC HOOK (v3.5.3).
+/// DIAGNOSTIC HOOK (Settings > diagnostic log).
 ///
 /// Reports what the To review query is actually doing each render. The
 /// reported symptom -- "No open pull requests" shown indefinitely after

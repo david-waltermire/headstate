@@ -45,6 +45,13 @@ export interface UiPrefs {
   hidden_views: string[];
   close_hides_to_tray: boolean;
   announce_updates: boolean;
+  /// Whether to write the verbose `[diag]` timing log.
+  ///
+  /// Kept as a switch rather than removed after v3.5.3: the next
+  /// "it is slow on my machine" report wants exactly this log, and
+  /// asking someone to install a special build to produce it is much
+  /// worse than a checkbox.
+  diagnostic_logging: boolean;
 }
 
 export const getUiPrefs = () => invoke<UiPrefs>("get_ui_prefs");

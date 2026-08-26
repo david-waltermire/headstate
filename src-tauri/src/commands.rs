@@ -50,7 +50,7 @@ pub fn db_path(app: &AppHandle) -> std::path::PathBuf {
         .join("headstate.db")
 }
 
-/// TEMPORARY DIAGNOSTIC COMMAND (v3.5.3).
+/// DIAGNOSTIC COMMAND (Settings > diagnostic log).
 ///
 /// Lets the frontend write into the same log file as the Rust side, so
 /// one file shows the whole path in order: React deciding to fetch, the
@@ -59,26 +59,29 @@ pub fn db_path(app: &AppHandle) -> std::path::PathBuf {
 /// question is precisely WHICH half the missing minute is in.
 ///
 /// Takes an already-formatted line rather than structured fields: every
-/// caller is in this repo and passes counts and timings only. It is
-/// removed along with the rest of the diagnostics.
+/// caller is in this repo and passes counts and timings only.
+///
+/// The line is dropped when diagnostics are off, so the frontend does
+/// not need its own copy of the flag -- one source of truth for one
+/// setting.
 #[tauri::command]
 pub fn diag_log(line: String) {
     // Truncated: a log line is not a channel for page content, and a
     // bounded length means a runaway caller cannot fill the disk.
     let line: String = line.chars().take(300).collect();
-    log::info!("[diag][ui] {line}");
+    crate::diag!("[diag][ui] {line}");
 }
 
 /// The cached snapshot, so the window paints real content at launch rather
 /// than a spinner. Never talks to GitHub.
 #[tauri::command]
 pub fn get_cached(app: AppHandle) -> Result<Vec<PullRequest>, String> {
-    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). Distinguishes a cold
+    // DIAGNOSTIC LOGGING (Settings > diagnostic log). Distinguishes a cold
     // cache (n=0, so the UI must wait on a live fetch) from a warm one,
     // which is the difference between "slow query" and "slow paint".
     let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
     let out = load_snapshot(&conn, CachedList::Authored).map_err(|e| e.to_string());
-    log::info!(
+    crate::diag!(
         "[diag] cmd get_cached {}",
         match &out {
             Ok(v) => format!("ok n={}", v.len()),
@@ -103,14 +106,14 @@ pub async fn refresh_now(client: State<'_, GhClient>) -> Result<Vec<PullRequest>
     // `retry` enabled each attempt restarts them, so a machine that
     // cannot complete a handshake sat on "Loading pull requests" for
     // minutes rather than failing with something to act on.
-    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3).
-    log::info!("[diag] cmd refresh_now start");
+    // DIAGNOSTIC LOGGING (Settings > diagnostic log).
+    crate::diag!("[diag] cmd refresh_now start");
     let started = std::time::Instant::now();
     let out = match tokio::time::timeout(crate::poll::FETCH_TIMEOUT, client.fetch_prs()).await {
         Ok(res) => res.map_err(|e| e.to_string()),
         Err(_) => Err(ClientError::Timeout(crate::poll::FETCH_TIMEOUT.as_secs()).to_string()),
     };
-    log::info!(
+    crate::diag!(
         "[diag] cmd refresh_now end {}ms {}",
         started.elapsed().as_millis(),
         match &out {
@@ -1055,10 +1058,15 @@ pub fn set_ui_prefs(app: AppHandle, prefs: crate::poll::UiPrefs) -> Result<(), S
     let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
     crate::store::settings::set(&conn, settings::keys::UI_PREFS, &prefs)
         .map_err(|e| e.to_string())?;
+    // Applied immediately rather than at the next launch. Someone who
+    // just ticked the box to capture a problem should get the log for
+    // the problem they are currently reproducing, not the next one.
+    crate::diag::set_enabled(prefs.diagnostic_logging);
     log::info!(
-        "ui: {} view(s) hidden, close_hides_to_tray={}",
+        "ui: {} view(s) hidden, close_hides_to_tray={}, diagnostics={}",
         prefs.hidden_views.len(),
-        prefs.close_hides_to_tray
+        prefs.close_hides_to_tray,
+        prefs.diagnostic_logging
     );
     Ok(())
 }
@@ -1122,14 +1130,14 @@ pub fn set_poll_interval(
 /// costs 1 rate-limit point against 6, and ~0.9s against ~4s.
 #[tauri::command]
 pub async fn count_reviewing(client: State<'_, GhClient>) -> Result<u64, String> {
-    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). Cheap and runs on every
+    // DIAGNOSTIC LOGGING (Settings > diagnostic log). Cheap and runs on every
     // view, so it doubles as a liveness check: if the badge count keeps
     // returning quickly while the list hangs, the account and token are
     // fine and the problem is specific to the heavy query.
     let started = std::time::Instant::now();
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
     let out = client.count_reviewing().await.map_err(|e| e.to_string());
-    log::info!(
+    crate::diag!(
         "[diag] cmd count_reviewing {}ms {:?}",
         started.elapsed().as_millis(),
         out
@@ -1148,7 +1156,7 @@ pub async fn count_reviewing(client: State<'_, GhClient>) -> Result<u64, String>
 pub fn get_cached_reviewing(app: AppHandle) -> Result<Vec<PullRequest>, String> {
     let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
     let out = load_snapshot(&conn, CachedList::Reviewing).map_err(|e| e.to_string());
-    log::info!(
+    crate::diag!(
         "[diag] cmd get_cached_reviewing {}",
         match &out {
             Ok(v) => format!("ok n={}", v.len()),
@@ -1163,12 +1171,12 @@ pub async fn get_reviewing(
     app: AppHandle,
     client: State<'_, GhClient>,
 ) -> Result<Vec<PullRequest>, String> {
-    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). Brackets the whole
+    // DIAGNOSTIC LOGGING (Settings > diagnostic log). Brackets the whole
     // command, so the log distinguishes the three ways To review can
     // appear stuck: the command was never invoked (no start line), it
     // is still running (a start with no end), or it returned promptly
     // and the delay is in the frontend (a fast start/end pair).
-    log::info!("[diag] cmd get_reviewing start");
+    crate::diag!("[diag] cmd get_reviewing start");
     let started = std::time::Instant::now();
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
     let out = client
@@ -1206,7 +1214,7 @@ pub async fn get_reviewing(
             prs
         })
         .map_err(|e| e.to_string());
-    log::info!(
+    crate::diag!(
         "[diag] cmd get_reviewing end {}ms {}",
         started.elapsed().as_millis(),
         match &out {

@@ -242,6 +242,26 @@ export function SettingsDialog({
             />
             Tell me when a new version is available
           </label>
+          {/* Off by default and phrased for the situation it exists
+              for. "Diagnostic logging" alone invites people to turn it
+              on speculatively; naming the cost and the use makes it a
+              tool you reach for when asked. */}
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={ui?.diagnostic_logging ?? false}
+              onChange={() =>
+                ui && void setUi({ ...ui, diagnostic_logging: !ui.diagnostic_logging })
+              }
+            />
+            Write a detailed timing log (for diagnosing slowness)
+          </label>
+          {ui?.diagnostic_logging ? (
+            <p className="text-xs text-[#8b949e]">
+              Records how long each GitHub request takes. Counts and timings only —
+              never repository names, titles, or tokens.
+            </p>
+          ) : null}
           {autostartError ? (
             <p role="alert" className="text-xs text-[#f85149]">
               {autostartError}

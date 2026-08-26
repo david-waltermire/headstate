@@ -82,6 +82,58 @@ export function PrDetailView({
   const rerun = useRerunChecks();
   const [rerunning, setRerunning] = useState(false);
   const rerunnable = pr ? rerunnableRun(pr.checks) : null;
+  // The viewer's own verdict, read the same way ReviewBox reads it: the
+  // pull request's aggregate `review` says CHANGES_REQUESTED when
+  // somebody ELSE blocked it, which says nothing about whether this
+  // user approved. DISMISSED is deliberately not an approval -- GitHub
+  // dismisses a review when the branch changes under it.
+  const approvedByViewer =
+    viewer !== undefined &&
+    pr?.latest_reviews?.some((r) => r.author === viewer && r.state === "APPROVED") === true;
+
+  /// Lifted out of the ReviewBox JSX so the sticky header can submit
+  /// the same way. Two call sites for one mutation, and a second inline
+  /// copy would be the kind of duplication that drifts.
+  ///
+  /// `pr` is non-null at every call site (both are inside the loaded
+  /// branch), but this closure is defined above the guard, so the guard
+  /// is restated rather than asserted away.
+  const submitReview = (verdict: ReviewVerdictName, body: string) => {
+    if (!pr) return;
+    setReviewing(verdict);
+    const done = () => setReviewing(null);
+    const label =
+      verdict === "approve"
+        ? "Approved"
+        : verdict === "request_changes"
+          ? "Changes requested on"
+          : "Commented on";
+    // "Comment" posts a CONVERSATION comment, not a COMMENT
+    // review. They are different nodes: addComment creates an
+    // IssueComment, addPullRequestReview creates a
+    // PullRequestReview with state COMMENTED. The list above
+    // renders IssueComments -- so routing this through the review
+    // mutation would post something the user then could not see.
+    const submit =
+      verdict === "comment"
+        ? comment(pr.id, pr.repo, pr.number, body)
+        : review(pr.id, pr.repo, pr.number, verdict, body);
+    submit.then(
+      () => {
+        done();
+        toast.success(`${label} ${pr.repo}#${pr.number}`);
+      },
+      (e: unknown) => {
+        done();
+        // GitHub's refusal is the useful part -- "Can not approve
+        // your own pull request" tells the user exactly what
+        // happened where a generic message would not.
+        toast.error(`Could not review #${pr.number}`, {
+          description: typeof e === "string" ? e : undefined,
+        });
+      },
+    );
+  };
 
   const back = (
     <button
@@ -163,6 +215,40 @@ export function PrDetailView({
               that only makes sense in the body, and a bare approve
               button here would submit an empty review from a header the
               user may have scrolled past without reading. */}
+          {/* Approve, pinned.
+              
+              Deliberately omitted at first because it submits a review
+              with no comment from a bar the user may have scrolled
+              past. Added on request -- and GitHub allows an empty
+              approval, so the objection was about accident, not
+              validity. The guards that make it safe are the same ones
+              ReviewBox applies: hidden on your own pull request, which
+              GitHub refuses outright, and showing "Approved" rather
+              than offering a second one once your approval is on
+              record. */}
+          {viewer !== undefined && viewer !== pr.author ? (
+            <button
+              type="button"
+              disabled={approvedByViewer || reviewing !== null}
+              onClick={() => submitReview("approve", "")}
+              title={
+                approvedByViewer
+                  ? "You have already approved this pull request"
+                  : "Approve without a comment"
+              }
+              className={`rounded px-2.5 py-1 text-sm font-medium ${
+                approvedByViewer || reviewing !== null
+                  ? "border border-[#30363d] text-[#8b949e] opacity-50"
+                  : "bg-[#238636] text-white hover:bg-[#2ea043]"
+              }`}
+            >
+              {reviewing === "approve"
+                ? "Working…"
+                : approvedByViewer
+                  ? "Approved"
+                  : "Approve"}
+            </button>
+          ) : null}
           <PrActions pr={pr} compact />
           <ExternalLink
             href={pr.url}
@@ -225,41 +311,7 @@ export function PrDetailView({
         author={pr.author}
         latestReviews={pr.latest_reviews}
         busy={reviewing}
-        onSubmit={(verdict, body) => {
-          setReviewing(verdict);
-          const done = () => setReviewing(null);
-          const label =
-            verdict === "approve"
-              ? "Approved"
-              : verdict === "request_changes"
-                ? "Changes requested on"
-                : "Commented on";
-          // "Comment" posts a CONVERSATION comment, not a COMMENT
-          // review. They are different nodes: addComment creates an
-          // IssueComment, addPullRequestReview creates a
-          // PullRequestReview with state COMMENTED. The list above
-          // renders IssueComments -- so routing this through the review
-          // mutation would post something the user then could not see.
-          const submit =
-            verdict === "comment"
-              ? comment(pr.id, pr.repo, pr.number, body)
-              : review(pr.id, pr.repo, pr.number, verdict, body);
-          submit.then(
-            () => {
-              done();
-              toast.success(`${label} ${pr.repo}#${pr.number}`);
-            },
-            (e: unknown) => {
-              done();
-              // GitHub's refusal is the useful part -- "Can not approve
-              // your own pull request" tells the user exactly what
-              // happened where a generic message would not.
-              toast.error(`Could not review #${pr.number}`, {
-                description: typeof e === "string" ? e : undefined,
-              });
-            },
-          );
-        }}
+        onSubmit={submitReview}
       />
 
       {pr.body.trim() ? (

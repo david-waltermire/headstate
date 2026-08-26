@@ -215,6 +215,19 @@ pub struct UiPrefs {
     /// other preference alongside it.
     #[serde(default = "default_true")]
     pub announce_updates: bool,
+    /// Whether to write the verbose `[diag]` timing log.
+    ///
+    /// Added in v3.5.3 to diagnose a slow review query on one machine,
+    /// and kept as a switch rather than removed: the next report of
+    /// "it is slow on my machine" wants exactly this log, and asking a
+    /// user to install a special build to produce it is a much worse
+    /// experience than a checkbox.
+    ///
+    /// Defaults OFF. The logging is per-request and noisy, and a log
+    /// nobody asked for is a cost every user pays for a diagnosis
+    /// almost none of them need.
+    #[serde(default)]
+    pub diagnostic_logging: bool,
 }
 
 /// Serde needs a function, not a literal, for a defaulted bool.
@@ -235,6 +248,10 @@ impl Default for UiPrefs {
             // finds the dialog intrusive can turn it off, which is what
             // the setting is for.
             announce_updates: true,
+            // OFF. Verbose per-request logging is a cost every user
+            // pays for a diagnosis almost none of them need -- it is
+            // turned on when someone is chasing a problem.
+            diagnostic_logging: false,
         }
     }
 }
@@ -517,20 +534,20 @@ pub fn spawn(
             // handles, so a wedged request costs one tick instead of the
             // rest of the session.
             let _ = app.emit("poll-state", "fetching");
-            // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). The background loop
+            // DIAGNOSTIC LOGGING (Settings > diagnostic log). The background loop
             // shares one client -- and one connection pool -- with
             // whatever the user just clicked, so a tick that overlaps a
             // foreground query can be what makes the foreground query
             // look slow. Logging the tick boundaries makes that overlap
             // visible against the `cmd get_reviewing` bracket.
-            log::info!("[diag] poll tick start");
+            crate::diag!("[diag] poll tick start");
             let tick_started = std::time::Instant::now();
             let fetched =
                 match tokio::time::timeout(FETCH_TIMEOUT, client.fetch_prs_with_total()).await {
                     Ok(res) => res,
                     Err(_) => Err(ClientError::Timeout(FETCH_TIMEOUT.as_secs())),
                 };
-            log::info!(
+            crate::diag!(
                 "[diag] poll tick fetch done {}ms {}",
                 tick_started.elapsed().as_millis(),
                 match &fetched {
@@ -627,7 +644,7 @@ pub fn spawn(
                 focused.load(Ordering::Relaxed) && view_needs_github.load(Ordering::Relaxed),
                 interval_secs.load(Ordering::Relaxed),
             );
-            log::info!("[diag] poll tick sleeping {}s", sleep_for.as_secs());
+            crate::diag!("[diag] poll tick sleeping {}s", sleep_for.as_secs());
             tokio::select! {
                 _ = tokio::time::sleep(interval_for_secs(
                     // A view that does not show PR data polls at the

@@ -89,7 +89,7 @@ export default function App() {
     isRefreshing: reviewingRefreshing,
     isFromCache: reviewingFromCache,
   } = reviewingQuery;
-  // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3).
+  // DIAGNOSTIC LOGGING (Settings > diagnostic log).
   useReviewingDiag({
     enabled: view === "to-review",
     status: reviewingQuery.status,

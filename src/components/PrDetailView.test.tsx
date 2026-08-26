@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrDetail } from "@/types/pr";
 
 const state = vi.hoisted(() => ({
@@ -13,9 +13,16 @@ const deleteBranch = vi.hoisted(() =>
     () => Promise.resolve(),
   ),
 );
-const reviewPr = vi.fn(() => Promise.resolve());
+// Typed so the call arguments can be asserted on: the untyped form
+// infers an empty tuple, and indexing it is a compile error.
+const reviewPr =
+  vi.fn<(id: string, repo: string, number: number, verdict: string, body: string) => Promise<void>>(
+    () => Promise.resolve(),
+  );
 const rerunChecks = vi.fn(() => Promise.resolve());
 const commentOnPr = vi.fn(() => Promise.resolve());
+
+const viewer = vi.hoisted(() => ({ current: undefined as string | undefined }));
 
 vi.mock("../api/hooks", () => ({
   usePrDetail: () => ({ ...state, error: "boom", refetch: vi.fn() }),
@@ -26,7 +33,9 @@ vi.mock("../api/hooks", () => ({
   useCommentOnPr: () => commentOnPr,
   // The detail view treats undefined as "we could not ask", which is
   // deliberately NOT the same as "this is mine" -- see ReviewBox.
-  useViewer: () => ({ data: undefined }),
+  // Controllable so the pinned Approve button, which is hidden on your
+  // own pull request, can be exercised at all.
+  useViewer: () => ({ data: viewer.current }),
 }));
 
 import { PrDetailView } from "./PrDetailView";
@@ -249,6 +258,100 @@ describe("PrDetailView", () => {
       <PrDetailView repo="octocat/hello-world" number={42} onBack={vi.fn()} />,
     );
     expect(container.querySelector(".sticky")?.className).toContain("top-0");
+  });
+
+  /// Requested after the first pass deliberately left it out. GitHub
+  /// allows an empty approval, so the original objection was about
+  /// clicking it by accident, not about validity -- the guards below
+  /// are what address that.
+  describe("the pinned Approve button", () => {
+    afterEach(() => {
+      viewer.current = undefined;
+    });
+
+    it("approves without needing the comment box", async () => {
+      viewer.current = "octocat";
+      view({ author: "someone-else" });
+      const bar = document.querySelector(".sticky") as HTMLElement;
+      fireEvent.click(within(bar).getByRole("button", { name: "Approve" }));
+      await waitFor(() => expect(reviewPr).toHaveBeenCalled());
+      expect(reviewPr.mock.calls[0][3]).toBe("approve");
+      // No comment: an empty body is what "approve from the header"
+      // means, and GitHub accepts it.
+      expect(reviewPr.mock.calls[0][4]).toBe("");
+    });
+
+    /// GitHub refuses self-approval outright, so offering the button
+    /// and surfacing a GraphQL refusal after the click is strictly
+    /// worse than not offering it.
+    it("is absent on your own pull request", () => {
+      viewer.current = "octocat";
+      view({ author: "octocat" });
+      const bar = document.querySelector(".sticky") as HTMLElement;
+      expect(within(bar).queryByRole("button", { name: /approve/i })).toBeNull();
+    });
+
+    /// Undefined means "we could not fetch the login", which is not the
+    /// same as "this is not yours" -- but a pinned one-click approve is
+    /// the wrong thing to offer on a guess.
+    it("is absent when the viewer could not be identified", () => {
+      viewer.current = undefined;
+      view({ author: "someone-else" });
+      const bar = document.querySelector(".sticky") as HTMLElement;
+      expect(within(bar).queryByRole("button", { name: /approve/i })).toBeNull();
+    });
+
+    it("says Approved and stops offering once your approval is on record", () => {
+      viewer.current = "octocat";
+      view({
+        author: "someone-else",
+        latest_reviews: [{ author: "octocat", state: "APPROVED" }],
+      });
+      const bar = document.querySelector(".sticky") as HTMLElement;
+      const btn = within(bar).getByRole("button", { name: "Approved" }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+
+    /// GitHub dismisses a review when the branch changes under it, so
+    /// showing "Approved" would claim something false about the code
+    /// currently on the branch.
+    it("offers Approve again after a dismissal", () => {
+      viewer.current = "octocat";
+      view({
+        author: "someone-else",
+        latest_reviews: [{ author: "octocat", state: "DISMISSED" }],
+      });
+      const bar = document.querySelector(".sticky") as HTMLElement;
+      expect(within(bar).getByRole("button", { name: "Approve" })).toBeTruthy();
+    });
+
+    /// The aggregate `review` field says CHANGES_REQUESTED when someone
+    /// ELSE blocked it, which says nothing about this viewer.
+    it("ignores another reviewer's verdict", () => {
+      viewer.current = "octocat";
+      view({
+        author: "someone-else",
+        review: "changes_requested",
+        latest_reviews: [{ author: "hubot", state: "CHANGES_REQUESTED" }],
+      });
+      const bar = document.querySelector(".sticky") as HTMLElement;
+      expect(within(bar).getByRole("button", { name: "Approve" })).toBeTruthy();
+    });
+
+    /// Somebody else approving is not you approving. Matching on state
+    /// alone would hide the button on any pull request another reviewer
+    /// had already signed off -- exactly the ones still waiting on you.
+    it("ignores another reviewer's approval", () => {
+      viewer.current = "octocat";
+      view({
+        author: "someone-else",
+        review: "approved",
+        latest_reviews: [{ author: "hubot", state: "APPROVED" }],
+      });
+      const bar = document.querySelector(".sticky") as HTMLElement;
+      const btn = within(bar).getByRole("button", { name: "Approve" }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
   });
 
   /// Close is irreversible and deliberately NOT pinned: a destructive

@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod commands;
+pub mod diag;
 pub mod docker;
 pub mod github;
 pub mod poll;
@@ -125,6 +126,13 @@ pub fn run() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Before anything that logs. The stored preference decides
+            // whether the verbose `[diag]` lines are written, and
+            // reading it first means a user who left diagnostics on
+            // captures the startup sequence too -- which is where the
+            // v3.5.3 log proved most useful.
+            crate::diag::set_enabled(crate::commands::read_ui_prefs(&handle).diagnostic_logging);
 
             // `read_token` shells out via `std::process::Command`, which
             // blocks -- fine here, because `setup` is a plain synchronous
