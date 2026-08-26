@@ -33,9 +33,33 @@ export function needsAttention(pr: PullRequest): boolean {
   return pr.merge === "conflicted" || pr.ci === "failure";
 }
 
+/// Waiting on a reviewer and nobody else.
+///
+/// `ci === "none"` counts, for the same reason `readyForReview` accepts
+/// it: a repository with no checks configured has nothing to wait for.
+/// Requiring `success` silently dropped those pull requests out of BOTH
+/// triage chips -- they were not blocked on the author and not counted
+/// as awaiting review either, so a repo showing 13 in the sidebar
+/// offered chips adding to 7 with no explanation for the rest.
+///
+/// `pending` still does not count, also matching `readyForReview`: a
+/// run in progress may go red, and "awaiting review" would be the wrong
+/// thing to tell someone about a pull request that is about to need
+/// their attention instead.
 export function awaitingReview(pr: PullRequest): boolean {
-  return !pr.is_draft && pr.ci === "success" &&
-    (pr.review === "none" || pr.review === "review_required");
+  return (
+    !pr.is_draft &&
+    // A conflicted pull request is blocked on the AUTHOR, not on a
+    // reviewer -- the diff a reviewer would read is not the diff that
+    // will land. Without this, a conflicted PR with green CI counted in
+    // BOTH chips at once, which is how "4 need attention · 3 awaiting
+    // review" could describe overlapping sets and reconcile with
+    // nothing. `readyForReview` already excludes conflicts for exactly
+    // this reason.
+    pr.merge !== "conflicted" &&
+    (pr.ci === "success" || pr.ci === "none") &&
+    (pr.review === "none" || pr.review === "review_required")
+  );
 }
 
 export function readyToQueue(pr: PullRequest): boolean {

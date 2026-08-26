@@ -213,3 +213,59 @@ describe("free-text search", () => {
     expect(applyFilters(prs, { query: "   " }).length).toBe(prs.length);
   });
 });
+
+/// Reported: "the left hand menu says 13 for the selected repo, Needs
+/// your attention shows 4, Awaiting review shows 3 — where are the
+/// missing 6?"
+///
+/// Two defects behind it, both fixed here. The shapes below are the
+/// five that a live GraphQL probe actually returned for a real
+/// account, not invented ones.
+describe("the triage chips reconcile with the repo count", () => {
+  const account = () => [
+    ...Array(9).fill(0).map(() => prWithState("success", "mergeable", "none")),
+    ...Array(3).fill(0).map(() => prWithState("success", "conflicted", "none")),
+    prWithState("success", "mergeable", "none", { merge_status: "blocked" }),
+    // A repository with no checks configured. This one was in NEITHER
+    // chip before, because `awaitingReview` demanded `success`.
+    prWithState("none", "mergeable", "none", { merge_status: "blocked" }),
+    prWithState("failure", "conflicted", "none", { is_draft: true }),
+  ];
+
+  it("leaves no pull request in neither chip", () => {
+    const all = account();
+    const orphans = all.filter((p) => !needsAttention(p) && !awaitingReview(p));
+    expect(orphans).toHaveLength(0);
+  });
+
+  /// A conflicted pull request with green CI used to satisfy BOTH: it
+  /// is blocked on the author AND had nothing else disqualifying it.
+  /// Counting it twice is how two chips could describe overlapping sets
+  /// and reconcile with nothing.
+  it("puts no pull request in both chips", () => {
+    const all = account();
+    const doubled = all.filter((p) => needsAttention(p) && awaitingReview(p));
+    expect(doubled).toHaveLength(0);
+  });
+
+  it("sums to the total, which is the whole point", () => {
+    const all = account();
+    expect(all.filter(needsAttention).length + all.filter(awaitingReview).length).toBe(
+      all.length,
+    );
+  });
+
+  /// The specific miss: no checks configured is not "waiting on CI".
+  /// `readyForReview` already treated it that way and these two must
+  /// agree.
+  it("counts a pull request with no CI as awaiting review", () => {
+    expect(awaitingReview(prWithState("none", "mergeable", "none"))).toBe(true);
+  });
+
+  /// But a run still in progress does NOT count -- it may go red, and
+  /// "awaiting review" would be the wrong thing to say about a pull
+  /// request about to need the author instead.
+  it("does not count a pull request whose CI is still running", () => {
+    expect(awaitingReview(prWithState("pending", "mergeable", "none"))).toBe(false);
+  });
+});

@@ -26,7 +26,19 @@ export function CourtStrip({
   onSelect: (court: "mine" | "theirs") => void;
 }) {
   const { mine, theirs } = splitByCourt(authored, reviewing);
-  const total = authored.length;
+  // BOTH lists, because `mine` and `theirs` span both. Counting only
+  // the authored list made the numerators and the denominator describe
+  // different sets, so "36 needs you ... of 13 open" was not a
+  // deliberate exclusion the reader could work out -- it was two
+  // unrelated numbers in one sentence.
+  //
+  // Deduplicated on the same key `splitByCourt` uses: GitHub cannot
+  // request a review from an author today, but the total must not
+  // double-count if that ever changes, or it would exceed a sum of
+  // parts that does not.
+  const total = new Set(
+    [...authored, ...reviewing].map((pr) => `${pr.repo}#${pr.number}`),
+  ).size;
 
   if (mine.length === 0) {
     return (

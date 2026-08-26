@@ -87,4 +87,33 @@ describe("CourtStrip", () => {
     render(<CourtStrip authored={[pr()]} reviewing={[]} onSelect={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /needs you/i })).toBeNull();
   });
+
+  /// Reported: "36 needs you · 18 waiting on others · of 13 open".
+  ///
+  /// The numerators span BOTH lists, so a denominator counting only the
+  /// authored one described a different set entirely -- two unrelated
+  /// numbers in one sentence.
+  it("counts both lists in the denominator, not just the authored one", () => {
+    render(
+      <CourtStrip
+        authored={[pr({ number: 1, ci: "failure" })]}
+        reviewing={[pr({ number: 2, repo: "o/other" }), pr({ number: 3, repo: "o/other" })]}
+        onSelect={vi.fn()}
+      />,
+    );
+    // One authored plus two in review is three, not one.
+    expect(screen.getByText("of 3 open")).toBeTruthy();
+  });
+
+  /// The two lists are fetched separately. GitHub cannot request a
+  /// review from an author today, but the total must not double-count
+  /// if that ever changes -- or it would exceed a sum of parts that
+  /// does not.
+  it("does not double-count a pull request present in both lists", () => {
+    const shared = pr({ number: 7, repo: "o/r", ci: "failure" });
+    render(
+      <CourtStrip authored={[shared]} reviewing={[shared]} onSelect={vi.fn()} />,
+    );
+    expect(screen.getByText("of 1 open")).toBeTruthy();
+  });
 });

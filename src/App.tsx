@@ -184,6 +184,16 @@ export default function App() {
     ? source.filter((pr) => pr.repo === filters.repo)
     : source;
 
+  // Scoped the SAME WAY as `scopedForStrip`. The court strip counts
+  // both lists together, so passing a repo-scoped authored list beside
+  // an account-wide review queue produced a sentence with two different
+  // scopes in it: "36 needs you · 18 waiting on others · of 13 open",
+  // where 36 and 18 spanned every repo and 13 was one repo. That reads
+  // as an arithmetic bug because it is one.
+  const scopedReviewing = filters.repo
+    ? reviewing.filter((pr) => pr.repo === filters.repo)
+    : reviewing;
+
   // `repo` is navigation, not a filter (see the store's `reset`), so it
   // does not count -- an empty repo page should still explain itself.
 
@@ -267,7 +277,7 @@ export default function App() {
             {view === "my-prs" ? (
               <CourtStrip
                 authored={scopedForStrip}
-                reviewing={reviewing}
+                reviewing={scopedReviewing}
                 onSelect={(court) =>
                   applyPreset(
                     court === "mine"

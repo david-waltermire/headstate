@@ -132,6 +132,37 @@ describe("App — priorities strip scoping", () => {
     expect(strip?.textContent).not.toContain("Blocked in a different repo");
   });
 
+  /// Reported: "36 needs you · 18 waiting on others · of 13 open" on a
+  /// repo with 13 open pull requests. The court strip counts BOTH
+  /// lists, so a repo-scoped authored list beside an account-wide
+  /// review queue put two different scopes in one sentence.
+  it("scopes the review queue to the selected repo, like the authored list", () => {
+    mockPrs.mockReturnValue([
+      prWithState("failure", "mergeable", "none", {
+        number: 1,
+        repo: "octocat/hello-world",
+      }),
+    ]);
+    // Two review-requested pull requests in a DIFFERENT repo. Before the
+    // fix these inflated the counts on a page scoped to hello-world.
+    mockReviewing.mockReturnValue([
+      prWithState("success", "mergeable", "none", {
+        number: 90,
+        repo: "octocat/spoon-knife",
+      }),
+      prWithState("success", "mergeable", "none", {
+        number: 91,
+        repo: "octocat/spoon-knife",
+      }),
+    ]);
+
+    useFilters.setState({ filtersByView: { "my-prs": { repo: "octocat/hello-world" }, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
+    renderApp();
+
+    // One pull request in scope, so the denominator is 1 -- not 3.
+    expect(screen.getByText("of 1 open")).toBeTruthy();
+  });
+
   it("shows every repo in the strip when no repo is selected", () => {
     const here = prWithState("failure", "mergeable", "none", {
       number: 101,
