@@ -61,7 +61,20 @@ const LABEL: Record<PrActionName, string> = {
   dequeue: "Remove from merge queue",
 };
 
-export function PrActions({ pr }: { pr: PrDetail }) {
+export function PrActions({
+  pr,
+  compact = false,
+}: {
+  pr: PrDetail;
+  /// Render ONLY the primary merge action, for the sticky header.
+  ///
+  /// Reuses this component rather than reimplementing the button there:
+  /// the choice between merge, enqueue and dequeue, the availability
+  /// reasons, and the undo-toast handling all live here, and a second
+  /// copy in the header would drift from this one the first time any of
+  /// them changed.
+  compact?: boolean;
+}) {
   const act = useActOnPr();
   const [pending, setPending] = useState<PrActionName | null>(null);
   const [busy, setBusy] = useState<PrActionName | null>(null);
@@ -133,9 +146,17 @@ export function PrActions({ pr }: { pr: PrDetail }) {
       ? "enqueue"
       : "merge";
 
-  const offered: PrActionName[] = pr.is_draft
-    ? ["ready", "close"]
-    : [primaryMerge, "draft", "close"];
+  const offered: PrActionName[] = compact
+    ? // The header has room for one action, so it gets the one the user
+      // came for. Close is deliberately NOT here: it is irreversible,
+      // and an irreversible button that follows you down the page is
+      // the wrong thing to make easier to reach.
+      pr.is_draft
+      ? ["ready"]
+      : [primaryMerge]
+    : pr.is_draft
+      ? ["ready", "close"]
+      : [primaryMerge, "draft", "close"];
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -170,7 +191,10 @@ export function PrActions({ pr }: { pr: PrDetail }) {
 
       {/* The reason a disabled Merge is disabled, in the open rather than
           hidden in a tooltip nobody hovers. */}
-      {unavailable(pr, "merge") && !pr.is_draft ? (
+      {/* Suppressed in the header, where there is no room for a
+          sentence -- the disabled button keeps its `title`, and the full
+          explanation is still in the open in the body below. */}
+      {!compact && unavailable(pr, "merge") && !pr.is_draft ? (
         <span className="text-xs text-[#8b949e]">Cannot merge: {unavailable(pr, "merge")}</span>
       ) : null}
 

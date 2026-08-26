@@ -119,7 +119,54 @@ export function PrDetailView({
 
   return (
     <div className="flex flex-col gap-4">
-      {back}
+      {/* NOTE: the body's own `back` button is deliberately not rendered
+          here. The sticky header carries one that is always visible, and
+          two "back" controls a few pixels apart is worse than one. The
+          loading and error branches above still use `back`, since they
+          have no header to hang it on. */}
+      {/* Sticky, because the actions were unreachable from where the
+          decision gets made. Reading a long PR put "Back to list" far
+          above the viewport and "View on GitHub" far below it, so
+          approving meant scrolling to the top and opening it on GitHub
+          meant scrolling to the bottom.
+          
+          `top-0` is safe: the app header above scrolls away with the
+          content rather than being sticky itself, so nothing overlaps.
+          The scroll container is `<main>` in App, which is this
+          element's scrolling ancestor -- that is what makes `sticky`
+          work here at all. */}
+      <div className="sticky top-0 z-10 -mx-4 flex items-center gap-2 border-b border-[#30363d] bg-[#0d1117] px-4 py-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex shrink-0 items-center gap-1.5 text-sm text-[#8b949e] hover:text-[#e6edf3]"
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          Back to list
+        </button>
+        {/* No title or number here on purpose.
+            
+            Both are already in the <h2> immediately below, so putting
+            them in the header repeats the same words at the top of the
+            page and makes them ambiguous to a screen reader, which
+            reads every copy. Only one pull request is ever open, so
+            the pinned buttons cannot be about a different one. */}
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {/* The two the user actually reaches for, in the order they
+              reach for them. Approve is absent: it needs the comment box
+              that only makes sense in the body, and a bare approve
+              button here would submit an empty review from a header the
+              user may have scrolled past without reading. */}
+          <PrActions pr={pr} compact />
+          <ExternalLink
+            href={pr.url}
+            className="flex items-center gap-1.5 rounded border border-[#30363d] px-2.5 py-1 text-sm hover:bg-[#161b22]"
+          >
+            <ExternalLinkIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            GitHub
+          </ExternalLink>
+        </div>
+      </div>
 
       <div>
         <h2 className="text-lg font-semibold leading-snug text-[#e6edf3]">

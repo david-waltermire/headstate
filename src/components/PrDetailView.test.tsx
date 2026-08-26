@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrDetail } from "@/types/pr";
 
@@ -168,6 +168,63 @@ describe("PrDetailView", () => {
   it("surfaces unresolved conversations", () => {
     view({ unresolved_threads: 3 });
     expect(screen.getByText(/3 unresolved conversations/i)).toBeTruthy();
+  });
+
+  /// The reported problem: "there are no buttons that fix to the top of
+  /// a PR as I'm scrolling, so I have to scroll all the way to the top
+  /// to see approve and all the way to the bottom to see the view on
+  /// github button".
+  ///
+  /// The actions were unreachable from where the decision gets made --
+  /// after reading a long thread, every control was off-screen.
+  it("pins the back, merge and GitHub actions to the top", () => {
+    state.data = detail();
+    const { container } = render(
+      <PrDetailView repo="octocat/hello-world" number={42} onBack={vi.fn()} />,
+    );
+    const header = container.querySelector(".sticky");
+    expect(header, "the header must be sticky, not merely present").toBeTruthy();
+    const bar = header as HTMLElement;
+    expect(within(bar).getByRole("button", { name: /back to list/i })).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: /^merge$/i })).toBeTruthy();
+    expect(within(bar).getByText(/github/i)).toBeTruthy();
+  });
+
+  /// `top-0` only works because the app header above scrolls away. If
+  /// that ever changes, the two overlap and this is the reminder.
+  it("pins to the very top of the scroll container", () => {
+    state.data = detail();
+    const { container } = render(
+      <PrDetailView repo="octocat/hello-world" number={42} onBack={vi.fn()} />,
+    );
+    expect(container.querySelector(".sticky")?.className).toContain("top-0");
+  });
+
+  /// Close is irreversible and deliberately NOT pinned: a destructive
+  /// button that follows you down the page is the wrong one to make
+  /// easier to reach.
+  it("does not pin the irreversible close action", () => {
+    state.data = detail();
+    const { container } = render(
+      <PrDetailView repo="octocat/hello-world" number={42} onBack={vi.fn()} />,
+    );
+    const bar = container.querySelector(".sticky") as HTMLElement;
+    expect(within(bar).queryByRole("button", { name: /close pr/i })).toBeNull();
+    // Still available in the body, where it always was.
+    expect(screen.getByRole("button", { name: /close pr/i })).toBeTruthy();
+  });
+
+  /// The header must not become a second source of truth for which
+  /// merge action applies -- it renders `PrActions` in compact mode
+  /// rather than reimplementing the merge/enqueue/dequeue choice.
+  it("pins the queue action on a merge-queue branch, not a plain merge", () => {
+    state.data = { ...detail(), merge_queue_enabled: true };
+    const { container } = render(
+      <PrDetailView repo="octocat/hello-world" number={42} onBack={vi.fn()} />,
+    );
+    const bar = container.querySelector(".sticky") as HTMLElement;
+    expect(within(bar).getByRole("button", { name: /add to merge queue/i })).toBeTruthy();
+    expect(within(bar).queryByRole("button", { name: /^merge$/i })).toBeNull();
   });
 
   it("offers a way back to the list", () => {
