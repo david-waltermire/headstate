@@ -11,6 +11,7 @@ import {
   useIncomplete,
   usePollError,
 } from "./api/hooks";
+import { useReviewingDiag } from "./api/diag";
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
@@ -65,13 +66,21 @@ export default function App() {
   // the time anyone reaches To review -- so switching there showed an
   // empty list with no indication anything was happening, for as long
   // as the request took.
+  const reviewingQuery = useReviewing(view === "to-review");
   const {
     data: reviewing = [],
     isLoading: reviewingLoading,
     isError: reviewingError,
     error: reviewingErr,
     refetch: refetchReviewing,
-  } = useReviewing(view === "to-review");
+  } = reviewingQuery;
+  // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3).
+  useReviewingDiag({
+    enabled: view === "to-review",
+    status: reviewingQuery.status,
+    fetchStatus: reviewingQuery.fetchStatus,
+    count: reviewingQuery.data?.length,
+  });
   const { data: reviewingCount = 0 } = useReviewingCount();
 
   // The app had no keyboard affordances at all. These three need no

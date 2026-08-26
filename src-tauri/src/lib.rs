@@ -66,6 +66,7 @@ pub fn run() {
                 .build(),
         )
         .invoke_handler(tauri::generate_handler![
+            commands::diag_log,
             commands::get_cached,
             commands::refresh_now,
             commands::get_stats,

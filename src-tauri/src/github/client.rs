@@ -312,11 +312,19 @@ impl GitHubClient {
         // Read the counter for THIS request, before anything else can
         // touch it. Reading it later would race the next poll, and in
         // the test suite it raced other tests.
+        // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3).
+        let started = std::time::Instant::now();
         let v = self.search_page_with_fallback(REVIEW_REQUESTED).await?;
         // Counted from THIS response, not from shared state. A global
         // counter raced the next poll -- and, in the test suite, other
         // tests running in parallel.
-        Self::reject_empty_after_refusals(map_list(&v, "authored"), refused_fields(&v))
+        let mapped = map_list(&v, "authored");
+        log::info!(
+            "[diag] fetch_reviewing total {}ms mapped={}",
+            started.elapsed().as_millis(),
+            mapped.len()
+        );
+        Self::reject_empty_after_refusals(mapped, refused_fields(&v))
     }
 
     /// How many pull requests await the user's review.
@@ -346,9 +354,19 @@ impl GitHubClient {
     pub async fn fetch_prs_and_reviewing(
         &self,
     ) -> Result<(Vec<PullRequest>, Vec<PullRequest>), ClientError> {
+        // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). These two run
+        // concurrently, so a total far above the slower of the two
+        // means they are NOT actually overlapping -- which would point
+        // at connection-pool or rate-limiter serialization rather than
+        // at either query.
+        let started = std::time::Instant::now();
         let (authored, reviewing) = tokio::join!(
             self.search_page_with_fallback(AUTHORED_OPEN),
             self.search_page_with_fallback(REVIEW_REQUESTED),
+        );
+        log::info!(
+            "[diag] fetch_prs_and_reviewing both searches settled in {}ms",
+            started.elapsed().as_millis()
         );
         // Both map from the `authored` alias: the query has one search,
         // named that whatever it is searching for.
@@ -634,16 +652,26 @@ async fn graphql_partial_ok(
     // body as a serde failure ("expected value at line 1 column 1"),
     // which describes a parser's internal state and hides the fact that
     // GitHub answered 502. The status is the actionable part.
-    let raw: serde_json::Value =
-        octocrab
-            .post("/graphql", Some(body))
-            .await
-            .map_err(|e| match &e {
-                octocrab::Error::Serde { .. } | octocrab::Error::Json { .. } => {
-                    ClientError::NotJson("non-JSON response".into())
-                }
-                _ => ClientError::Api(e),
-            })?;
+    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). The POST is where
+    // octocrab's retry middleware lives: `max_retries: 3` with a
+    // 60-second minimum wait on a rate-limit response, so ONE call here
+    // can legitimately take minutes while every layer above it simply
+    // waits. That is the leading candidate for 5s by hand against a
+    // minute in the app, and nothing recorded it. Timed on BOTH paths,
+    // since a slow failure is as interesting as a slow success.
+    let http_started = std::time::Instant::now();
+    let posted: Result<serde_json::Value, _> = octocrab.post("/graphql", Some(body)).await;
+    log::info!(
+        "[diag] graphql POST {} after {}ms",
+        if posted.is_ok() { "ok" } else { "failed" },
+        http_started.elapsed().as_millis()
+    );
+    let raw: serde_json::Value = posted.map_err(|e| match &e {
+        octocrab::Error::Serde { .. } | octocrab::Error::Json { .. } => {
+            ClientError::NotJson("non-JSON response".into())
+        }
+        _ => ClientError::Api(e),
+    })?;
 
     let errors = raw.get("errors").and_then(|e| e.as_array());
     let data = raw.get("data").filter(|d| !d.is_null());

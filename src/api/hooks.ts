@@ -1,6 +1,7 @@
 import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { safeUnlisten } from "./unlisten";
+import { timed } from "./diag";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { DockerImage, PullRequest, Worktree } from "../types/pr";
 import type { PrActionName } from "./tauri";
@@ -95,12 +96,12 @@ export function usePullRequests() {
 
   return useQuery({
     queryKey: ["prs"],
-    queryFn: async () => {
+    queryFn: timed("prs", async () => {
       const cached = await getCached();
       // Show the cache immediately; the poll loop supplies fresh data.
       if (cached.length > 0) return cached;
       return refreshNow();
-    },
+    }),
     staleTime: Infinity,
   });
 }
@@ -873,7 +874,7 @@ export function useNotifyPrefs() {
 export function useReviewing(enabled = true) {
   return useQuery({
     queryKey: ["reviewing"],
-    queryFn: getReviewing,
+    queryFn: timed("reviewing", getReviewing),
     // Only the view that RENDERS these pull requests fetches them. It
     // used to run on every view -- including Docker and Worktrees, which
     // show none -- purely so a sidebar badge could display its length.
@@ -884,6 +885,7 @@ export function useReviewing(enabled = true) {
   });
 }
 
+
 /// How many pull requests await the user's review.
 ///
 /// The badge's own query, so it does not depend on the list being
@@ -892,7 +894,7 @@ export function useReviewing(enabled = true) {
 export function useReviewingCount() {
   return useQuery({
     queryKey: ["reviewing-count"],
-    queryFn: countReviewing,
+    queryFn: timed("reviewing-count", countReviewing),
     staleTime: 60_000,
   });
 }

@@ -517,11 +517,27 @@ pub fn spawn(
             // handles, so a wedged request costs one tick instead of the
             // rest of the session.
             let _ = app.emit("poll-state", "fetching");
+            // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). The background loop
+            // shares one client -- and one connection pool -- with
+            // whatever the user just clicked, so a tick that overlaps a
+            // foreground query can be what makes the foreground query
+            // look slow. Logging the tick boundaries makes that overlap
+            // visible against the `cmd get_reviewing` bracket.
+            log::info!("[diag] poll tick start");
+            let tick_started = std::time::Instant::now();
             let fetched =
                 match tokio::time::timeout(FETCH_TIMEOUT, client.fetch_prs_with_total()).await {
                     Ok(res) => res,
                     Err(_) => Err(ClientError::Timeout(FETCH_TIMEOUT.as_secs())),
                 };
+            log::info!(
+                "[diag] poll tick fetch done {}ms {}",
+                tick_started.elapsed().as_millis(),
+                match &fetched {
+                    Ok((prs, total)) => format!("ok n={} total={total}", prs.len()),
+                    Err(e) => format!("err: {e}"),
+                }
+            );
             match fetched {
                 Ok((prs, total)) => {
                     // Compare against the tick before this one. `previous`
@@ -607,6 +623,11 @@ pub fn spawn(
             // request that arrives mid-fetch is not lost -- the next
             // `notified()` returns immediately rather than waiting out a
             // full interval.
+            let sleep_for = interval_for_secs(
+                focused.load(Ordering::Relaxed) && view_needs_github.load(Ordering::Relaxed),
+                interval_secs.load(Ordering::Relaxed),
+            );
+            log::info!("[diag] poll tick sleeping {}s", sleep_for.as_secs());
             tokio::select! {
                 _ = tokio::time::sleep(interval_for_secs(
                     // A view that does not show PR data polls at the

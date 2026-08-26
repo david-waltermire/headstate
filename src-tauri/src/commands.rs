@@ -50,12 +50,42 @@ pub fn db_path(app: &AppHandle) -> std::path::PathBuf {
         .join("headstate.db")
 }
 
+/// TEMPORARY DIAGNOSTIC COMMAND (v3.5.3).
+///
+/// Lets the frontend write into the same log file as the Rust side, so
+/// one file shows the whole path in order: React deciding to fetch, the
+/// command running, the HTTP request, and React settling. Without a
+/// shared timeline the two halves cannot be lined up, and the open
+/// question is precisely WHICH half the missing minute is in.
+///
+/// Takes an already-formatted line rather than structured fields: every
+/// caller is in this repo and passes counts and timings only. It is
+/// removed along with the rest of the diagnostics.
+#[tauri::command]
+pub fn diag_log(line: String) {
+    // Truncated: a log line is not a channel for page content, and a
+    // bounded length means a runaway caller cannot fill the disk.
+    let line: String = line.chars().take(300).collect();
+    log::info!("[diag][ui] {line}");
+}
+
 /// The cached snapshot, so the window paints real content at launch rather
 /// than a spinner. Never talks to GitHub.
 #[tauri::command]
 pub fn get_cached(app: AppHandle) -> Result<Vec<PullRequest>, String> {
+    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). Distinguishes a cold
+    // cache (n=0, so the UI must wait on a live fetch) from a warm one,
+    // which is the difference between "slow query" and "slow paint".
     let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
-    load_snapshot(&conn).map_err(|e| e.to_string())
+    let out = load_snapshot(&conn).map_err(|e| e.to_string());
+    log::info!(
+        "[diag] cmd get_cached {}",
+        match &out {
+            Ok(v) => format!("ok n={}", v.len()),
+            Err(e) => format!("err: {e}"),
+        }
+    );
+    out
 }
 
 /// A user-initiated, out-of-band fetch (e.g. a manual refresh button).
@@ -73,10 +103,22 @@ pub async fn refresh_now(client: State<'_, GhClient>) -> Result<Vec<PullRequest>
     // `retry` enabled each attempt restarts them, so a machine that
     // cannot complete a handshake sat on "Loading pull requests" for
     // minutes rather than failing with something to act on.
-    match tokio::time::timeout(crate::poll::FETCH_TIMEOUT, client.fetch_prs()).await {
+    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3).
+    log::info!("[diag] cmd refresh_now start");
+    let started = std::time::Instant::now();
+    let out = match tokio::time::timeout(crate::poll::FETCH_TIMEOUT, client.fetch_prs()).await {
         Ok(res) => res.map_err(|e| e.to_string()),
         Err(_) => Err(ClientError::Timeout(crate::poll::FETCH_TIMEOUT.as_secs()).to_string()),
-    }
+    };
+    log::info!(
+        "[diag] cmd refresh_now end {}ms {}",
+        started.elapsed().as_millis(),
+        match &out {
+            Ok(v) => format!("ok n={}", v.len()),
+            Err(e) => format!("err: {e}"),
+        }
+    );
+    out
 }
 
 #[tauri::command]
@@ -1080,14 +1122,41 @@ pub fn set_poll_interval(
 /// costs 1 rate-limit point against 6, and ~0.9s against ~4s.
 #[tauri::command]
 pub async fn count_reviewing(client: State<'_, GhClient>) -> Result<u64, String> {
+    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). Cheap and runs on every
+    // view, so it doubles as a liveness check: if the badge count keeps
+    // returning quickly while the list hangs, the account and token are
+    // fine and the problem is specific to the heavy query.
+    let started = std::time::Instant::now();
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
-    client.count_reviewing().await.map_err(|e| e.to_string())
+    let out = client.count_reviewing().await.map_err(|e| e.to_string());
+    log::info!(
+        "[diag] cmd count_reviewing {}ms {:?}",
+        started.elapsed().as_millis(),
+        out
+    );
+    out
 }
 
 #[tauri::command]
 pub async fn get_reviewing(client: State<'_, GhClient>) -> Result<Vec<PullRequest>, String> {
+    // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). Brackets the whole
+    // command, so the log distinguishes the three ways To review can
+    // appear stuck: the command was never invoked (no start line), it
+    // is still running (a start with no end), or it returned promptly
+    // and the delay is in the frontend (a fast start/end pair).
+    log::info!("[diag] cmd get_reviewing start");
+    let started = std::time::Instant::now();
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
-    client.fetch_reviewing().await.map_err(|e| e.to_string())
+    let out = client.fetch_reviewing().await.map_err(|e| e.to_string());
+    log::info!(
+        "[diag] cmd get_reviewing end {}ms {}",
+        started.elapsed().as_millis(),
+        match &out {
+            Ok(v) => format!("ok n={}", v.len()),
+            Err(e) => format!("err: {e}"),
+        }
+    );
+    out
 }
 
 #[tauri::command]
