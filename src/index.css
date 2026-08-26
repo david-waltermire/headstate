@@ -148,3 +148,43 @@
     @apply font-sans;
     }
 }
+/* Always-visible scrollbars.
+ *
+ * macOS hides overlay scrollbars until you are already scrolling, which
+ * in a desktop app means there is no visible indication of how long a
+ * pull request is and nothing to grab to jump to the bottom. In a
+ * browser that is a familiar OS behaviour; in a window that looks like
+ * a native app it reads as a missing control.
+ *
+ * `::-webkit-scrollbar` is the right mechanism here rather than
+ * `scrollbar-width`, which only offers thin/auto/none and cannot force
+ * an overlay scrollbar to stay visible. WKWebView is the only engine
+ * this ships on, so the vendor prefix is not a portability compromise.
+ */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  /* Padding-box plus a transparent border is what gives the thumb its
+     inset -- a bare background would touch both edges of the track. */
+  background-color: #30363d;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: #484f58;
+}
+
+/* The square where the two bars meet, which otherwise renders as a
+   light patch against the dark ground. */
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

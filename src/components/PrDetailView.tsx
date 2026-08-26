@@ -15,6 +15,7 @@ import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
 import { relativeTime } from "../lib/time";
 import { rerunnableRun } from "../lib/rerun";
 import { Markdown } from "./Markdown";
+import { Section } from "./Section";
 import { PrActions } from "./PrActions";
 import { ReviewBox } from "./ReviewBox";
 import { QueryError, errorMessage } from "./QueryError";
@@ -118,7 +119,12 @@ export function PrDetailView({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    // `max-w-4xl mx-auto`: the body is prose and prose needs a measure.
+    // At full window width a description ran the entire monitor, which
+    // is both hard to read and what made every section feel crammed
+    // against its neighbour. The sticky header opts out via `-mx-4` so
+    // it still spans the panel.
+    <div className="mx-auto flex max-w-4xl flex-col gap-3">
       {/* NOTE: the body's own `back` button is deliberately not rendered
           here. The sticky header carries one that is always visible, and
           two "back" controls a few pixels apart is worse than one. The
@@ -172,20 +178,36 @@ export function PrDetailView({
         <h2 className="text-lg font-semibold leading-snug text-[#e6edf3]">
           {pr.title} <span className="font-normal text-[#8b949e]">#{pr.number}</span>
         </h2>
-        <p className="mt-1 text-xs text-[#8b949e]">
-          {pr.author} wants to merge <span className="font-mono">{pr.head_ref}</span> into{" "}
-          <span className="font-mono">{pr.base_ref}</span> · {pr.repo}
-          {pr.is_draft ? " · draft" : null}
-        </p>
-        <p className="mt-1 text-xs text-[#8b949e]">
-          +{pr.additions.toLocaleString()} −{pr.deletions.toLocaleString()} across{" "}
-          {pr.changed_files} file{pr.changed_files === 1 ? "" : "s"}
+        {/* ONE metadata line, not two stacked paragraphs. The branch
+            pair and the diff size are the same kind of fact about the
+            same pull request, and splitting them across two lines was
+            half the vertical noise above the fold. */}
+        <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-xs text-[#8b949e]">
+          <span>
+            {pr.author} wants to merge <span className="font-mono">{pr.head_ref}</span> into{" "}
+            <span className="font-mono">{pr.base_ref}</span>
+          </span>
+          <span aria-hidden="true">·</span>
+          <span>{pr.repo}</span>
+          {pr.is_draft ? (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>draft</span>
+            </>
+          ) : null}
+          <span aria-hidden="true">·</span>
+          <span className="tabular-nums">
+            +{pr.additions.toLocaleString()} −{pr.deletions.toLocaleString()} across{" "}
+            {pr.changed_files} file{pr.changed_files === 1 ? "" : "s"}
+          </span>
           {pr.unresolved_threads > 0 ? (
-            <span className="text-[#d29922]">
-              {" "}
-              · {pr.unresolved_threads} unresolved conversation
-              {pr.unresolved_threads === 1 ? "" : "s"}
-            </span>
+            <>
+              <span aria-hidden="true">·</span>
+              <span className="text-[#d29922]">
+                {pr.unresolved_threads} unresolved conversation
+                {pr.unresolved_threads === 1 ? "" : "s"}
+              </span>
+            </>
           ) : null}
         </p>
       </div>
@@ -241,22 +263,32 @@ export function PrDetailView({
       />
 
       {pr.body.trim() ? (
-        <div className="rounded-md border border-[#30363d] p-4">
+        // Open by default: the description is what the pull request IS,
+        // and collapsing it would hide the thing you opened the view to
+        // read.
+        <Section title="Description">
           <Markdown>{pr.body}</Markdown>
-        </div>
+        </Section>
       ) : (
         <p className="text-sm text-[#8b949e]">No description.</p>
       )}
 
       {pr.checks.length > 0 ? (
-        <div className="rounded-md border border-[#30363d]">
-          <div className="flex items-center justify-between border-b border-[#30363d] px-3 py-2 text-sm font-semibold">
-            <span>Checks</span>
-            {/* Offered only when something FAILED and that failure
-                belongs to an Actions workflow run. A status context and
-                a non-Actions check both have no run to re-run, so the
-                button would 404 rather than help. */}
-            {rerunnable !== null ? (
+        // COLLAPSED when everything passed. A wall of twenty green
+        // check rows is the single largest block on a healthy pull
+        // request and tells you nothing you did not already learn from
+        // the CI pill -- but it stays open the moment anything is not
+        // passing, which is when you actually need the names.
+        <Section
+          title="Checks"
+          count={pr.checks.length}
+          defaultOpen={pr.checks.some((c) => c.state !== "success")}
+          // Offered only when something FAILED and that failure belongs
+          // to an Actions workflow run. A status context and a
+          // non-Actions check both have no run to re-run, so the button
+          // would 404 rather than help.
+          aside={
+            rerunnable !== null ? (
               <button
                 type="button"
                 disabled={rerunning}
@@ -282,21 +314,27 @@ export function PrDetailView({
               >
                 {rerunning ? "Working…" : "Re-run failed"}
               </button>
-            ) : null}
-          </div>
-          <div className="p-1">
-            {pr.checks.map((c) => (
-              <CheckRow key={c.name} {...c} />
-            ))}
-          </div>
-        </div>
+            ) : null
+          }
+        >
+          {pr.checks.map((c) => (
+            <CheckRow key={c.name} {...c} />
+          ))}
+        </Section>
       ) : null}
 
       {pr.comments.length > 0 ? (
-        <div className="flex flex-col gap-3">
-          <h3 className="text-sm font-semibold">
-            {pr.comment_count} comment{pr.comment_count === 1 ? "" : "s"}
-          </h3>
+        // COLLAPSED past a handful. Fifty comments is the longest block
+        // in this view by far, and scrolling past all of it to reach
+        // the footer links was most of the "shoved together" problem.
+        // A short thread stays open, because collapsing three comments
+        // hides nothing worth a click.
+        <Section
+          title="Comments"
+          count={pr.comment_count}
+          defaultOpen={pr.comments.length <= 5}
+        >
+          <div className="flex flex-col gap-3">
           {pr.comments.map((c, i) => (
             <div key={`${c.author}-${c.created_at}-${i}`} className="rounded-md border border-[#30363d] p-3">
               <p className="mb-2 text-xs text-[#8b949e]">
@@ -311,7 +349,8 @@ export function PrDetailView({
               Showing {pr.comments.length} of {pr.comment_count}. See the rest on GitHub.
             </p>
           ) : null}
-        </div>
+          </div>
+        </Section>
       ) : null}
 
       <div className="flex items-center gap-2">

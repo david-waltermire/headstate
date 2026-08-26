@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrDetail } from "@/types/pr";
 
@@ -168,6 +168,57 @@ describe("PrDetailView", () => {
   it("surfaces unresolved conversations", () => {
     view({ unresolved_threads: 3 });
     expect(screen.getByText(/3 unresolved conversations/i)).toBeTruthy();
+  });
+
+  /// Reported: the view "is all expanded and shoved together". A
+  /// healthy pull request with twenty passing checks made the largest
+  /// block on the page the one that repeats what the CI pill already
+  /// said.
+  it("collapses passing checks but opens them when something failed", () => {
+    view({
+      checks: [
+        { name: "build", state: "success", url: "", run_id: null },
+        { name: "lint", state: "success", url: "", run_id: null },
+      ],
+    });
+    expect(screen.queryByText("build")).toBeNull();
+
+    cleanup();
+    view({
+      checks: [
+        { name: "build", state: "success", url: "", run_id: null },
+        { name: "lint", state: "failure", url: "", run_id: 99 },
+      ],
+    });
+    // Open the moment anything is not passing -- that is when the names
+    // are what you came for.
+    expect(screen.getByText("lint")).toBeTruthy();
+  });
+
+  it("collapses a long comment thread and leaves a short one open", () => {
+    const comment = (i: number) => ({
+      author: "octocat",
+      created_at: "2026-08-20T10:00:00Z",
+      body: `comment ${i}`,
+    });
+    view({ comments: [comment(1), comment(2)], comment_count: 2 });
+    expect(screen.getByText("comment 1")).toBeTruthy();
+
+    cleanup();
+    view({
+      comments: [1, 2, 3, 4, 5, 6].map(comment),
+      comment_count: 6,
+    });
+    expect(screen.queryByText("comment 1")).toBeNull();
+    // Collapsed, but the count still says what is hidden.
+    expect(screen.getByText("6")).toBeTruthy();
+  });
+
+  /// The description is what the pull request IS -- collapsing it by
+  /// default would hide the thing the view exists to show.
+  it("leaves the description open", () => {
+    view({ body: "the description text" });
+    expect(screen.getByText(/the description text/)).toBeTruthy();
   });
 
   /// The reported problem: "there are no buttons that fix to the top of
