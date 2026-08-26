@@ -154,6 +154,7 @@ export function PrDetailView({
       <ReviewBox
         viewer={viewer}
         author={pr.author}
+        latestReviews={pr.latest_reviews}
         busy={reviewing}
         onSubmit={(verdict, body) => {
           setReviewing(verdict);

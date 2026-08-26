@@ -1,6 +1,6 @@
 import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   usePullRequests,
   useRefreshRequested,
@@ -9,9 +9,11 @@ import {
   useViewCadence,
   useTruncation,
   useIncomplete,
+  useReviewShortfall,
   usePollError,
 } from "./api/hooks";
 import { useReviewingDiag } from "./api/diag";
+import { useScrollReset } from "./lib/scrollReset";
 import { FilterBar } from "./components/FilterBar";
 import { NudgeWizard } from "./components/NudgeWizard";
 import { PrioritiesStrip } from "./components/PrioritiesStrip";
@@ -50,6 +52,16 @@ export default function App() {
   } = usePullRequests();
   const filters = useActiveFilters();
   const { view, panel, selectedPr, selectPr, applyPreset } = useFilters();
+  // The main panel is the scroll container for every view, so the reset
+  // hangs off it rather than off each page.
+  const mainRef = useRef<HTMLElement>(null);
+  // Every axis that changes WHAT is rendered, and nothing that merely
+  // changes the data within it. A poll tick refreshing the same list
+  // must not scroll the user away from what they are reading.
+  useScrollReset(
+    mainRef,
+    `${view}|${panel}|${filters.repo ?? ""}|${selectedPr ? `${selectedPr.repo}#${selectedPr.number}` : ""}`,
+  );
 
   // The tray's "Refresh now" menu item only emits `refresh-requested`; this
   // is what actually makes it do anything (see the hook's own comment).
@@ -57,6 +69,7 @@ export default function App() {
   useViewCadence(view);
   const truncatedTotal = useTruncation();
   const refusedFields = useIncomplete();
+  const reviewShortfall = useReviewShortfall();
   const pollError = usePollError();
   // The LIST only where it is rendered. The badge below uses a count
   // query instead, so Docker and Worktrees no longer fetch 100 pull
@@ -73,6 +86,8 @@ export default function App() {
     isError: reviewingError,
     error: reviewingErr,
     refetch: refetchReviewing,
+    isRefreshing: reviewingRefreshing,
+    isFromCache: reviewingFromCache,
   } = reviewingQuery;
   // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3).
   useReviewingDiag({
@@ -186,7 +201,7 @@ export default function App() {
       ) : (
         <RepoSidebar prs={source} viewCounts={{ "to-review": reviewingCount }} />
       )}
-      <main className="flex-1 overflow-auto">
+      <main ref={mainRef} className="flex-1 overflow-auto">
         <header className="flex items-center gap-2 border-b border-[#30363d] px-4 py-3">
           {/* View selection lives in the sidebar ("Stats", pinned to its
               bottom) rather than as a per-page tab pair here: the sidebar is
@@ -294,6 +309,28 @@ export default function App() {
                 {refusedFields === 1 ? "" : "s"} on the last refresh, so some pull
                 requests may be missing details or absent. It usually recovers on
                 the next one.
+              </p>
+            ) : null}
+            {/* The 100 -> 50 fallback returns a SHORT list, and this is
+                the only thing that says so. Without it the panel shows
+                50 pull requests under a sidebar badge reading 62, with
+                nothing to explain the gap -- which is what "the numbers
+                are off" was describing. */}
+            {view === "to-review" && reviewShortfall > 0 ? (
+              <p className="mb-3 rounded-md border border-[#d29922]/40 bg-[#d29922]/5 px-4 py-2 text-xs text-[#d29922]">
+                {reviewShortfall} pull request{reviewShortfall === 1 ? " is" : "s are"}{" "}
+                missing from this list — GitHub could not answer the full query, so
+                it was retried for fewer. Refreshing usually returns the rest.
+              </p>
+            ) : null}
+            {/* The other half of the reported complaint: "no indication
+                that it is blocked". The list now paints from the cache
+                immediately, so without this the user would be looking
+                at stale data with nothing to say it was being
+                refreshed. */}
+            {view === "to-review" && reviewingRefreshing && reviewingFromCache ? (
+              <p className="mb-3 rounded-md border border-[#30363d] bg-[#161b22] px-4 py-2 text-xs text-[#8b949e]">
+                Showing the last saved list — checking GitHub for changes…
               </p>
             ) : null}
             <FilterBar prs={source} />

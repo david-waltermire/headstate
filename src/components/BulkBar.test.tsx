@@ -86,7 +86,7 @@ describe("BulkBar", () => {
   it("names every pull request in the confirmation, not just a count", () => {
     select(PR_FIXTURES[0], PR_FIXTURES[1]);
     render(<BulkBar prs={PR_FIXTURES} />);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close PRs" }));
     for (const pr of [PR_FIXTURES[0], PR_FIXTURES[1]]) {
       expect(screen.getByText(new RegExp(`${pr.repo}#${pr.number}`))).not.toBeNull();
     }
@@ -104,7 +104,7 @@ describe("BulkBar", () => {
   it("does nothing when the confirmation is cancelled", () => {
     select(PR_FIXTURES[0]);
     render(<BulkBar prs={PR_FIXTURES} />);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close PRs" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(batch).not.toHaveBeenCalled();
   });
@@ -131,8 +131,8 @@ describe("BulkBar", () => {
       { repo: PR_FIXTURES[1].repo, number: PR_FIXTURES[1].number, error: "not mergeable" },
     ]);
     render(<BulkBar prs={PR_FIXTURES} />);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    confirm("Close");
+    fireEvent.click(screen.getByRole("button", { name: "Close PRs" }));
+    confirm("Close PRs");
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(toastSuccess).not.toHaveBeenCalled();
     const [title, opts] = toastError.mock.calls[0] as [string, { description: string }];

@@ -50,6 +50,26 @@ const MIGRATIONS: &[&str] = &[
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
      );",
+    // 4: let the snapshot table hold MORE THAN ONE list.
+    //
+    // The original `CHECK (id = 1)` allowed exactly one cached list, the
+    // authored one. To review had no cache at all, so opening it always
+    // waited on a live query -- ~20s on a 60-PR queue, with an empty
+    // panel until it returned.
+    //
+    // SQLite cannot drop a CHECK constraint, so the table is rebuilt.
+    // The existing row is carried over rather than discarded: throwing
+    // away a valid cache on upgrade would give every user one slow
+    // launch for no reason.
+    "CREATE TABLE snapshot_new (
+        id INTEGER PRIMARY KEY,
+        payload TEXT NOT NULL,
+        fetched_at TEXT NOT NULL
+     );
+     INSERT INTO snapshot_new (id, payload, fetched_at)
+        SELECT id, payload, fetched_at FROM snapshot;
+     DROP TABLE snapshot;
+     ALTER TABLE snapshot_new RENAME TO snapshot;",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<(), StoreError> {
@@ -147,5 +167,50 @@ mod tests {
             .unwrap();
         assert_eq!(v1, v2);
         assert_eq!(v1 as usize, MIGRATIONS.len());
+    }
+
+    /// Migration 4 REBUILDS the snapshot table to drop `CHECK (id = 1)`.
+    ///
+    /// SQLite cannot drop a constraint in place, so the rebuild is the
+    /// only route -- and a rebuild that forgot to copy the rows would
+    /// give every upgrading user one slow, cache-less launch. Verified
+    /// against a database built at the old version rather than a
+    /// round-trip of the current one.
+    #[test]
+    fn migration_four_keeps_an_existing_snapshot() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("t.db");
+        let conn = Connection::open(&path).unwrap();
+
+        // The schema exactly as version 3 left it, including the CHECK
+        // that made a second cached list impossible.
+        conn.execute_batch(
+            "CREATE TABLE snapshot (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                payload TEXT NOT NULL,
+                fetched_at TEXT NOT NULL
+             );
+             CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             INSERT INTO snapshot (id, payload, fetched_at)
+                VALUES (1, '[{\"number\":42}]', '2026-01-01T00:00:00Z');",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 3i64).unwrap();
+
+        migrate(&conn).expect("the upgrade must succeed on a real v3 database");
+
+        let payload: String = conn
+            .query_row("SELECT payload FROM snapshot WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .expect("the cached list must survive the rebuild");
+        assert!(payload.contains("42"));
+
+        // And the constraint is gone, which is the point of the change.
+        conn.execute(
+            "INSERT INTO snapshot (id, payload, fetched_at) VALUES (2, '[]', 'now')",
+            [],
+        )
+        .expect("a second cached list must now be allowed");
     }
 }

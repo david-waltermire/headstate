@@ -12,7 +12,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const authState = vi.hoisted(() => ({ current: null as unknown }));
 
-vi.mock("../api/tauri", () => ({
+// Spread the real module: `hooks.ts` builds its query functions at
+// module scope, so a mock that omits the commands they close over
+// fails at import rather than at call time.
+vi.mock("../api/tauri", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   getAuthState: () => authState.current as never,
   getCached: () => Promise.resolve([]),
   refreshNow: () => Promise.reject(new Error("no auth")),

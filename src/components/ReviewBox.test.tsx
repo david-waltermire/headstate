@@ -81,4 +81,74 @@ describe("ReviewBox", () => {
       true,
     );
   });
+
+  /// The reported bug: approve, the button resets to "Approve", and the
+  /// user cannot tell whether it worked without opening GitHub.
+  it("says Approved once the viewer's approval is on record", () => {
+    render(
+      <ReviewBox
+        {...base}
+        author="hubot"
+        latestReviews={[{ author: "octocat", state: "APPROVED" }]}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: "Approved" });
+    expect((btn as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
+  /// The case that makes reading `reviewDecision` wrong: the viewer
+  /// approved, someone ELSE requested changes, so the pull request's
+  /// aggregate decision is CHANGES_REQUESTED. The viewer's own approval
+  /// still landed and must still show.
+  it("reads the viewer's own verdict, not the pull request's decision", () => {
+    render(
+      <ReviewBox
+        {...base}
+        author="hubot"
+        latestReviews={[
+          { author: "octocat", state: "APPROVED" },
+          { author: "someone-else", state: "CHANGES_REQUESTED" },
+        ]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Approved" })).toBeTruthy();
+  });
+
+  it("still offers Approve when only other people have reviewed", () => {
+    render(
+      <ReviewBox
+        {...base}
+        author="hubot"
+        latestReviews={[{ author: "someone-else", state: "APPROVED" }]}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: "Approve" });
+    expect((btn as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  /// GitHub dismisses a review when the branch changes under it. Showing
+  /// "Approved" then would state something false about the current code.
+  it("does not treat a dismissed review as an approval", () => {
+    render(
+      <ReviewBox
+        {...base}
+        author="hubot"
+        latestReviews={[{ author: "octocat", state: "DISMISSED" }]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+    expect(screen.getByText(/dismissed/)).toBeTruthy();
+  });
+
+  it("says so when the viewer requested changes", () => {
+    render(
+      <ReviewBox
+        {...base}
+        author="hubot"
+        latestReviews={[{ author: "octocat", state: "CHANGES_REQUESTED" }]}
+      />,
+    );
+    expect(screen.getByText("You requested changes.")).toBeTruthy();
+  });
 });

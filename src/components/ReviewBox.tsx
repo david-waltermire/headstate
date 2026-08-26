@@ -16,6 +16,7 @@ export function ReviewBox({
   busy,
   viewer,
   author,
+  latestReviews,
 }: {
   onSubmit: (verdict: ReviewVerdictName, body: string) => void;
   /// Which verdict is in flight, or null. All three disable together:
@@ -24,8 +25,23 @@ export function ReviewBox({
   /// The authenticated login, or undefined if it could not be fetched.
   viewer: string | undefined;
   author: string;
+  /// Every reviewer's latest verdict, used to find the viewer's own.
+  latestReviews?: { author: string; state: string }[];
 }) {
   const [body, setBody] = useState("");
+
+  // What the VIEWER already decided, which is why the button can say
+  // "Approved" rather than resetting to "Approve" and leaving the user
+  // unable to tell whether their click did anything.
+  //
+  // Note DISMISSED is deliberately not treated as an approval: GitHub
+  // dismisses a review when the branch changes under it, and showing
+  // "Approved" then would state something false about the current code.
+  const mine =
+    viewer === undefined
+      ? undefined
+      : latestReviews?.find((r) => r.author === viewer)?.state;
+  const alreadyApproved = mine === "APPROVED";
 
   // GitHub refuses self-approval outright, so offering the button and
   // surfacing a GraphQL refusal after the click is strictly worse than
@@ -44,7 +60,14 @@ export function ReviewBox({
   const hasBody = body.trim().length > 0;
 
   const verdicts: { name: ReviewVerdictName; label: string; enabled: boolean }[] = [
-    { name: "approve", label: "Approve", enabled: true },
+    // Approving twice is not an error on GitHub's side, but offering it
+    // as though nothing had happened is the reported confusion. Once
+    // the viewer's approval is on record the button states it.
+    {
+      name: "approve",
+      label: alreadyApproved ? "Approved" : "Approve",
+      enabled: !alreadyApproved,
+    },
     { name: "request_changes", label: "Request changes", enabled: hasBody },
     { name: "comment", label: "Comment", enabled: hasBody },
   ];
@@ -83,6 +106,16 @@ export function ReviewBox({
         {isOwn ? (
           <span className="text-xs text-[#8b949e]">
             GitHub does not allow approving your own pull request.
+          </span>
+        ) : null}
+        {/* The other half of "did my click work": a verdict that is not
+            an approval still deserves saying out loud, since the button
+            row alone cannot express it. */}
+        {mine === "CHANGES_REQUESTED" ? (
+          <span className="text-xs text-[#d29922]">You requested changes.</span>
+        ) : mine === "DISMISSED" ? (
+          <span className="text-xs text-[#8b949e]">
+            Your review was dismissed — the branch changed since you left it.
           </span>
         ) : null}
       </div>

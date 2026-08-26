@@ -328,6 +328,9 @@ export const setPollInterval = (secs: number) =>
 /// PRs awaiting the user's review. Rides along in the same GraphQL
 /// document as the authored list, so it costs no extra rate limit.
 export const getReviewing = () => invoke<PullRequest[]>("get_reviewing");
+/// The last successful review list, straight from SQLite. Never talks
+/// to GitHub.
+export const getCachedReviewing = () => invoke<PullRequest[]>("get_cached_reviewing");
 
 /// Median cycle time this week against last, in one request.
 export const getCycleTrend = () => invoke<CycleTrend>("get_cycle_trend");

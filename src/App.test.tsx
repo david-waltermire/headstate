@@ -10,6 +10,7 @@ import { useFilters } from "./store/filters";
 const mockPrs = vi.fn<() => PullRequest[]>(() => []);
 const mockReviewing = vi.fn<() => PullRequest[]>(() => []);
 const mockRefused = vi.fn<() => number>(() => 0);
+const mockShortfall = vi.fn<() => number>(() => 0);
 
 vi.mock("./api/hooks", () => ({
   // Defaults, matching the Rust side: nothing hidden, close hides.
@@ -28,6 +29,7 @@ vi.mock("./api/hooks", () => ({
   useTruncation: () => null,
   // No refused fields: the advisory banner stays hidden.
   useIncomplete: () => mockRefused(),
+  useReviewShortfall: () => mockShortfall(),
   useViewCadence: () => undefined,
   usePollState: () => "idle",
   usePollInterval: () => ({ seconds: 120, set: () => Promise.resolve(120) }),
@@ -296,6 +298,7 @@ describe("opening a pull request from To review", () => {
 describe("an incomplete refresh", () => {
   beforeEach(() => {
     mockRefused.mockReturnValue(0);
+    mockShortfall.mockReturnValue(0);
     mockPrs.mockReturnValue([]);
     useFilters.setState({
       view: "my-prs",
@@ -303,6 +306,25 @@ describe("an incomplete refresh", () => {
       selectedPr: null,
       filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
     });
+  });
+
+  /// The silent truncation the v3.5.3 log caught on a real machine: the
+  /// 100 -> 50 fallback returned 50 pull requests when the count was
+  /// 62, and twelve vanished with no error and no banner. That gap
+  /// between the sidebar badge and the panel is what "the numbers are
+  /// off" was describing.
+  it("says how many pull requests are missing from a short review list", () => {
+    mockShortfall.mockReturnValue(12);
+    useFilters.setState({ view: "to-review" });
+    render(<App />);
+    expect(screen.getByText(/12 pull requests are missing/i)).toBeTruthy();
+  });
+
+  it("stays quiet when the review list is complete", () => {
+    mockShortfall.mockReturnValue(0);
+    useFilters.setState({ view: "to-review" });
+    render(<App />);
+    expect(screen.queryByText(/missing from this list/i)).toBeNull();
   });
 
   it("says so when GitHub refused some fields", () => {

@@ -52,10 +52,16 @@ const DELETE_REF_DOC: &str = "mutation($id: ID!) { \
 /// for all three events instead of branching on the event to pick a
 /// query, which is the kind of drift the hoisted-document convention in
 /// this module exists to prevent.
+/// Asks for the resulting review's `state` rather than just
+/// `clientMutationId`. A mutation that returns 200 with no errors is not
+/// proof the review landed in the state the user asked for -- GitHub can
+/// accept the call and record a PENDING review, which looks identical to
+/// success from here and is exactly the reported "I clicked approve and
+/// nothing happened". With the state in hand the caller can say so.
 const ADD_REVIEW_DOC: &str =
     "mutation($id: ID!, $event: PullRequestReviewEvent!, $body: String) { \
      addPullRequestReview(input: { pullRequestId: $id, event: $event, body: $body }) \
-     { clientMutationId } }";
+     { pullRequestReview { state } } }";
 
 /// Comment on a pull request.
 ///
@@ -220,11 +226,32 @@ impl GitHubClient {
         verdict: ReviewVerdict,
         body: &str,
     ) -> Result<(), ClientError> {
-        self.graphql_mutation(&json!({
-            "query": ADD_REVIEW_DOC,
-            "variables": { "id": id, "event": verdict.event(), "body": body }
-        }))
-        .await
+        let v = self
+            .graphql_mutation_data(&json!({
+                "query": ADD_REVIEW_DOC,
+                "variables": { "id": id, "event": verdict.event(), "body": body }
+            }))
+            .await?;
+
+        // The mutation succeeding is not the same as the review landing.
+        // A PENDING review -- one GitHub filed but did not submit -- is
+        // returned without any error, and reporting that as success is
+        // what left the user staring at an unchanged button wondering
+        // whether the click registered.
+        //
+        // Only PENDING is treated as a failure. Any other state,
+        // including one this build does not recognise, is left alone:
+        // guessing that an unfamiliar state means failure would be a
+        // worse error than the one being fixed.
+        let state = v["addPullRequestReview"]["pullRequestReview"]["state"].as_str();
+        if state == Some("PENDING") {
+            return Err(ClientError::Graphql(
+                "GitHub accepted the review but left it pending rather than \
+                 submitting it. Open the pull request on GitHub to submit it."
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Comment on a pull request without reviewing it.

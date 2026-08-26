@@ -300,6 +300,20 @@ impl GitHubClient {
     }
 
     pub async fn fetch_reviewing(&self) -> Result<Vec<PullRequest>, ClientError> {
+        self.fetch_reviewing_with_shortfall()
+            .await
+            .map(|(prs, _)| prs)
+    }
+
+    /// The review list, plus how many pull requests are MISSING from it.
+    ///
+    /// The shortfall is a second return value rather than an error: the
+    /// pull requests that did arrive are real and worth showing, and
+    /// blanking the list over an incomplete one is exactly the
+    /// regression v3.5.1 had to undo.
+    pub async fn fetch_reviewing_with_shortfall(
+        &self,
+    ) -> Result<(Vec<PullRequest>, u64), ClientError> {
         // Its OWN request, not both lists. It used to call
         // `fetch_prs_and_reviewing`, so opening To review paid for the
         // authored list as well -- and on a reported account with 40
@@ -324,7 +338,30 @@ impl GitHubClient {
             started.elapsed().as_millis(),
             mapped.len()
         );
-        Self::reject_empty_after_refusals(mapped, refused_fields(&v))
+        // The 100 -> 50 fallback returns a SHORT list, and everything
+        // downstream presents it as a complete one. The v3.5.3 log on a
+        // real machine caught the consequence: a fallback answered with
+        // 50 pull requests when the count was 62, and twelve simply
+        // vanished -- no error, no banner, nothing to distinguish
+        // 50-of-50 from 50-of-62. That is the "numbers are off" report.
+        //
+        // Reported as a shortfall rather than an error: the 50 that did
+        // arrive are real and worth showing, and blanking the list over
+        // an incomplete one is the exact regression v3.5.1 had to undo.
+        let total = v["authored"]["issueCount"].as_u64().unwrap_or(0);
+        let short = total.saturating_sub(mapped.len() as u64);
+        if short > 0 {
+            log::warn!(
+                "the review list is short: {} of {total} pull requests \
+                 (GitHub could not answer the full query)",
+                mapped.len()
+            );
+        }
+        let refused = refused_fields(&v);
+        Self::reject_empty_after_refusals(mapped, refused).map(|prs| {
+            let short = total.saturating_sub(prs.len() as u64);
+            (prs, short)
+        })
     }
 
     /// How many pull requests await the user's review.
@@ -407,10 +444,30 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// Like `graphql_mutation`, but hands back the `data` object.
+    ///
+    /// Most mutations only need "did it fail", so `graphql_mutation`
+    /// discards the payload. A review is different: the response carries
+    /// the state the review actually landed in, and that is the only way
+    /// to distinguish an approval from one GitHub filed as PENDING.
+    pub(super) async fn graphql_mutation_data(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        self.graphql_mutation_inner(body).await
+    }
+
     pub(super) async fn graphql_mutation(
         &self,
         body: &serde_json::Value,
     ) -> Result<(), ClientError> {
+        self.graphql_mutation_inner(body).await.map(|_| ())
+    }
+
+    async fn graphql_mutation_inner(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
         let raw: serde_json::Value = self.octocrab.post("/graphql", Some(body)).await?;
 
         if let Some(errs) = raw.get("errors").and_then(|e| e.as_array()) {
@@ -430,12 +487,12 @@ impl GitHubClient {
 
         // A response with neither errors nor data means something is
         // wrong with our request shape; do not report success for it.
-        if raw.get("data").is_none_or(|d| d.is_null()) {
-            return Err(ClientError::Graphql(
+        match raw.get("data") {
+            Some(d) if !d.is_null() => Ok(d.clone()),
+            _ => Err(ClientError::Graphql(
                 "GitHub returned no result for the change".into(),
-            ));
+            )),
         }
-        Ok(())
     }
 
     /// Everything the detail view needs, in one request at cost 1.
@@ -784,6 +841,7 @@ async fn graphql_partial_ok(
 
 #[cfg(test)]
 mod tests {
+    use super::super::mutate::ReviewVerdict;
     use super::*;
     use wiremock::matchers::{body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -814,6 +872,142 @@ mod tests {
         let prs = client_for(&server).await.fetch_prs().await.unwrap();
         assert_eq!(prs.len(), 3);
         assert_eq!(prs[0].number, 42);
+    }
+
+    /// The reported bug, at its root: "I clicked approve, saw no error,
+    /// and it had not worked."
+    ///
+    /// GitHub can accept `addPullRequestReview` and file the review as
+    /// PENDING -- HTTP 200, no `errors` array, nothing for the old code
+    /// to object to. It reported success, the button reset to "Approve",
+    /// and the approval was never submitted.
+    /// The silent truncation the v3.5.3 log caught on a real machine:
+    /// the fallback answered with 50 pull requests when the count was
+    /// 62, and twelve vanished with no error and no banner.
+    #[tokio::test]
+    async fn a_short_review_list_reports_how_many_are_missing() {
+        let server = MockServer::start().await;
+        let nodes: Vec<serde_json::Value> = (0..3)
+            .map(|i| {
+                serde_json::json!({
+                    "number": i + 1, "title": "t", "url": "u",
+                    "createdAt": "2026-08-20T10:00:00Z",
+                    "updatedAt": "2026-08-20T10:00:00Z",
+                    "repository": {"nameWithOwner": "octocat/hello-world"}
+                })
+            })
+            .collect();
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "authored": { "issueCount": 10, "nodes": nodes } }
+            })))
+            .mount(&server)
+            .await;
+
+        let (prs, short) = client_for(&server)
+            .await
+            .fetch_reviewing_with_shortfall()
+            .await
+            .unwrap();
+        assert_eq!(prs.len(), 3, "the pull requests that arrived are kept");
+        assert_eq!(short, 7, "and the seven that did not are reported");
+    }
+
+    /// A complete list must report NO shortfall, or the banner would
+    /// cry wolf on every normal fetch.
+    #[tokio::test]
+    async fn a_complete_review_list_reports_no_shortfall() {
+        let server = MockServer::start().await;
+        let nodes: Vec<serde_json::Value> = (0..3)
+            .map(|i| {
+                serde_json::json!({
+                    "number": i + 1, "title": "t", "url": "u",
+                    "createdAt": "2026-08-20T10:00:00Z",
+                    "updatedAt": "2026-08-20T10:00:00Z",
+                    "repository": {"nameWithOwner": "octocat/hello-world"}
+                })
+            })
+            .collect();
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "authored": { "issueCount": 3, "nodes": nodes } }
+            })))
+            .mount(&server)
+            .await;
+
+        let (_, short) = client_for(&server)
+            .await
+            .fetch_reviewing_with_shortfall()
+            .await
+            .unwrap();
+        assert_eq!(short, 0);
+    }
+
+    #[tokio::test]
+    async fn a_review_left_pending_is_reported_as_a_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "addPullRequestReview": {
+                    "pullRequestReview": { "state": "PENDING" }
+                }}
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server)
+            .await
+            .add_review("PR_1", ReviewVerdict::Approve, "")
+            .await
+            .expect_err("a pending review has not been submitted");
+        assert!(
+            err.to_string().contains("pending"),
+            "the message must say what actually happened: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_submitted_review_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "addPullRequestReview": {
+                    "pullRequestReview": { "state": "APPROVED" }
+                }}
+            })))
+            .mount(&server)
+            .await;
+        assert!(client_for(&server)
+            .await
+            .add_review("PR_1", ReviewVerdict::Approve, "")
+            .await
+            .is_ok());
+    }
+
+    /// An unfamiliar state must NOT be treated as failure. Guessing that
+    /// an unrecognised value means the review did not land would break
+    /// approving outright the next time GitHub adds a state.
+    #[tokio::test]
+    async fn an_unrecognised_review_state_is_not_treated_as_failure() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "addPullRequestReview": {
+                    "pullRequestReview": { "state": "SOMETHING_NEW" }
+                }}
+            })))
+            .mount(&server)
+            .await;
+        assert!(client_for(&server)
+            .await
+            .add_review("PR_1", ReviewVerdict::Approve, "")
+            .await
+            .is_ok());
     }
 
     #[tokio::test]

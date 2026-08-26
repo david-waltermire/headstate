@@ -22,7 +22,7 @@ mod cache;
 mod schema;
 pub mod settings;
 
-pub use cache::{load_snapshot, save_snapshot};
+pub use cache::{load_snapshot, save_snapshot, CachedList};
 pub use schema::{open_db, StoreError};
 
 #[cfg(test)]
@@ -74,8 +74,8 @@ mod tests {
     #[test]
     fn round_trips_a_snapshot() {
         let conn = db();
-        save_snapshot(&conn, &[sample()]).unwrap();
-        let loaded = load_snapshot(&conn).unwrap();
+        save_snapshot(&conn, CachedList::Authored, &[sample()]).unwrap();
+        let loaded = load_snapshot(&conn, CachedList::Authored).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].number, 42);
         assert_eq!(loaded[0].labels[0].name, "bug");
@@ -84,14 +84,14 @@ mod tests {
     #[test]
     fn a_snapshot_replaces_the_previous_one() {
         let conn = db();
-        save_snapshot(&conn, &[sample()]).unwrap();
-        save_snapshot(&conn, &[]).unwrap();
-        assert_eq!(load_snapshot(&conn).unwrap().len(), 0);
+        save_snapshot(&conn, CachedList::Authored, &[sample()]).unwrap();
+        save_snapshot(&conn, CachedList::Authored, &[]).unwrap();
+        assert_eq!(load_snapshot(&conn, CachedList::Authored).unwrap().len(), 0);
     }
 
     #[test]
     fn loading_from_an_empty_db_returns_empty_not_an_error() {
-        assert_eq!(load_snapshot(&db()).unwrap().len(), 0);
+        assert_eq!(load_snapshot(&db(), CachedList::Authored).unwrap().len(), 0);
     }
 
     #[test]
@@ -99,6 +99,6 @@ mod tests {
         let conn = db();
         migrate(&conn).unwrap();
         migrate(&conn).unwrap();
-        assert_eq!(load_snapshot(&conn).unwrap().len(), 0);
+        assert_eq!(load_snapshot(&conn, CachedList::Authored).unwrap().len(), 0);
     }
 }

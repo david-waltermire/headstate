@@ -37,6 +37,26 @@ export function isStale(img: DockerImage): boolean {
   return img.superseded && img.in_use === false && img.origin?.merged === true;
 }
 
+/// Every superseded image we can prove is unused.
+///
+/// WIDER than `isStale`, and deliberately a separate predicate rather
+/// than a loosening of it. `isStale` additionally requires that we
+/// attributed the image to a branch AND that the branch merged, which
+/// on a real machine excludes most of what accumulates: images nothing
+/// could attribute, and images whose branch is still open.
+///
+/// The two answer different questions. `isStale` is "provably dead,
+/// safe by default". This is "superseded, and you should look at the
+/// list before confirming" -- which is why its confirmation dialog has
+/// to say plainly that some of these belong to open branches.
+///
+/// `in_use === null` is excluded from both. That means "we could not
+/// ask", and treating an unknown as unused is how a bulk delete takes
+/// out something a container is running.
+export function isSuperseded(img: DockerImage): boolean {
+  return img.superseded && img.in_use === false;
+}
+
 /// What the row says about an image's standing.
 export function imageState(img: DockerImage): string {
   if (img.in_use === true) return "in use by a running container";

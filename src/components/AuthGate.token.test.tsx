@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 
 const pollError = vi.hoisted(() => ({ current: null as string | null }));
 
-vi.mock("../api/tauri", () => ({
+// Spread the real module: `hooks.ts` builds its query functions at
+// module scope, so a mock that omits the commands they close over
+// fails at import rather than at call time.
+vi.mock("../api/tauri", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   getAuthState: () => Promise.resolve({ ok: true, message: "" }),
 }));
 

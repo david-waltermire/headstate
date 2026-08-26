@@ -40,9 +40,26 @@ function unavailable(pr: PullRequest, action: PrActionName): string | null {
   }
 }
 
+/// What the TOAST says, as a verb phrase.
+///
+/// Separate from `LABEL` because the button and the sentence want
+/// different words: the button says "Close PR" so it cannot be mistaken
+/// for closing the view (it sits beside "Back to list"), while the toast
+/// says "closed" -- `LABEL[action].toLowerCase()` would render "close pr".
+const VERB: Record<PrActionName, string> = {
+  merge: "merged",
+  close: "closed",
+  reopen: "reopened",
+  draft: "converted to draft",
+  ready: "marked ready for review",
+  enqueue: "added to merge queue",
+  dequeue: "removed from merge queue",
+};
+
+/// What the BUTTON says.
 const LABEL: Record<PrActionName, string> = {
   merge: "Merge",
-  close: "Close",
+  close: "Close PR",
   reopen: "Reopen",
   draft: "Convert to draft",
   ready: "Mark ready for review",
@@ -81,7 +98,7 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
     act(pr.id, pr.repo, pr.number, action).then(
       () => {
         const back = inverseOf(action);
-        toast.success(`${pr.repo}#${pr.number} — ${LABEL[action].toLowerCase()}`, {
+        toast.success(`${pr.repo}#${pr.number} — ${VERB[action]}`, {
           // Only for actions with a true inverse. Merge and close are
           // deliberately absent -- see `inverseOf`.
           action: back
@@ -91,7 +108,7 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
                   void act(pr.id, pr.repo, pr.number, back).then(
                     () =>
                       toast.success(
-                        `${pr.repo}#${pr.number} — ${LABEL[back].toLowerCase()}`,
+                        `${pr.repo}#${pr.number} — ${VERB[back]}`,
                       ),
                     (e: unknown) =>
                       toast.error(`Could not undo #${pr.number}`, {
@@ -104,7 +121,7 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
         });
       },
       (e: unknown) =>
-        toast.error(`Could not ${LABEL[action].toLowerCase()} #${pr.number}`, {
+        toast.error(`Could not ${VERB[action]} #${pr.number}`, {
           description: typeof e === "string" ? e : undefined,
         }),
     );

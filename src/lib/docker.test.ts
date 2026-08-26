@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDockerSize, imageState, isStale } from "@/lib/docker";
+import { formatDockerSize, imageState, isStale, isSuperseded } from "@/lib/docker";
 import type { DockerImage } from "@/types/pr";
 
 const img = (over: Partial<DockerImage> = {}): DockerImage => ({
@@ -39,6 +39,51 @@ describe("isStale", () => {
   // Safety::Unknown.
   it("does not treat unknown provenance as stale", () => {
     expect(isStale(img({ origin: null }))).toBe(false);
+  });
+});
+
+describe("isSuperseded", () => {
+  /// The gap that motivated this: on a real machine most superseded
+  /// images have no origin attribution at all, so `isStale` -- which
+  /// requires a MERGED branch -- excluded them from the bulk set and
+  /// the button under-counted badly.
+  it("includes superseded images that isStale excludes", () => {
+    const unattributed = img({ origin: null });
+    const openBranch = img({ origin: { ...img().origin!, merged: false } });
+
+    expect(isStale(unattributed)).toBe(false);
+    expect(isSuperseded(unattributed)).toBe(true);
+
+    expect(isStale(openBranch)).toBe(false);
+    expect(isSuperseded(openBranch)).toBe(true);
+  });
+
+  it("still requires the image to be superseded", () => {
+    expect(isSuperseded(img({ superseded: false }))).toBe(false);
+  });
+
+  /// `null` means "we could not ask". Treating an unknown as unused is
+  /// how a bulk delete takes out something a container is running, so
+  /// it is excluded from BOTH sets.
+  it("never includes an image whose use is unknown or in use", () => {
+    expect(isSuperseded(img({ in_use: null }))).toBe(false);
+    expect(isSuperseded(img({ in_use: true }))).toBe(false);
+  });
+
+  /// A superset, not an alternative: everything safe by the narrow rule
+  /// must remain included by the wide one.
+  it("is a superset of isStale", () => {
+    const cases = [
+      img(),
+      img({ origin: null }),
+      img({ origin: { ...img().origin!, merged: false } }),
+      img({ in_use: null }),
+      img({ in_use: true }),
+      img({ superseded: false }),
+    ];
+    for (const c of cases) {
+      if (isStale(c)) expect(isSuperseded(c)).toBe(true);
+    }
   });
 });
 

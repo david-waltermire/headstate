@@ -51,7 +51,7 @@ describe("PrKebab", () => {
   it("confirms before closing, and does not act until confirmed", async () => {
     render(<PrKebab pr={pr()} />);
     open();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Close" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Close PR" }));
     expect(act).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Close pull request" }));
     await waitFor(() => expect(act).toHaveBeenCalled());
@@ -61,7 +61,7 @@ describe("PrKebab", () => {
   it("abandons the close when the dialog is cancelled", () => {
     render(<PrKebab pr={pr()} />);
     open();
-    fireEvent.click(screen.getByRole("menuitem", { name: "Close" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Close PR" }));
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(act).not.toHaveBeenCalled();
   });

@@ -10,7 +10,7 @@ import {
   useRemoveVolume,
 } from "../api/hooks";
 import { dockerRestart, dockerRunningContainers, dockerStart } from "../api/tauri";
-import { formatDockerSize, imageState, imageTone, isStale } from "../lib/docker";
+import { formatDockerSize, imageState, imageTone, isStale, isSuperseded } from "../lib/docker";
 import { relativeTime } from "../lib/time";
 
 import type { DockerImage } from "../types/pr";
@@ -91,10 +91,25 @@ function ImageRow({
   onRemove: (img: DockerImage) => void;
   removing: boolean;
 }) {
+  const [open, setOpen] = useState(false);
+  // An untagged image is exactly the one the user cannot identify, and
+  // it is what accumulates from repeated rebuilds. `repository` was on
+  // the type all along and never rendered -- so the row said `abc123`
+  // where it could have said `registry/app`.
+  const name = img.tags[0] ?? `${img.repository}@${img.id.slice(0, 12)}`;
+
   return (
-    <div className="flex items-baseline gap-3 border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">
-      <span className="min-w-0 flex-1 truncate font-mono text-[#e6edf3]">
-        {img.tags[0] ?? img.id.slice(0, 12)}
+    <div className="border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">
+      <div className="flex items-baseline gap-3">
+      {/* The whole row toggles, so the hit target is the row rather
+          than a chevron the user has to aim at. */}
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="min-w-0 flex-1 truncate text-left font-mono text-[#e6edf3] hover:text-white"
+      >
+        {name}
         {img.tags.length > 1 ? (
           <span className="ml-2 text-xs text-[#8b949e]">+{img.tags.length - 1} more</span>
         ) : null}
@@ -103,7 +118,7 @@ function ImageRow({
         {img.origin ? (
           <span className="ml-2 text-xs text-[#8b949e]">{img.origin.subject}</span>
         ) : null}
-      </span>
+      </button>
       <span className={`shrink-0 text-xs ${imageTone(img)}`}>{imageState(img)}</span>
       {img.created ? (
         <span className="shrink-0 text-xs text-[#8b949e]">{relativeTime(img.created)}</span>
@@ -130,6 +145,53 @@ function ImageRow({
       >
         {removing ? "Removing…" : "Remove"}
       </button>
+      </div>
+      {/* The long fields, kept out of the collapsed row. The problem
+          was never density -- it was that the identifying detail had
+          nowhere to live. */}
+      {open ? (
+        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 border-t border-[#30363d] pt-2 text-xs text-[#8b949e]">
+          <dt>Image ID</dt>
+          <dd className="font-mono">{img.id}</dd>
+          <dt>Repository</dt>
+          <dd className="font-mono">{img.repository}</dd>
+          {img.tags.length > 0 ? (
+            <>
+              <dt>Tags</dt>
+              <dd className="font-mono">{img.tags.join(", ")}</dd>
+            </>
+          ) : null}
+          {img.created ? (
+            <>
+              <dt>Created</dt>
+              <dd>{img.created}</dd>
+            </>
+          ) : null}
+          {img.origin ? (
+            <>
+              <dt>Commit</dt>
+              <dd className="font-mono">
+                {img.origin.commit} — {img.origin.subject}
+              </dd>
+              <dt>Built from</dt>
+              <dd className="font-mono">{img.origin.context ?? img.origin.repo_path}</dd>
+              <dt>Branch</dt>
+              <dd>{img.origin.merged ? "merged" : "still open"}</dd>
+            </>
+          ) : (
+            <>
+              <dt>Origin</dt>
+              {/* Says WHY there is nothing to show. "unknown" alone
+                  reads as a missing feature rather than a fact about
+                  this image. */}
+              <dd>
+                could not be traced to a commit — nothing in the local repos matched
+                its tag
+              </dd>
+            </>
+          )}
+        </dl>
+      ) : null}
     </div>
   );
 }
@@ -144,7 +206,13 @@ export function DockerPage() {
   const prune = usePruneCache();
 
   const [pending, setPending] = useState<DockerImage | null>(null);
-  const [bulkOpen, setBulkOpen] = useState(false);
+  /// Which bulk set the confirmation is for, or null when closed.
+  ///
+  /// "stale" is the conservative set (superseded AND merged AND unused);
+  /// "superseded" is every superseded image we can prove is unused. They
+  /// share a dialog because everything except the wording and the
+  /// membership rule is identical.
+  const [bulkOpen, setBulkOpen] = useState<null | "stale" | "superseded">(null);
   const [removing, setRemoving] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [restartOpen, setRestartOpen] = useState<string[] | null>(null);
@@ -226,6 +294,14 @@ export function DockerPage() {
 
   const shown = images ?? [];
   const stale = shown.filter(isStale);
+  // Every superseded image we can prove is unused -- a SUPERSET of
+  // `stale`, and on a real machine a much larger one: `isStale` also
+  // requires that the image was attributed to a branch and that the
+  // branch merged, which excludes everything nothing could attribute.
+  const superseded = shown.filter(isSuperseded);
+  // What the confirmation is actually about.
+  const bulkSet = bulkOpen === "superseded" ? superseded : stale;
+  const bulkBytes = bulkSet.reduce((n, i) => n + i.size_bytes, 0);
 
   return (
     <div className="flex flex-col gap-3">
@@ -236,10 +312,23 @@ export function DockerPage() {
           <button
             type="button"
             disabled={busy}
-            onClick={() => setBulkOpen(true)}
+            onClick={() => setBulkOpen("stale")}
             className="rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10 disabled:opacity-50"
           >
             Remove {stale.length} stale image{stale.length === 1 ? "" : "s"}
+          </button>
+        ) : null}
+        {/* Only when it covers strictly more than the conservative
+            button. Two buttons showing the same count would be a
+            confusing way to offer one action. */}
+        {superseded.length > stale.length ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setBulkOpen("superseded")}
+            className="rounded border border-[#d29922]/40 px-2 py-0.5 text-xs text-[#d29922] hover:bg-[#d29922]/10 disabled:opacity-50"
+          >
+            Remove all {superseded.length} superseded
           </button>
         ) : null}
         <button
@@ -380,17 +469,25 @@ export function DockerPage() {
       ) : null}
 
       {bulkOpen ? (
-        <Dialog open onOpenChange={(o) => !o && setBulkOpen(false)}>
+        <Dialog open onOpenChange={(o) => !o && setBulkOpen(null)}>
           <DialogContent className="max-w-2xl">
             <DialogTitle>
-              Remove {stale.length} stale image{stale.length === 1 ? "" : "s"}?
+              Remove {bulkSet.length}{" "}
+              {bulkOpen === "superseded" ? "superseded" : "stale"} image
+              {bulkSet.length === 1 ? "" : "s"}?
             </DialogTitle>
+            {/* The wider set needs a DIFFERENT sentence, not a louder
+                one: some of its images belong to branches that are
+                still open, and the dialog has to say so plainly rather
+                than reuse the reassurance that fits the narrow set. */}
             <p className="mt-2 text-sm text-[#8b949e]">
-              Reclaims {formatDockerSize(stale.reduce((n, i) => n + i.size_bytes, 0) || null)}. Every one
-              is superseded and its branch has merged, so nothing will want it again.
+              Reclaims {formatDockerSize(bulkBytes || null)}.{" "}
+              {bulkOpen === "superseded"
+                ? "Each one has been replaced by a newer build and nothing is running it — but some belong to branches that are still open, so check the list."
+                : "Every one is superseded and its branch has merged, so nothing will want it again."}
             </p>
             <ul className="mt-3 max-h-64 overflow-y-auto font-mono text-xs text-[#8b949e]">
-              {stale.map((i) => (
+              {bulkSet.map((i) => (
                 <li key={i.id} className="py-0.5">
                   {i.repository}:{i.tags[0] ?? i.id.slice(0, 12)} — {formatDockerSize(i.size_bytes)}
                 </li>
@@ -399,7 +496,7 @@ export function DockerPage() {
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setBulkOpen(false)}
+                onClick={() => setBulkOpen(null)}
                 className="rounded border border-[#30363d] px-3 py-1.5 text-sm hover:bg-[#21262d]"
               >
                 Cancel
@@ -407,9 +504,9 @@ export function DockerPage() {
               <button
                 type="button"
                 onClick={() => {
-                  const targets = stale.map((i) => i.id);
-                  const freed = stale.reduce((n, i) => n + i.size_bytes, 0);
-                  setBulkOpen(false);
+                  const targets = bulkSet.map((i) => i.id);
+                  const freed = bulkBytes;
+                  setBulkOpen(null);
                   setBusy(true);
                   removeImages(targets).then(
                     (outcomes) => {
@@ -433,7 +530,7 @@ export function DockerPage() {
                 }}
                 className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149]"
               >
-                Remove {stale.length} image{stale.length === 1 ? "" : "s"}
+                Remove {bulkSet.length} image{bulkSet.length === 1 ? "" : "s"}
               </button>
             </div>
           </DialogContent>

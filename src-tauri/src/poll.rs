@@ -7,7 +7,7 @@
 
 use crate::github::client::{ClientError, GitHubClient};
 use crate::github::model::{needs_attention_count, CiState, MergeState, PullRequest};
-use crate::store::{open_db, save_snapshot};
+use crate::store::{open_db, save_snapshot, CachedList};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -366,7 +366,7 @@ fn persist_and_emit(app: &AppHandle, prs: &[PullRequest]) {
     match app.path().app_data_dir() {
         Ok(dir) => match open_db(&dir.join("headstate.db")) {
             Ok(conn) => {
-                if let Err(e) = save_snapshot(&conn, prs) {
+                if let Err(e) = save_snapshot(&conn, CachedList::Authored, prs) {
                     log::error!("failed to save snapshot: {e}");
                     emit_store_error(app, format!("could not save local snapshot: {e}"));
                 }

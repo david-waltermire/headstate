@@ -17,7 +17,7 @@ const BULK: { action: PrActionName; label: string }[] = [
   { action: "enqueue", label: "Add to merge queue" },
   { action: "ready", label: "Mark ready" },
   { action: "draft", label: "Convert to draft" },
-  { action: "close", label: "Close" },
+  { action: "close", label: "Close PRs" },
 ];
 
 export function prKey(pr: { repo: string; number: number }): string {

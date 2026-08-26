@@ -33,11 +33,68 @@ const pr = (over: Partial<PrDetail> = {}): PrDetail => ({
   unresolved_threads: 0,
   comment_count: 0,
   comments: [],
+  latest_reviews: [],
+  merge_queue_enabled: false,
+  in_merge_queue: false,
   checks: [],
   ...over,
 });
 
 describe("PrActions", () => {
+  /// Offering Merge and "Add to merge queue" side by side asked the user
+  /// to know which one their repo needs -- and on a queue-enabled branch
+  /// Merge is simply the wrong button.
+  it("offers only the queue action when the base branch queues", () => {
+    render(<PrActions pr={pr({ merge_queue_enabled: true })} />);
+    expect(screen.getByRole("button", { name: "Add to merge queue" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
+  });
+
+  it("offers only Merge when the base branch does not queue", () => {
+    render(<PrActions pr={pr({ merge_queue_enabled: false })} />);
+    expect(screen.getByRole("button", { name: "Merge" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add to merge queue" })).toBeNull();
+  });
+
+  /// Once it is queued the only useful action is getting it back out.
+  it("offers dequeue instead once the pull request is queued", () => {
+    render(<PrActions pr={pr({ merge_queue_enabled: true, in_merge_queue: true })} />);
+    expect(screen.getByRole("button", { name: "Remove from merge queue" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Add to merge queue" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Merge" })).toBeNull();
+  });
+
+  /// Close is irreversible from here -- `inverseOf` gives it no undo --
+  /// and it sits beside "Back to list", where a bare "Close" reads as
+  /// "close this view". Both halves of that fix are asserted: the words
+  /// and the destructive styling.
+  it("names the close action so it cannot be read as closing the view", () => {
+    render(<PrActions pr={pr()} />);
+    expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close PR" })).toBeTruthy();
+  });
+
+  it("styles close destructively, unlike its neutral neighbours", () => {
+    render(<PrActions pr={pr()} />);
+    const close = screen.getByRole("button", { name: "Close PR" });
+    const neutral = screen.getByRole("button", { name: "Convert to draft" });
+    expect(close.className).toContain("f85149");
+    expect(neutral.className).not.toContain("f85149");
+  });
+
+  /// The button and the toast need DIFFERENT words. Reusing the button
+  /// label lowercased -- which is what the code did before -- produces
+  /// "octocat/hello-world#42 - close pr".
+  it("reports the close in past tense, not as the button's label", async () => {
+    render(<PrActions pr={pr()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Close PR" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close pull request" }));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    const msg = toastSuccess.mock.calls[0][0] as string;
+    expect(msg).toContain("closed");
+    expect(msg).not.toContain("close pr");
+  });
+
   beforeEach(() => {
     actFn.mockClear();
     actFn.mockImplementation(() => Promise.resolve());
@@ -58,14 +115,14 @@ describe("PrActions", () => {
   // Closing loses review context and is rare, so it earns a dialog.
   it("confirms before closing", () => {
     render(<PrActions pr={pr()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close PR" }));
     expect(actFn).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
   it("closes only after confirmation", () => {
     render(<PrActions pr={pr()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close PR" }));
     fireEvent.click(
       within(screen.getByRole("dialog")).getByRole("button", { name: /close pull request/i }),
     );
@@ -74,7 +131,7 @@ describe("PrActions", () => {
 
   it("cancelling closes nothing", () => {
     render(<PrActions pr={pr()} />);
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close PR" }));
     fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(actFn).not.toHaveBeenCalled();
   });

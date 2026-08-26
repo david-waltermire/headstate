@@ -258,6 +258,17 @@ pub struct PrComment {
     pub body: String,
 }
 
+/// One reviewer's latest review on a pull request.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReviewerVerdict {
+    pub author: String,
+    /// GitHub's raw review state: APPROVED, CHANGES_REQUESTED,
+    /// COMMENTED, DISMISSED or PENDING. Passed through rather than
+    /// narrowed to a bool -- a DISMISSED approval is not an approval,
+    /// and collapsing it here would silently claim otherwise.
+    pub state: String,
+}
+
 /// Everything the detail view renders.
 ///
 /// A separate type from `PullRequest`: that one is a LIST row fetched 100
@@ -293,6 +304,31 @@ pub struct PrDetail {
     #[serde(default)]
     pub merge_status: MergeStateStatus,
     pub review: ReviewState,
+    /// Every reviewer's latest review state, keyed by login.
+    ///
+    /// A different question from `review`, which is the pull request's
+    /// AGGREGATE decision: it reads `changes_requested` when someone
+    /// else blocked the PR and `review_required` when a second approval
+    /// is outstanding. Neither tells the user whether their own approval
+    /// landed -- which is the whole reported confusion.
+    ///
+    /// The viewer is matched by login on the frontend, which already
+    /// knows who it is (`useViewer`), rather than threading a login down
+    /// through the client and mapper for one field.
+    #[serde(default)]
+    pub latest_reviews: Vec<ReviewerVerdict>,
+    /// Whether this pull request's base branch uses a merge queue.
+    ///
+    /// Decides whether the primary action merges or enqueues. Defaults
+    /// to false when absent, which is the safe direction: it offers a
+    /// plain Merge, and GitHub refuses that if the branch really does
+    /// require the queue. Defaulting the other way would hide Merge on
+    /// every repo the field could not be read for.
+    #[serde(default)]
+    pub merge_queue_enabled: bool,
+    /// Whether it is currently queued (and not rejected by the queue).
+    #[serde(default)]
+    pub in_merge_queue: bool,
     pub additions: u64,
     pub deletions: u64,
     pub changed_files: u64,

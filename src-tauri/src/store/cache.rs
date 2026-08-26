@@ -8,27 +8,58 @@ use super::schema::StoreError;
 use crate::github::model::PullRequest;
 use rusqlite::{Connection, OptionalExtension};
 
+/// Which cached list a row holds.
+///
+/// The table originally allowed exactly one row (`CHECK (id = 1)`), so
+/// only the authored list was cached and To review always waited on a
+/// live query -- ~20s on a 60-PR queue with an empty panel throughout.
+/// Migration 4 relaxed that; this names the rows so the two lists cannot
+/// be confused for each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CachedList {
+    /// Pull requests the user authored. Row 1, unchanged, so an existing
+    /// cache keeps working across the upgrade.
+    Authored,
+    /// Pull requests awaiting the user's review.
+    Reviewing,
+}
+
+impl CachedList {
+    fn id(self) -> i64 {
+        match self {
+            CachedList::Authored => 1,
+            CachedList::Reviewing => 2,
+        }
+    }
+}
+
 /// The whole snapshot is one JSON row. At ~30 PRs this is a few hundred KB,
 /// so a normalised schema would buy nothing and cost migrations later.
-pub fn save_snapshot(conn: &Connection, prs: &[PullRequest]) -> Result<(), StoreError> {
+pub fn save_snapshot(
+    conn: &Connection,
+    which: CachedList,
+    prs: &[PullRequest],
+) -> Result<(), StoreError> {
     let payload = serde_json::to_string(prs)?;
     conn.execute(
-        "INSERT INTO snapshot (id, payload, fetched_at) VALUES (1, ?1, datetime('now'))
+        "INSERT INTO snapshot (id, payload, fetched_at) VALUES (?2, ?1, datetime('now'))
          ON CONFLICT(id) DO UPDATE SET payload = ?1, fetched_at = datetime('now')",
-        [&payload],
+        rusqlite::params![&payload, which.id()],
     )?;
     Ok(())
 }
 
-pub fn load_snapshot(conn: &Connection) -> Result<Vec<PullRequest>, StoreError> {
+pub fn load_snapshot(conn: &Connection, which: CachedList) -> Result<Vec<PullRequest>, StoreError> {
     // `.optional()`, not `.ok()`: the latter collapses every rusqlite error
     // into "no snapshot", so a corrupt or locked database would render as
     // "you have no pull requests". Silently showing an empty list when the
     // store is broken is worse than surfacing the failure.
     let payload: Option<String> = conn
-        .query_row("SELECT payload FROM snapshot WHERE id = 1", [], |r| {
-            r.get(0)
-        })
+        .query_row(
+            "SELECT payload FROM snapshot WHERE id = ?1",
+            [which.id()],
+            |r| r.get(0),
+        )
         .optional()?;
     match payload {
         // A cache that cannot be parsed is NOT the same as an empty one.
@@ -106,6 +137,45 @@ mod tests {
         assert!(prs[0].head_oid.is_empty());
     }
 
+    /// The two lists must not overwrite each other.
+    ///
+    /// The table originally allowed one row (`CHECK (id = 1)`), so
+    /// caching the review list at all required migration 4. If both
+    /// wrote to the same id, To review would show the authored list --
+    /// a far worse bug than the slow load it is meant to fix.
+    #[test]
+    fn the_two_lists_are_cached_independently() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = crate::store::open_db(&dir.path().join("t.db")).unwrap();
+
+        let authored: Vec<PullRequest> = serde_json::from_str(V1_SNAPSHOT).unwrap();
+        let mut reviewing = authored.clone();
+        reviewing[0].number = 99;
+
+        save_snapshot(&conn, CachedList::Authored, &authored).unwrap();
+        save_snapshot(&conn, CachedList::Reviewing, &reviewing).unwrap();
+
+        assert_eq!(
+            load_snapshot(&conn, CachedList::Authored).unwrap()[0].number,
+            42
+        );
+        assert_eq!(
+            load_snapshot(&conn, CachedList::Reviewing).unwrap()[0].number,
+            99
+        );
+    }
+
+    /// An empty review cache is the first-run case, and must read as
+    /// "nothing cached" rather than erroring.
+    #[test]
+    fn an_absent_review_cache_reads_as_empty() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = crate::store::open_db(&dir.path().join("t.db")).unwrap();
+        assert!(load_snapshot(&conn, CachedList::Reviewing)
+            .unwrap()
+            .is_empty());
+    }
+
     /// An unreadable cache must not assert "you have no pull requests".
     /// It reports none-cached, which sends the caller to a fresh fetch.
     #[test]
@@ -118,7 +188,8 @@ mod tests {
         )
         .unwrap();
 
-        let got = load_snapshot(&conn).expect("a corrupt cache must not be an error");
+        let got = load_snapshot(&conn, CachedList::Authored)
+            .expect("a corrupt cache must not be an error");
         assert!(got.is_empty(), "a corrupt cache must not invent rows");
     }
 }

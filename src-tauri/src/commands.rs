@@ -7,7 +7,7 @@ use crate::github::model::{
     CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats,
 };
 use crate::github::mutate::{PrAction, ReviewVerdict};
-use crate::store::{load_snapshot, open_db, settings};
+use crate::store::{load_snapshot, open_db, save_snapshot, settings, CachedList};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -77,7 +77,7 @@ pub fn get_cached(app: AppHandle) -> Result<Vec<PullRequest>, String> {
     // cache (n=0, so the UI must wait on a live fetch) from a warm one,
     // which is the difference between "slow query" and "slow paint".
     let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
-    let out = load_snapshot(&conn).map_err(|e| e.to_string());
+    let out = load_snapshot(&conn, CachedList::Authored).map_err(|e| e.to_string());
     log::info!(
         "[diag] cmd get_cached {}",
         match &out {
@@ -1137,8 +1137,32 @@ pub async fn count_reviewing(client: State<'_, GhClient>) -> Result<u64, String>
     out
 }
 
+/// The cached review list, so To review paints real content instead of
+/// an empty panel while the live query runs.
+///
+/// Never talks to GitHub -- the mirror of `get_cached` for the other
+/// list. The query it stands in for takes ~20s on a 60-PR queue and
+/// cannot be made meaningfully faster (see #328), so the only way to
+/// stop the user staring at nothing is to have something to show.
 #[tauri::command]
-pub async fn get_reviewing(client: State<'_, GhClient>) -> Result<Vec<PullRequest>, String> {
+pub fn get_cached_reviewing(app: AppHandle) -> Result<Vec<PullRequest>, String> {
+    let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
+    let out = load_snapshot(&conn, CachedList::Reviewing).map_err(|e| e.to_string());
+    log::info!(
+        "[diag] cmd get_cached_reviewing {}",
+        match &out {
+            Ok(v) => format!("ok n={}", v.len()),
+            Err(e) => format!("err: {e}"),
+        }
+    );
+    out
+}
+
+#[tauri::command]
+pub async fn get_reviewing(
+    app: AppHandle,
+    client: State<'_, GhClient>,
+) -> Result<Vec<PullRequest>, String> {
     // TEMPORARY DIAGNOSTIC LOGGING (v3.5.3). Brackets the whole
     // command, so the log distinguishes the three ways To review can
     // appear stuck: the command was never invoked (no start line), it
@@ -1147,7 +1171,41 @@ pub async fn get_reviewing(client: State<'_, GhClient>) -> Result<Vec<PullReques
     log::info!("[diag] cmd get_reviewing start");
     let started = std::time::Instant::now();
     let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
-    let out = client.fetch_reviewing().await.map_err(|e| e.to_string());
+    let out = client
+        .fetch_reviewing_with_shortfall()
+        .await
+        .map(|(prs, short)| {
+            // Tell the UI when the list is SHORT. The 100 -> 50 fallback
+            // returns fewer pull requests than exist and everything
+            // downstream presented that as complete -- the v3.5.3 log
+            // caught 50 shown against a count of 62, with twelve gone
+            // silently. Emitted even when zero, so a recovered fetch
+            // clears a banner an earlier one raised.
+            if let Err(e) = app.emit("reviewing-short", short) {
+                log::warn!("failed to emit reviewing-short: {e}");
+            }
+            // Cache it, so the next visit to To review paints from disk
+            // instead of waiting out the query again. The measurements
+            // on #328 are what make this the fix: the query itself
+            // cannot be made fast (a bare 25-item search already costs
+            // 6.2s, and trimming fields measured as noise), so the win
+            // has to come from not blocking on it.
+            //
+            // A failed write is logged and swallowed: the caller has
+            // real pull requests in hand, and refusing to return them
+            // because a cache write failed would turn a slow path into
+            // a broken one.
+            match open_db(&db_path(&app)) {
+                Ok(conn) => {
+                    if let Err(e) = save_snapshot(&conn, CachedList::Reviewing, &prs) {
+                        log::warn!("could not cache the review list: {e}");
+                    }
+                }
+                Err(e) => log::warn!("could not open the store to cache the review list: {e}"),
+            }
+            prs
+        })
+        .map_err(|e| e.to_string());
     log::info!(
         "[diag] cmd get_reviewing end {}ms {}",
         started.elapsed().as_millis(),

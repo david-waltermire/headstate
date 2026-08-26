@@ -142,6 +142,82 @@ describe("DockerPage", () => {
     expect(screen.getByRole("button", { name: /remove 2 stale images/i })).toBeTruthy();
   });
 
+  /// The reported gap: "just showing the hash makes it hard to tell
+  /// what it is from and if I should remove it". An untagged image is
+  /// exactly the one that cannot be identified, and it is what
+  /// accumulates from repeated rebuilds.
+  it("names an untagged image by its repository, not a bare hash", () => {
+    state.images = [img({ tags: [], repository: "registry/app", id: "deadbeef1234" })];
+    render(<DockerPage />);
+    expect(screen.getByText(/registry\/app@deadbeef1234/)).toBeTruthy();
+  });
+
+  it("shows the full identity and provenance when a row is expanded", () => {
+    state.images = [
+      img({ tags: [], id: "deadbeef1234", repository: "registry/app" }),
+    ];
+    render(<DockerPage />);
+    // Collapsed: the long fields are absent, so the row stays one line.
+    expect(screen.queryByText("Built from")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText("Image ID")).toBeTruthy();
+    expect(screen.getByText("Built from")).toBeTruthy();
+    // The commit line, which only the expanded detail renders.
+    expect(screen.getByText(/13901886 — add retry to the client/)).toBeTruthy();
+  });
+
+  /// "unknown" alone reads as a missing feature. Saying WHY there is
+  /// nothing to show is the difference between a gap and a fact.
+  it("explains why an unattributed image has no provenance", () => {
+    state.images = [img({ origin: null })];
+    render(<DockerPage />);
+    fireEvent.click(screen.getByRole("button", { expanded: false }));
+    expect(screen.getByText(/could not be traced to a commit/i)).toBeTruthy();
+  });
+
+  /// The reported gap: "there needs to be a button to remove all
+  /// superseded images". One existed, but it required the branch to
+  /// have MERGED, so on a real machine it under-counted badly -- most
+  /// superseded images have no branch attribution at all.
+  it("offers a wider action covering every superseded unused image", () => {
+    state.images = [
+      img({ id: "dead" }),
+      img({ id: "unattributed", origin: null }),
+      img({ id: "live", origin: { ...img().origin!, merged: false } }),
+      img({ id: "held", in_use: true }),
+      img({ id: "current", superseded: false }),
+    ];
+    render(<DockerPage />);
+    expect(screen.getByRole("button", { name: /remove 1 stale image/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /remove all 3 superseded/i })).toBeTruthy();
+  });
+
+  /// Two buttons showing the same count would be a confusing way to
+  /// offer one action.
+  it("hides the wider action when it would remove no more than the narrow one", () => {
+    state.images = [img({ id: "dead1" }), img({ id: "dead2" })];
+    render(<DockerPage />);
+    expect(screen.getByRole("button", { name: /remove 2 stale images/i })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /superseded/i })).toBeNull();
+  });
+
+  it("submits the wider set, and says the branches may still be open", async () => {
+    state.images = [
+      img({ id: "dead" }),
+      img({ id: "unattributed", origin: null }),
+      img({ id: "held", in_use: null }),
+    ];
+    render(<DockerPage />);
+    fireEvent.click(screen.getByRole("button", { name: /remove all 2 superseded/i }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/still open/i)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: /remove 2 images/i }));
+    await waitFor(() => expect(removeImagesFn).toHaveBeenCalled());
+    // `in_use: null` means "we could not ask" and must be excluded.
+    expect(removeImagesFn.mock.calls[0][0]).toEqual(["dead", "unattributed"]);
+  });
+
   it("lists every image in the bulk confirmation, not just a count", () => {
     state.images = [img({ id: "a", tags: ["aaa1111"] }), img({ id: "b", tags: ["bbb2222"] })];
     render(<DockerPage />);
