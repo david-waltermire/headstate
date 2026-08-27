@@ -144,6 +144,13 @@ pub struct PullRequest {
     /// invented name.
     #[serde(default)]
     pub requested_reviewers: Vec<String>,
+    /// Assignees, used as a fallback when no reviewer was requested.
+    ///
+    /// Some repositories assign the reviewer rather than requesting a
+    /// review -- rust-lang/rust does, and `reviewRequests` is empty on
+    /// every one of its open pull requests as a result.
+    #[serde(default)]
+    pub assignees: Vec<String>,
     /// Who has already reviewed, and what they said.
     ///
     /// A different question from `review`, which collapses every
@@ -387,6 +394,7 @@ mod attention_tests {
             comment_count: 0,
             unresolved_threads: 0,
             requested_reviewers: Vec::new(),
+            assignees: Vec::new(),
             latest_reviews: Vec::new(),
         }
     }

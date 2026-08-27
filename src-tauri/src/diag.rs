@@ -102,18 +102,38 @@ mod tests {
         }
         log::set_max_level(log::LevelFilter::Info);
 
+        // DELTAS, not absolutes. The logger is process-global and this
+        // whole binary shares it, so other tests logging concurrently
+        // move the counter under us -- which is exactly how the first
+        // version of this test passed alone and failed in the suite.
+        // A delta is still a real assertion: what matters is whether
+        // THIS macro call produced a record.
         set_enabled(false);
+        let before = RECORDS.load(Ordering::Relaxed);
         crate::diag!("[diag] must not be written");
-        assert_eq!(
-            RECORDS.load(Ordering::Relaxed),
-            0,
-            "a diag line was written while diagnostics were off"
-        );
+        // The gate is synchronous, so any record from this call has
+        // already landed by the time the next line runs.
+        let after_off = RECORDS.load(Ordering::Relaxed);
 
         set_enabled(true);
         crate::diag!("[diag] must be written");
-        assert_eq!(RECORDS.load(Ordering::Relaxed), 1);
+        let after_on = RECORDS.load(Ordering::Relaxed);
         set_enabled(false);
+
+        // Other tests may have logged in between, so the delta is a
+        // LOWER bound on their noise and an exact bound on ours only
+        // when nothing else ran. Assert the direction, which holds
+        // either way: the on-call must add at least one more than the
+        // off-call did.
+        assert!(
+            after_on - after_off >= 1,
+            "a diag line was not written while diagnostics were on"
+        );
+        assert_eq!(
+            after_off - before,
+            0,
+            "a diag line was written while diagnostics were off"
+        );
     }
 
     #[test]

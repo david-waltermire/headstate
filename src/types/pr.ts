@@ -63,6 +63,8 @@ export interface PullRequest {
   /// Empty is ORDINARY: repositories that assign reviewers through a
   /// bot return nothing here, and so does a solo account.
   requested_reviewers: string[];
+  /// Assignees, used as a fallback when no reviewer was requested.
+  assignees: string[];
   /// Who has already reviewed, and what they said.
   latest_reviews: { author: string; state: string }[];
 }

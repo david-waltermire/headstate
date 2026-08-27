@@ -945,6 +945,7 @@ mod tests {
             comment_count: 0,
             unresolved_threads: 0,
             requested_reviewers: Vec::new(),
+            assignees: Vec::new(),
             latest_reviews: Vec::new(),
         }
     }
@@ -1089,9 +1090,9 @@ mod tests {
         // not do is silently drift, so the two numbers are recorded
         // separately below.
         assert_eq!(
-            cost, 5,
+            cost, 6,
             "PRS_QUERY connection count changed; re-measure the LIVE cost \
-             (5 connections = 3 points on 2026-08-26, for ONE search -- \
+             (6 connections = 3 points on 2026-08-27, for ONE search -- \
               the query carried two aliases and cost 6 until they were \
               split)"
         );
@@ -1172,6 +1173,7 @@ mod tests {
             comment_count: 0,
             unresolved_threads: 0,
             requested_reviewers: Vec::new(),
+            assignees: Vec::new(),
             latest_reviews: Vec::new(),
         }
     }

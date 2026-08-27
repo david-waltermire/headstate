@@ -29,6 +29,7 @@ export const PR_FIXTURES: PullRequest[] = [
     comment_count: 2,
     unresolved_threads: 0,
     requested_reviewers: [],
+    assignees: [],
     latest_reviews: [],
   },
   {
@@ -54,6 +55,7 @@ export const PR_FIXTURES: PullRequest[] = [
     comment_count: 5,
     unresolved_threads: 2,
     requested_reviewers: [],
+    assignees: [],
     latest_reviews: [],
   },
   {
@@ -79,6 +81,7 @@ export const PR_FIXTURES: PullRequest[] = [
     comment_count: 0,
     unresolved_threads: 0,
     requested_reviewers: [],
+    assignees: [],
     latest_reviews: [],
   },
 ];

@@ -47,7 +47,18 @@ export function needsAttention(pr: PullRequest): boolean {
 /// suggest.
 export function pendingReviewers(pr: PullRequest): string[] {
   const answered = new Set(pr.latest_reviews?.map((r) => r.author) ?? []);
-  return (pr.requested_reviewers ?? []).filter((login) => !answered.has(login));
+  // Assignees are a FALLBACK, not an addition. Some repositories assign
+  // the reviewer rather than requesting a review -- measured: 25 of 25
+  // rust-lang/rust pull requests have no `reviewRequests` at all, and
+  // reading assignees rescues 19 of them.
+  //
+  // Only when there are no requests, never merged with them: on a repo
+  // that uses both, an assignee is often the AUTHOR triaging their own
+  // pull request, and listing them as someone you are waiting on would
+  // be worse than saying nothing.
+  const requested = pr.requested_reviewers ?? [];
+  const source = requested.length > 0 ? requested : (pr.assignees ?? []);
+  return source.filter((login) => !answered.has(login) && login !== pr.author);
 }
 
 /// Waiting on a reviewer and nobody else.

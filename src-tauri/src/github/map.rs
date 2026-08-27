@@ -153,6 +153,18 @@ fn requested_reviewers(node: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The logins in a `{ nodes: [{ login }] }` connection.
+fn logins(conn: &Value) -> Vec<String> {
+    conn["nodes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| Some(n["login"].as_str()?.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Every reviewer's latest verdict.
 ///
 /// Shared by the list and detail mappers so the row and the view it
@@ -296,6 +308,7 @@ fn map_node(node: &Value) -> Option<PullRequest> {
         // `isInMergeQueue` is false anyway.
         in_merge_queue: in_merge_queue(node),
         requested_reviewers: requested_reviewers(node),
+        assignees: logins(&node["assignees"]),
         latest_reviews: latest_reviews(node),
         labels: labels(node),
         comment_count: node["totalCommentsCount"].as_u64().unwrap_or(0),

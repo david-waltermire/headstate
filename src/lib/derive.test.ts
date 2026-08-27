@@ -280,8 +280,8 @@ describe("pendingReviewers", () => {
   ) => ({ ...PR_FIXTURES[0], requested_reviewers: requested, latest_reviews: reviews });
 
   it("names everyone still asked and not yet answered", () => {
-    expect(pendingReviewers(withReviewers(["octocat", "hubot"]))).toEqual([
-      "octocat",
+    expect(pendingReviewers(withReviewers(["reviewer-one", "hubot"]))).toEqual([
+      "reviewer-one",
       "hubot",
     ]);
   });
@@ -293,8 +293,8 @@ describe("pendingReviewers", () => {
   /// already answered.
   it("drops a reviewer who has already given a verdict", () => {
     const pr = withReviewers(
-      ["octocat", "hubot"],
-      [{ author: "octocat", state: "APPROVED" }],
+      ["reviewer-one", "hubot"],
+      [{ author: "reviewer-one", state: "APPROVED" }],
     );
     expect(pendingReviewers(pr)).toEqual(["hubot"]);
   });
@@ -302,13 +302,45 @@ describe("pendingReviewers", () => {
   /// A COMMENTED review is an answer. They looked and said something
   /// without blocking, so the row should not suggest chasing them.
   it("treats a comment as an answer", () => {
-    const pr = withReviewers(["octocat"], [{ author: "octocat", state: "COMMENTED" }]);
+    const pr = withReviewers(["reviewer-one"], [{ author: "reviewer-one", state: "COMMENTED" }]);
     expect(pendingReviewers(pr)).toEqual([]);
   });
 
   it("ignores reviews from people who were never requested", () => {
-    const pr = withReviewers(["octocat"], [{ author: "a-passerby", state: "APPROVED" }]);
-    expect(pendingReviewers(pr)).toEqual(["octocat"]);
+    const pr = withReviewers(["reviewer-one"], [{ author: "a-passerby", state: "APPROVED" }]);
+    expect(pendingReviewers(pr)).toEqual(["reviewer-one"]);
+  });
+
+  /// The investigation that prompted this: `reviewRequests` is empty on
+  /// 25 of 25 rust-lang/rust pull requests, because it assigns the
+  /// reviewer instead. Without the fallback the feature shows nothing
+  /// at all on whole repositories.
+  it("falls back to assignees when no reviewer was requested", () => {
+    const pr = { ...withReviewers([]), assignees: ["jieyouxu"] };
+    expect(pendingReviewers(pr)).toEqual(["jieyouxu"]);
+  });
+
+  /// A FALLBACK, not an addition. On a repo that uses both, an assignee
+  /// is often the author triaging their own pull request.
+  it("prefers requested reviewers over assignees when both exist", () => {
+    const pr = { ...withReviewers(["reviewer-one"]), assignees: ["someone-else"] };
+    expect(pendingReviewers(pr)).toEqual(["reviewer-one"]);
+  });
+
+  /// The author assigning themselves is the common case on repos that
+  /// use assignees for triage. "Waiting on yourself" is never useful.
+  it("never lists the author as someone you are waiting on", () => {
+    const base = withReviewers([]);
+    const pr = { ...base, assignees: [base.author] };
+    expect(pendingReviewers(pr)).toEqual([]);
+  });
+
+  it("still drops an assignee who has already reviewed", () => {
+    const pr = {
+      ...withReviewers([], [{ author: "jieyouxu", state: "APPROVED" }]),
+      assignees: ["jieyouxu"],
+    };
+    expect(pendingReviewers(pr)).toEqual([]);
   });
 
   /// Empty is ORDINARY, not missing data -- measured at 0 of 25 on
