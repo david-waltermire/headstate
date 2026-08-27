@@ -68,6 +68,7 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             commands::diag_log,
+            commands::pull_checkout,
             commands::get_cached,
             commands::get_cached_reviewing,
             commands::refresh_now,

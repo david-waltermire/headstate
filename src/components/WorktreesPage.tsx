@@ -10,6 +10,7 @@ import {
   useWorktreeSafety,
   useWorktreeSizes,
   useWorktrees,
+  usePullCheckout,
   useDockerImages,
   useRemoveImages,
   useRemovalProgress,
@@ -72,6 +73,8 @@ function Row({
   removing = false,
   assessed = false,
   onForce,
+  onPull,
+  pulling = false,
 }: {
   wt: Worktree;
   /// The open pull request for this worktree, when there is one.
@@ -93,8 +96,16 @@ function Row({
   /// The repo this worktree belongs to. Needed to assess it: git has to
   /// be run from the repo, not the worktree.
   repoPath: string;
+  /// Fast-forward this checkout. Only ever called for the main one.
+  onPull: (wt: Worktree) => void;
+  /// This row's pull is in flight. Per row, like `removing`.
+  pulling?: boolean;
 }) {
   const safe = isSafe(wt.safety);
+  // `Safety` already answers "is this dirty, and by how much" -- reusing
+  // it means the button's reason cannot disagree with the row's own
+  // explanation of the same checkout.
+  const dirtyCount = wt.safety.kind === "dirty" ? wt.safety.detail : null;
   const pending = isPending(wt.safety);
   const claudifiable = canClaudify(wt.safety);
   const signal = worktreeSignal(pr);
@@ -225,6 +236,35 @@ function Row({
       {/* The disclosure, not a second action: the row keeps its
           one-action rule and this only reveals what the app already
           knows. */}
+      {/* The main checkout reports how far behind it is and, until now,
+          offered no way to act on it -- so fixing it meant leaving the
+          app for a terminal, which is the thing this view exists to
+          avoid. Its staleness is also what makes the worktrees below it
+          stale.
+
+          Disabled rather than hidden when the tree is dirty, with the
+          reason in the title: an absent button just looks broken, while
+          a greyed one that says "3 uncommitted files" teaches. Same
+          rule `PrActions` applies to an unavailable merge. */}
+      {wt.is_main ? (
+        <button
+          type="button"
+          disabled={dirtyCount !== null || pulling}
+          onClick={() => onPull(wt)}
+          title={
+            dirtyCount !== null
+              ? `${dirtyCount} uncommitted file${dirtyCount === 1 ? "" : "s"} — commit or stash first`
+              : "Fast-forward this checkout to its upstream"
+          }
+          className={`shrink-0 rounded border px-2 py-0.5 text-xs ${
+            dirtyCount !== null || pulling
+              ? "border-[#30363d] text-[#8b949e] opacity-50"
+              : "border-[#30363d] text-[#e6edf3] hover:bg-[#161b22]"
+          }`}
+        >
+          {pulling ? "Updating…" : "Update to latest"}
+        </button>
+      ) : null}
       {claudifiable ? (
         <button
           type="button"
@@ -375,6 +415,30 @@ export function WorktreesPage() {
   const removeImages = useRemoveImages();
   const assessed = new Set(assessedPaths ?? []);
   const [forcing, setForcing] = useState<Worktree | null>(null);
+  const [pullingPath, setPullingPath] = useState<string | null>(null);
+  const pull = usePullCheckout();
+
+  /// Fast-forward the main checkout, reporting git's own words either
+  /// way. A generic "could not update" would throw away the one part of
+  /// the failure that tells the user what to do.
+  const runPull = (wt: Worktree) => {
+    setPullingPath(wt.path);
+    pull(wt.path).then(
+      (out) => {
+        setPullingPath(null);
+        // Git says "Already up to date." when there was nothing to
+        // fetch, which is a real answer and worth passing through
+        // rather than replacing with a claim that something changed.
+        toast.success(out.trim() || "Updated");
+      },
+      (e: unknown) => {
+        setPullingPath(null);
+        toast.error(`Could not update ${pathBasename(wt.path)}`, {
+          description: typeof e === "string" ? e : undefined,
+        });
+      },
+    );
+  };
 
   if (isLoading) {
     return (
@@ -462,6 +526,13 @@ export function WorktreesPage() {
     // under the cursor -- a row you were about to click moves as its
     // number lands. Hold the stable path order until they are all in.
     .sort((a, b) => {
+      // The main checkout first, ALWAYS. It is not a peer of the rows
+      // below it -- every one of those is a removal candidate and it
+      // never is, so sorting it among them invites reading it as one.
+      // Its row also carries the upstream prose ("behind by 40"), which
+      // is the reason the worktrees under it are stale, and an
+      // explanation belongs above the thing it explains.
+      if (a.is_main !== b.is_main) return a.is_main ? -1 : 1;
       // Assessed rows first: the user just came back from reading a
       // verdict, and finding that row among 124 candidates is the part
       // that made this feel unfinished.
@@ -787,6 +858,8 @@ export function WorktreesPage() {
               pr={prForWorktree(prs, selected?.identity ?? null, wt.branch)}
               assessed={assessed.has(wt.path)}
               onForce={setForcing}
+              onPull={runPull}
+              pulling={pullingPath === wt.path}
               onRemove={setPending}
               onClaudify={claudify}
               sizePending={sizing}

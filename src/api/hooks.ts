@@ -20,6 +20,7 @@ import {
   classifyWorktrees,
   listWorktrees,
   removeWorktree,
+  pullCheckout,
   assessedWorktrees,
   dockerBuildDetail,
   dockerBuilds,
@@ -539,6 +540,22 @@ export function useWorktreeSizes(repoPath: string | undefined) {
 /// before the deletion succeeded would be a lie about the filesystem, and
 /// the failure case here is "your work is still there", which the user
 /// needs to see rather than have hidden.
+/// Fast-forward a checkout to its upstream.
+///
+/// Invalidates the worktree list on success rather than patching a row:
+/// the upstream line is the whole reason the action exists, and a
+/// successful pull that left "behind by 40" on screen would look like
+/// it had failed. Unlike removal there is no long re-classification to
+/// avoid -- the row count does not change.
+export function usePullCheckout() {
+  const qc = useQueryClient();
+  return (path: string) =>
+    pullCheckout(path).then((out) => {
+      void qc.invalidateQueries({ queryKey: ["worktrees"] });
+      return out;
+    });
+}
+
 export function useRemoveWorktree() {
   const qc = useQueryClient();
   return (repoPath: string, worktreePath: string) =>

@@ -272,6 +272,45 @@ mod live {
 
     /// Against the real daemon. Run manually:
     /// `cargo test --lib live_docker -- --ignored --nocapture`
+    /// Reported: "the Docker images page is still missing the button to
+    /// remove all superseded images". The button exists but is gated on
+    /// `superseded > stale`, so this prints BOTH counts from the real
+    /// classifier -- the gate cannot be reasoned about from the
+    /// docker output alone, since `stale` also depends on origin
+    /// resolution and container state.
+    #[test]
+    #[ignore]
+    fn live_superseded_versus_stale_counts() {
+        // The REPO LIST matters: origin resolution needs it, and
+        // `is_stale` requires an origin whose branch merged. Passing the
+        // real scanned directories is what makes this reflect the page.
+        let repos: Vec<std::path::PathBuf> = std::fs::read_dir(
+            std::path::Path::new(&std::env::var("HOME").unwrap()).join("code/enclave"),
+        )
+        .map(|d| d.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+        .unwrap_or_default();
+        let imgs = crate::docker::classify(&repos).expect("docker must be running");
+        let superseded = imgs
+            .iter()
+            .filter(|i| i.superseded && i.in_use == Some(false))
+            .count();
+        let stale = imgs.iter().filter(|i| i.is_stale()).count();
+        let unknown_use = imgs.iter().filter(|i| i.in_use.is_none()).count();
+        let with_origin = imgs.iter().filter(|i| i.origin.is_some()).count();
+        println!(
+            "total={} superseded_unused={} stale={} unknown_use={} with_origin={}",
+            imgs.len(),
+            superseded,
+            stale,
+            unknown_use,
+            with_origin
+        );
+        println!(
+            "button shows when superseded > stale: {}",
+            superseded > stale
+        );
+    }
+
     #[test]
     #[ignore]
     fn live_docker_state_and_images() {

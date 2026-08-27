@@ -595,6 +595,27 @@ pub async fn remove_worktree(repo_path: String, worktree_path: String) -> Result
     result
 }
 
+/// Fast-forward a checkout to its upstream.
+///
+/// The FIRST command that writes to a local checkout, so it carries the
+/// same care the destructive ones do: it refuses on a dirty tree, it
+/// fast-forwards only, and it returns git's own refusal rather than a
+/// generic message. `pull_checkout` re-checks the state itself rather
+/// than trusting the scan.
+#[tauri::command]
+pub async fn pull_checkout(path: String) -> Result<String, String> {
+    let p = path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || crate::worktrees::pull_checkout(&p))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(_) => log::info!("updated checkout {path}"),
+        Err(e) => log::warn!("refused to update checkout {path}: {e}"),
+    }
+    result
+}
+
 /// Directories scanned for git checkouts.
 ///
 /// Defaults to `~/code` when unset, so the app works with no

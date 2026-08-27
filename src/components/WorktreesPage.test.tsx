@@ -22,6 +22,9 @@ vi.mock("sonner", () => ({
 }));
 
 const dockerImages = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+const pullFn = vi.hoisted(() =>
+  vi.fn<(path: string) => Promise<string>>(() => Promise.resolve("Already up to date.")),
+);
 // Typed so the call arguments can be asserted on: the untyped form
 // infers an empty tuple, and indexing it is a compile error.
 const removeImagesFn = vi.hoisted(() =>
@@ -38,6 +41,7 @@ vi.mock("../api/hooks", () => ({
   // The cleanup manifest joins worktrees to the images they own, so the
   // page now reads Docker state -- but only while the confirmation is
   // open, which is why the default here is an empty list.
+  usePullCheckout: () => pullFn,
   useDockerImages: () => ({ data: dockerImages() }),
   useRemoveImages: () => removeImagesFn,
   useWorktrees: () => ({
@@ -99,6 +103,7 @@ describe("WorktreesPage", () => {
     // confirm click in an earlier one leaks into it. Cleared here rather
     // than in that test, so every test starts from the same state.
     removeManyFn.mockClear();
+    pullFn.mockClear();
     Object.assign(state, {
       repos: [{ identity: null, name: "proj", path: "/code/proj", worktrees: [wt({})] }],
       isLoading: false,
@@ -587,6 +592,87 @@ describe("WorktreesPage", () => {
 
   // 106 of 268 worktrees are safe on a real machine, mostly concentrated
   // in a few repos. Clicking each adds no safety, only clicks.
+  /// The main checkout is not a peer of the rows below it: every one of
+  /// those is a removal candidate and it never is. Its row also carries
+  /// the upstream prose that explains why the others are stale.
+  it("pins the main checkout above every other row", () => {
+    state.classified = [
+      // Ordered so main loses on every OTHER key: it is smallest, and
+      // sorts last by path.
+      wt({ path: "/code/zzz-b", size_bytes: 9_000_000, safety: { kind: "safe" } }),
+      wt({ path: "/code/aaa-a", size_bytes: 5_000_000, safety: { kind: "safe" } }),
+      wt({
+        path: "/code/zzz-main",
+        size_bytes: 1,
+        is_main: true,
+        safety: { kind: "main_checkout" },
+      }),
+    ];
+    render(<WorktreesPage />);
+    // Rows show the basename, not the full path, and the element also
+    // carries the branch -- so match the leading name rather than the
+    // whole string.
+    const rendered = screen.getAllByText(/^(zzz-b|aaa-a|zzz-main)/);
+    expect(rendered[0].textContent).toMatch(/^zzz-main/);
+  });
+
+  /// #340: the main checkout reported how far behind it was and offered
+  /// no way to act on it, so fixing it meant leaving the app.
+  describe("updating the main checkout", () => {
+    const withMain = (safety: unknown = { kind: "main_checkout" }) => [
+      wt({ path: "/code/proj", is_main: true, safety: safety as never }),
+      wt({ path: "/code/proj-feature", safety: { kind: "safe" } }),
+    ];
+
+    it("offers the update only on the main checkout", () => {
+      state.classified = withMain();
+      render(<WorktreesPage />);
+      expect(screen.getAllByRole("button", { name: /update to latest/i })).toHaveLength(1);
+    });
+
+    it("pulls that checkout", async () => {
+      state.classified = withMain();
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /update to latest/i }));
+      await waitFor(() => expect(pullFn).toHaveBeenCalledWith("/code/proj"));
+    });
+
+    /// Disabled rather than hidden, with the reason in the title: an
+    /// absent button just looks broken, while a greyed one that says
+    /// "3 uncommitted files" teaches. The Rust side refuses too -- this
+    /// is the explanation, not the gate.
+    it("refuses a dirty checkout and says how dirty", () => {
+      state.classified = withMain({ kind: "dirty", detail: 3 });
+      render(<WorktreesPage />);
+      const btn = screen.getByRole("button", { name: /update to latest/i });
+      expect(btn).toHaveProperty("disabled", true);
+      expect(btn.getAttribute("title")).toMatch(/3 uncommitted files/);
+    });
+
+    /// Git says "Already up to date." when there was nothing to fetch,
+    /// which is a real answer -- replacing it with a claim that
+    /// something changed would be a small lie.
+    it("reports git's own words on success", async () => {
+      state.classified = withMain();
+      pullFn.mockResolvedValueOnce("Fast-forward to 3 commits");
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /update to latest/i }));
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+      expect(toastSuccess.mock.calls[0][0]).toContain("Fast-forward");
+    });
+
+    it("reports git's own refusal on failure", async () => {
+      state.classified = withMain();
+      pullFn.mockRejectedValueOnce("divergent branches");
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /update to latest/i }));
+      await waitFor(() => expect(toastError).toHaveBeenCalled());
+      expect(toastError.mock.calls[0][1]).toMatchObject({
+        description: "divergent branches",
+      });
+    });
+  });
+
   describe("bulk removal", () => {
     const threeSafe = () => [
       wt({ path: "/code/a", safety: { kind: "safe" }, size_bytes: 1024 }),

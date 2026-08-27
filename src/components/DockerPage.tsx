@@ -213,6 +213,10 @@ export function DockerPage() {
   /// share a dialog because everything except the wording and the
   /// membership rule is identical.
   const [bulkOpen, setBulkOpen] = useState<null | "stale" | "superseded">(null);
+  // Whether the confirmation is showing the WIDE set. Reset each time
+  // the dialog opens, so a previous session's choice cannot silently
+  // widen a later removal.
+  const [includeWider, setIncludeWider] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [restartOpen, setRestartOpen] = useState<string[] | null>(null);
@@ -300,7 +304,7 @@ export function DockerPage() {
   // branch merged, which excludes everything nothing could attribute.
   const superseded = shown.filter(isSuperseded);
   // What the confirmation is actually about.
-  const bulkSet = bulkOpen === "superseded" ? superseded : stale;
+  const bulkSet = includeWider ? superseded : stale;
   const bulkBytes = bulkSet.reduce((n, i) => n + i.size_bytes, 0);
 
   return (
@@ -312,25 +316,21 @@ export function DockerPage() {
           <button
             type="button"
             disabled={busy}
-            onClick={() => setBulkOpen("stale")}
+            onClick={() => {
+              setIncludeWider(false);
+              setBulkOpen("stale");
+            }}
             className="rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10 disabled:opacity-50"
           >
             Remove {stale.length} stale image{stale.length === 1 ? "" : "s"}
           </button>
         ) : null}
-        {/* Only when it covers strictly more than the conservative
-            button. Two buttons showing the same count would be a
-            confusing way to offer one action. */}
-        {superseded.length > stale.length ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setBulkOpen("superseded")}
-            className="rounded border border-[#d29922]/40 px-2 py-0.5 text-xs text-[#d29922] hover:bg-[#d29922]/10 disabled:opacity-50"
-          >
-            Remove all {superseded.length} superseded
-          </button>
-        ) : null}
+        {/* ONE entry point, not two. Measured on a real machine:
+            18 stale against 19 superseded -- two buttons one apart in
+            count, doing near-identical things. The wide set is now an
+            opt-in inside the confirmation, where the images are already
+            listed individually, rather than a competing button whose
+            difference the reader had to work out by subtraction. */}
         <button
           type="button"
           onClick={() => dockerRunningContainers().then(setRestartOpen)}
@@ -486,6 +486,22 @@ export function DockerPage() {
                 ? "Each one has been replaced by a newer build and nothing is running it — but some belong to branches that are still open, so check the list."
                 : "Every one is superseded and its branch has merged, so nothing will want it again."}
             </p>
+            {/* The wider set as an OPT-IN, and only when it actually
+                covers more. Named with its difference so the choice has
+                a stated reason rather than leaving the reader to
+                subtract two counts. */}
+            {superseded.length > stale.length ? (
+              <label className="mt-3 flex items-center gap-2 text-sm text-[#d29922]">
+                <input
+                  type="checkbox"
+                  checked={includeWider}
+                  onChange={() => setIncludeWider((v) => !v)}
+                />
+                Also remove {superseded.length - stale.length} superseded image
+                {superseded.length - stale.length === 1 ? "" : "s"} whose branch is
+                still open or could not be traced
+              </label>
+            ) : null}
             <ul className="mt-3 max-h-64 overflow-y-auto font-mono text-xs text-[#8b949e]">
               {bulkSet.map((i) => (
                 <li key={i.id} className="py-0.5">

@@ -28,6 +28,15 @@ export function WorktreeSidebar({
   // Same rule as the per-repo counts: the main checkout is not a
   // worktree anyone would remove, so it is not counted as one.
   const allCount = (repos ?? []).reduce((n, r) => n + removable(r.worktrees.length), 0);
+  // Repositories with nothing to act on are hidden. Most repositories
+  // have no worktrees at any given moment, so listing them all made the
+  // sidebar mostly rows that cannot be clicked usefully.
+  //
+  // The TOTAL is deliberately not filtered: it is already built from
+  // `removable`, so hiding rows cannot change it -- and a total that
+  // moved when rows were hidden would be a different number pretending
+  // to be the same one.
+  const withWorktrees = (repos ?? []).filter((r) => removable(r.worktrees.length) > 0);
 
   return (
     <nav className="flex w-64 shrink-0 flex-col border-r border-[#30363d] p-3">
@@ -46,7 +55,7 @@ export function WorktreeSidebar({
           <span>All repositories</span>
           <span className="ml-2 shrink-0">{allCount}</span>
         </button>
-        {(repos ?? []).map((r) => (
+        {withWorktrees.map((r) => (
           <button
             type="button"
             key={r.path}
@@ -57,6 +66,15 @@ export function WorktreeSidebar({
             <span className="ml-2 shrink-0">{removable(r.worktrees.length)}</span>
           </button>
         ))}
+        {/* Distinct from "no repositories found": the scan worked and
+            found repositories, they simply have no worktrees. Rendering
+            a blank list instead would read as a failed scan, which is a
+            different and more alarming thing. */}
+        {repos !== undefined && repos.length > 0 && withWorktrees.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-[#8b949e]">
+            No worktrees in any scanned repository.
+          </p>
+        ) : null}
         {repos?.length === 0 ? (
           <p className="px-3 py-2 text-xs text-[#8b949e]">
             No repositories found. Check the scanned directories in Settings.

@@ -309,6 +309,10 @@ export const sizeWorktrees = (repoPath: string) =>
 
 /// Remove a worktree. Rejects anything not provably safe; the gate is
 /// re-evaluated on the Rust side rather than trusted from the last scan.
+/// Fast-forward a checkout to its upstream. Refuses on a dirty tree and
+/// fast-forwards only; returns git's own output or its own refusal.
+export const pullCheckout = (path: string) => invoke<string>("pull_checkout", { path });
+
 export const removeWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("remove_worktree", { repoPath, worktreePath });
 

@@ -180,42 +180,64 @@ describe("DockerPage", () => {
   /// superseded images". One existed, but it required the branch to
   /// have MERGED, so on a real machine it under-counted badly -- most
   /// superseded images have no branch attribution at all.
-  it("offers a wider action covering every superseded unused image", () => {
+  /// Measured on a real machine: 18 stale against 19 superseded. Two
+  /// buttons one apart in count, doing near-identical things, is why
+  /// this was reported as "missing" -- it rendered and was invisible.
+  /// One entry point now, with the wider set as an opt-in.
+  it("offers the wider set inside the confirmation, not as a second button", () => {
     state.images = [
       img({ id: "dead" }),
       img({ id: "unattributed", origin: null }),
       img({ id: "live", origin: { ...img().origin!, merged: false } }),
-      img({ id: "held", in_use: true }),
-      img({ id: "current", superseded: false }),
     ];
     render(<DockerPage />);
-    expect(screen.getByRole("button", { name: /remove 1 stale image/i })).toBeTruthy();
-    expect(screen.getByRole("button", { name: /remove all 3 superseded/i })).toBeTruthy();
+    // No competing button on the page.
+    expect(screen.queryByRole("button", { name: /remove all .* superseded/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /remove 1 stale image/i }));
+    const dialog = screen.getByRole("dialog");
+    // The opt-in names the DIFFERENCE, so the choice has a reason.
+    expect(within(dialog).getByText(/Also remove 2 superseded images/i)).toBeTruthy();
   });
 
-  /// Two buttons showing the same count would be a confusing way to
-  /// offer one action.
-  it("hides the wider action when it would remove no more than the narrow one", () => {
-    state.images = [img({ id: "dead1" }), img({ id: "dead2" })];
-    render(<DockerPage />);
-    expect(screen.getByRole("button", { name: /remove 2 stale images/i })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /superseded/i })).toBeNull();
-  });
-
-  it("submits the wider set, and says the branches may still be open", async () => {
+  it("stays with the conservative set unless the opt-in is ticked", async () => {
     state.images = [
       img({ id: "dead" }),
       img({ id: "unattributed", origin: null }),
       img({ id: "held", in_use: null }),
     ];
     render(<DockerPage />);
-    fireEvent.click(screen.getByRole("button", { name: /remove all 2 superseded/i }));
+    fireEvent.click(screen.getByRole("button", { name: /remove 1 stale image/i }));
     const dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText(/still open/i)).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: /remove 1 image/i }));
+    await waitFor(() => expect(removeImagesFn).toHaveBeenCalled());
+    expect(removeImagesFn.mock.calls[0][0]).toEqual(["dead"]);
+  });
+
+  it("widens the removal when the opt-in is ticked", async () => {
+    state.images = [
+      img({ id: "dead" }),
+      img({ id: "unattributed", origin: null }),
+      // `in_use: null` means "we could not ask" and is excluded from
+      // BOTH sets, ticked or not.
+      img({ id: "held", in_use: null }),
+    ];
+    render(<DockerPage />);
+    fireEvent.click(screen.getByRole("button", { name: /remove 1 stale image/i }));
+    const dialog = screen.getByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("checkbox"));
     fireEvent.click(within(dialog).getByRole("button", { name: /remove 2 images/i }));
     await waitFor(() => expect(removeImagesFn).toHaveBeenCalled());
-    // `in_use: null` means "we could not ask" and must be excluded.
     expect(removeImagesFn.mock.calls[0][0]).toEqual(["dead", "unattributed"]);
+  });
+
+  /// Silence when the wide set adds nothing -- an opt-in that widens by
+  /// zero is a checkbox that does nothing.
+  it("hides the opt-in when it would cover no more", () => {
+    state.images = [img({ id: "dead1" }), img({ id: "dead2" })];
+    render(<DockerPage />);
+    fireEvent.click(screen.getByRole("button", { name: /remove 2 stale images/i }));
+    expect(within(screen.getByRole("dialog")).queryByRole("checkbox")).toBeNull();
   });
 
   it("lists every image in the bulk confirmation, not just a count", () => {

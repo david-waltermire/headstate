@@ -1846,6 +1846,143 @@ mod live {
             );
         }
     }
+
+    /// `pull_checkout` writes to a local checkout, so its refusals are
+    /// the interesting part. Exercised against REAL git repositories --
+    /// a mocked git would test the mock's idea of `--ff-only`, and the
+    /// whole risk here is what git actually does.
+    mod pull {
+        use super::*;
+        use std::process::Command;
+
+        const IDENT: [(&str, &str); 4] = [
+            ("GIT_AUTHOR_NAME", "octocat"),
+            ("GIT_COMMITTER_NAME", "octocat"),
+            ("GIT_AUTHOR_EMAIL", "octocat@invalid"),
+            ("GIT_COMMITTER_EMAIL", "octocat@invalid"),
+        ];
+
+        fn run(dir: &Path, args: &[&str]) -> bool {
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .envs(IDENT)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+
+        /// An origin with one commit, and a clone tracking it.
+        fn origin_and_clone(base: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+            let origin = base.join("origin");
+            std::fs::create_dir_all(&origin).unwrap();
+            assert!(run(&origin, &["init", "-q", "-b", "main"]));
+            assert!(run(
+                &origin,
+                &["commit", "-q", "--allow-empty", "-m", "one"]
+            ));
+
+            let clone = base.join("clone");
+            assert!(Command::new("git")
+                .args(["clone", "-q"])
+                .arg(&origin)
+                .arg(&clone)
+                .envs(IDENT)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false));
+            (origin, clone)
+        }
+
+        #[test]
+        fn fast_forwards_a_clean_checkout_that_is_behind() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let (origin, clone) = origin_and_clone(tmp.path());
+            // Move origin ahead so the clone has something to pull.
+            assert!(run(
+                &origin,
+                &["commit", "-q", "--allow-empty", "-m", "two"]
+            ));
+
+            pull_checkout(&clone.to_string_lossy()).expect("a clean fast-forward must succeed");
+
+            let log = git(&clone, &["log", "--oneline"]).unwrap();
+            assert!(
+                log.contains("two"),
+                "the new commit must have arrived: {log}"
+            );
+        }
+
+        /// The gate that matters most: a pull into uncommitted changes
+        /// can conflict or abort halfway, and recovering from that is
+        /// exactly what a GUI button should not create.
+        #[test]
+        fn refuses_a_dirty_checkout_and_says_how_dirty() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let (origin, clone) = origin_and_clone(tmp.path());
+            assert!(run(
+                &origin,
+                &["commit", "-q", "--allow-empty", "-m", "two"]
+            ));
+            std::fs::write(clone.join("scratch.txt"), "uncommitted").unwrap();
+
+            let err = pull_checkout(&clone.to_string_lossy())
+                .expect_err("a dirty checkout must be refused");
+            assert!(err.contains("1 uncommitted file"), "{err}");
+
+            // And nothing was pulled.
+            let log = git(&clone, &["log", "--oneline"]).unwrap();
+            assert!(!log.contains("two"), "the pull must not have run: {log}");
+        }
+
+        /// `--ff-only`: a merge commit created by a background click is
+        /// not something the user asked for.
+        #[test]
+        fn refuses_to_merge_a_diverged_branch() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let (origin, clone) = origin_and_clone(tmp.path());
+            // Both sides gain a commit, so the histories diverge.
+            assert!(run(
+                &origin,
+                &["commit", "-q", "--allow-empty", "-m", "theirs"]
+            ));
+            assert!(run(
+                &clone,
+                &["commit", "-q", "--allow-empty", "-m", "mine"]
+            ));
+
+            // Configure the clone to MERGE on pull, which is what makes
+            // `--ff-only` load-bearing. Modern git refuses a divergent
+            // pull by default, so without this the flag looks redundant
+            // -- and an earlier version of this test passed with it
+            // removed. The user's own git config decides the default,
+            // and the app must not depend on theirs.
+            assert!(run(&clone, &["config", "pull.rebase", "false"]));
+
+            let before = git(&clone, &["rev-parse", "HEAD"]).unwrap();
+
+            let err = pull_checkout(&clone.to_string_lossy())
+                .expect_err("a diverged branch cannot fast-forward");
+            // Git's OWN words, not a generic message -- its refusal
+            // names the problem better than we would.
+            assert!(!err.is_empty());
+
+            // The DECISIVE assertion. Without `--ff-only` git creates a
+            // merge commit here and reports success, so checking the
+            // error alone tests nothing -- an earlier version of this
+            // test passed with the flag removed.
+            let after = git(&clone, &["rev-parse", "HEAD"]).unwrap();
+            assert_eq!(before, after, "HEAD must not move on a refused pull");
+        }
+
+        #[test]
+        fn a_missing_directory_is_a_message_not_a_panic() {
+            let err = pull_checkout("/nonexistent/path/for/a/test")
+                .expect_err("a missing directory must be refused");
+            assert!(err.contains("missing"), "{err}");
+        }
+    }
 }
 
 /// Remove a worktree, refusing anything not provably safe.
@@ -1892,6 +2029,48 @@ pub struct RemovalOutcome {
 /// A CALLBACK rather than emitting Tauri events here: this module is
 /// pure git plumbing and has no AppHandle, which is also what keeps it
 /// testable without a running app.
+/// Fast-forward a checkout to its upstream.
+///
+/// The main checkout's row reports how far behind it is and, until now,
+/// offered no way to act on it -- so fixing it meant leaving the app for
+/// a terminal, which is the thing this view exists to avoid.
+///
+/// Three deliberate constraints:
+///
+/// - **Refuses on a dirty checkout.** A pull into uncommitted changes
+///   can conflict or abort halfway, and recovering from that is exactly
+///   the situation a GUI button should not create. Checked HERE rather
+///   than trusted from the scan, for the same reason `remove_inner`
+///   re-checks: the scan is a snapshot the world may have moved past.
+///
+/// - **`--ff-only`.** A merge commit created by a background click is
+///   not something the user asked for. A branch that cannot fast-forward
+///   is a real situation to report, not to resolve silently.
+///
+/// - **Returns git's own message.** "Could not update" says nothing;
+///   git's refusal usually names the problem exactly.
+pub fn pull_checkout(path: &str) -> Result<String, String> {
+    let dir = Path::new(path);
+    if !dir.is_dir() {
+        return Err("that directory is missing".into());
+    }
+
+    // Fresh, not from the scan.
+    let status = git(dir, &["status", "--porcelain"])
+        .map_err(|e| format!("could not read the checkout's state: {e}"))?;
+    let dirty = status.lines().filter(|l| !l.trim().is_empty()).count();
+    if dirty > 0 {
+        return Err(format!(
+            "{dirty} uncommitted file{} -- commit or stash first",
+            if dirty == 1 { "" } else { "s" }
+        ));
+    }
+
+    // `--ff-only` on the pull itself, so a diverged branch fails here
+    // rather than producing a merge nobody asked for.
+    git(dir, &["pull", "--ff-only"])
+}
+
 pub fn remove_worktrees_with_progress(
     repo_path: &str,
     worktree_paths: &[String],
