@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PR_FIXTURES, prWithState } from "../fixtures/prs";
 import {
   applyFilters, awaitingReview, changesRequested, deriveStats,
-  isStale, needsAttention, readyToQueue, sortPrs, STALE_DAYS,
+  isStale, needsAttention, pendingReviewers, readyToQueue, sortPrs, STALE_DAYS,
 } from "./derive";
 
 const [approved, broken, checking] = PR_FIXTURES;
@@ -267,5 +267,65 @@ describe("the triage chips reconcile with the repo count", () => {
   /// request about to need the author instead.
   it("does not count a pull request whose CI is still running", () => {
     expect(awaitingReview(prWithState("pending", "mergeable", "none"))).toBe(false);
+  });
+});
+
+/// "Waiting on a review" is a state; "waiting on octocat" is something
+/// you can act on. `reviewDecision` cannot say the second -- it
+/// collapses every reviewer into one verdict and names nobody.
+describe("pendingReviewers", () => {
+  const withReviewers = (
+    requested: string[],
+    reviews: { author: string; state: string }[] = [],
+  ) => ({ ...PR_FIXTURES[0], requested_reviewers: requested, latest_reviews: reviews });
+
+  it("names everyone still asked and not yet answered", () => {
+    expect(pendingReviewers(withReviewers(["octocat", "hubot"]))).toEqual([
+      "octocat",
+      "hubot",
+    ]);
+  });
+
+  /// The reason this is not just `requested_reviewers`: GitHub keeps a
+  /// reviewer in that list after they respond in some workflows, and a
+  /// re-request after a change puts an already-approved reviewer back
+  /// into it. Showing them would tell the user to chase someone who
+  /// already answered.
+  it("drops a reviewer who has already given a verdict", () => {
+    const pr = withReviewers(
+      ["octocat", "hubot"],
+      [{ author: "octocat", state: "APPROVED" }],
+    );
+    expect(pendingReviewers(pr)).toEqual(["hubot"]);
+  });
+
+  /// A COMMENTED review is an answer. They looked and said something
+  /// without blocking, so the row should not suggest chasing them.
+  it("treats a comment as an answer", () => {
+    const pr = withReviewers(["octocat"], [{ author: "octocat", state: "COMMENTED" }]);
+    expect(pendingReviewers(pr)).toEqual([]);
+  });
+
+  it("ignores reviews from people who were never requested", () => {
+    const pr = withReviewers(["octocat"], [{ author: "a-passerby", state: "APPROVED" }]);
+    expect(pendingReviewers(pr)).toEqual(["octocat"]);
+  });
+
+  /// Empty is ORDINARY, not missing data -- measured at 0 of 25 on
+  /// rust-lang/rust, which assigns reviewers through a bot. This must
+  /// not throw or invent anything.
+  it("returns nothing when no reviewer was requested", () => {
+    expect(pendingReviewers(withReviewers([]))).toEqual([]);
+  });
+
+  /// A snapshot written before these fields existed deserialises
+  /// without them, so the optional chaining is load-bearing rather than
+  /// defensive padding.
+  it("survives a pull request cached before these fields existed", () => {
+    const old = { ...PR_FIXTURES[0] } as Record<string, unknown>;
+    delete old.requested_reviewers;
+    delete old.latest_reviews;
+    expect(() => pendingReviewers(old as never)).not.toThrow();
+    expect(pendingReviewers(old as never)).toEqual([]);
   });
 });

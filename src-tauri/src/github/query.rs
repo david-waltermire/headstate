@@ -49,6 +49,26 @@ query($q: String!, $first: Int!) {
         # that is actually stuck. The entry's own state is what
         # distinguishes them.
         mergeQueueEntry { state }
+        # WHO is blocking this pull request, not just that something is.
+        #
+        # MEASURED against live repos: costs no extra rate-limit point,
+        # and requested reviewers run median 2, max 4 across 30
+        # kubernetes/kubernetes pull requests -- so 5 is ample.
+        #
+        # `requestedReviewer` is a UNION: User, Team and Mannequin all
+        # satisfy it. Only User is selected here; the mapper drops the
+        # rest rather than inventing a name for them.
+        #
+        # Empty is an ordinary state, not an error: repositories that
+        # assign reviewers through a bot (rust-lang/rust, for one)
+        # return nothing here at all.
+        reviewRequests(first: 5) {
+          nodes { requestedReviewer { ... on User { login } } }
+        }
+        # Who has already reviewed, and what they said. A different
+        # question from `reviewDecision`, which collapses everyone into
+        # one verdict and names nobody.
+        latestReviews(first: 5) { nodes { state author { login } } }
         labels(first: 20) { nodes { name color } }
         reviewThreads(first: 20) { nodes { isResolved isOutdated } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }

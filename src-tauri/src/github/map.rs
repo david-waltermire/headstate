@@ -137,6 +137,42 @@ pub fn map_detail(v: &Value, repo: &str) -> PrDetail {
     }
 }
 
+/// Reviewers whose verdict is still outstanding.
+///
+/// Users only: `requestedReviewer` is a union that also admits Team and
+/// Mannequin, and a reviewer with no login is dropped rather than given
+/// an invented name.
+fn requested_reviewers(node: &Value) -> Vec<String> {
+    node["reviewRequests"]["nodes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| Some(r["requestedReviewer"]["login"].as_str()?.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every reviewer's latest verdict.
+///
+/// Shared by the list and detail mappers so the row and the view it
+/// opens cannot disagree about who reviewed.
+fn latest_reviews(node: &Value) -> Vec<ReviewerVerdict> {
+    node["latestReviews"]["nodes"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|r| {
+                    Some(ReviewerVerdict {
+                        author: r["author"]["login"].as_str()?.to_string(),
+                        state: r["state"].as_str()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Is this pull request genuinely sitting in the merge queue?
 ///
 /// `isInMergeQueue` stays TRUE for an entry the queue has REJECTED, so
@@ -259,6 +295,8 @@ fn map_node(node: &Value) -> Option<PullRequest> {
         // null on repositories without a merge queue, where
         // `isInMergeQueue` is false anyway.
         in_merge_queue: in_merge_queue(node),
+        requested_reviewers: requested_reviewers(node),
+        latest_reviews: latest_reviews(node),
         labels: labels(node),
         comment_count: node["totalCommentsCount"].as_u64().unwrap_or(0),
         unresolved_threads: unresolved_threads(node),
@@ -750,6 +788,51 @@ mod tests {
         assert_eq!(d.checks[1].name, "legacy", "StatusContext uses `context`");
         assert_eq!(d.checks[1].state, "failure");
         assert_eq!(d.comments[0].author, "octocat");
+    }
+
+    /// Who is blocking a pull request -- the question `reviewDecision`
+    /// cannot answer, since it collapses everyone into one verdict and
+    /// names nobody.
+    #[test]
+    fn maps_requested_reviewers_and_skips_non_users() {
+        let v = json!({"search": {"nodes": [{
+            "number": 1, "title": "t", "url": "u",
+            "createdAt": "2026-08-20T10:00:00Z", "updatedAt": "2026-08-20T10:00:00Z",
+            "repository": {"nameWithOwner": "o/r"},
+            "reviewRequests": {"nodes": [
+                {"requestedReviewer": {"login": "octocat"}},
+                {"requestedReviewer": {"login": "hubot"}},
+                // A Team or Mannequin selects no `login`, so it arrives
+                // as an empty object. Dropped rather than named.
+                {"requestedReviewer": {}}
+            ]},
+            "latestReviews": {"nodes": [
+                {"state": "APPROVED", "author": {"login": "ghost-reviewer"}},
+                // No author: nothing to attribute it to.
+                {"state": "COMMENTED", "author": null}
+            ]}
+        }]}});
+        let prs = map_list(&v, "search");
+        assert_eq!(prs[0].requested_reviewers, vec!["octocat", "hubot"]);
+        assert_eq!(prs[0].latest_reviews.len(), 1);
+        assert_eq!(prs[0].latest_reviews[0].author, "ghost-reviewer");
+    }
+
+    /// Empty is ORDINARY. Repositories that assign reviewers through a
+    /// bot return nothing here -- measured: 0 of 25 on rust-lang/rust,
+    /// against 24 of 25 on kubernetes/kubernetes. Treating absence as
+    /// malformed would break the app on every such repo.
+    #[test]
+    fn absent_reviewer_fields_are_not_an_error() {
+        let v = json!({"search": {"nodes": [{
+            "number": 1, "title": "t", "url": "u",
+            "createdAt": "2026-08-20T10:00:00Z", "updatedAt": "2026-08-20T10:00:00Z",
+            "repository": {"nameWithOwner": "o/r"}
+        }]}});
+        let prs = map_list(&v, "search");
+        assert_eq!(prs.len(), 1, "the pull request must still map");
+        assert!(prs[0].requested_reviewers.is_empty());
+        assert!(prs[0].latest_reviews.is_empty());
     }
 
     /// The viewer's OWN verdict, which `reviewDecision` cannot answer.

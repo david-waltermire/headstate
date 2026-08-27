@@ -33,6 +33,23 @@ export function needsAttention(pr: PullRequest): boolean {
   return pr.merge === "conflicted" || pr.ci === "failure";
 }
 
+/// Reviewers who have been asked and have not yet answered.
+///
+/// `requested_reviewers` alone is not the answer: GitHub keeps a
+/// reviewer in that list after they respond in some workflows, and a
+/// re-request after a change puts an already-approved reviewer back
+/// into it. Subtracting anyone with a recorded verdict is what turns
+/// "who was asked" into "who you are actually waiting on" -- the only
+/// version worth putting on a row.
+///
+/// A COMMENTED review counts as answered. They looked and said
+/// something without blocking; chasing them is not what the row should
+/// suggest.
+export function pendingReviewers(pr: PullRequest): string[] {
+  const answered = new Set(pr.latest_reviews?.map((r) => r.author) ?? []);
+  return (pr.requested_reviewers ?? []).filter((login) => !answered.has(login));
+}
+
 /// Waiting on a reviewer and nobody else.
 ///
 /// `ci === "none"` counts, for the same reason `readyForReview` accepts

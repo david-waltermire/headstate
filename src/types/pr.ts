@@ -58,6 +58,13 @@ export interface PullRequest {
   /// Review conversations still open on the current code. Resolved and
   /// outdated threads are excluded.
   unresolved_threads: number;
+  /// Logins whose review is still outstanding.
+  ///
+  /// Empty is ORDINARY: repositories that assign reviewers through a
+  /// bot return nothing here, and so does a solo account.
+  requested_reviewers: string[];
+  /// Who has already reviewed, and what they said.
+  latest_reviews: { author: string; state: string }[];
 }
 
 /// `merged_week`/`merged_month` are real. The other five derived fields

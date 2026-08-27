@@ -944,6 +944,8 @@ mod tests {
             labels: Vec::<Label>::new(),
             comment_count: 0,
             unresolved_threads: 0,
+            requested_reviewers: Vec::new(),
+            latest_reviews: Vec::new(),
         }
     }
 
@@ -1075,11 +1077,23 @@ mod tests {
             .iter()
             .map(|c| q.matches(c).count() as u64)
             .sum::<u64>();
+        // This number counts CONNECTION APPEARANCES, which is a proxy
+        // for the live cost and not the cost itself. The two moved apart
+        // here: `reviewRequests` and `latestReviews` took this count
+        // from 3 to 5 while the MEASURED cost stayed at 3 points
+        // (re-measured against the live API on 2026-08-26 by extracting
+        // the query and running it with `rateLimit { cost }`).
+        //
+        // The guard still earns its place -- it caught this change and
+        // forced the measurement, which is exactly its job. What it must
+        // not do is silently drift, so the two numbers are recorded
+        // separately below.
         assert_eq!(
-            cost, 3,
-            "PRS_QUERY cost changed; re-measure against the live API \
-             (it was 3 points on 2026-08-25, for ONE search -- the query \
-              carried two aliases and cost 6 until they were split)"
+            cost, 5,
+            "PRS_QUERY connection count changed; re-measure the LIVE cost \
+             (5 connections = 3 points on 2026-08-26, for ONE search -- \
+              the query carried two aliases and cost 6 until they were \
+              split)"
         );
 
         // The FLOOR, not the default: a user picking the fastest allowed
@@ -1157,6 +1171,8 @@ mod tests {
             labels: vec![],
             comment_count: 0,
             unresolved_threads: 0,
+            requested_reviewers: Vec::new(),
+            latest_reviews: Vec::new(),
         }
     }
 

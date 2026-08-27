@@ -21,11 +21,25 @@ vi.mock("sonner", () => ({
   toast: { success: toastSuccess, error: toastError },
 }));
 
+const dockerImages = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+// Typed so the call arguments can be asserted on: the untyped form
+// infers an empty tuple, and indexing it is a compile error.
+const removeImagesFn = vi.hoisted(() =>
+  vi.fn<(ids: string[]) => Promise<{ id: string; error: string | null }[]>>(() =>
+    Promise.resolve([]),
+  ),
+);
+
 vi.mock("../api/hooks", () => ({
   // Idle: the progress line only appears mid-removal.
   useRemovalProgress: () => null,
   // Not opened in these tests: the disclosure is closed by default.
   useAssessment: () => ({ data: undefined, isLoading: false }),
+  // The cleanup manifest joins worktrees to the images they own, so the
+  // page now reads Docker state -- but only while the confirmation is
+  // open, which is why the default here is an empty list.
+  useDockerImages: () => ({ data: dockerImages() }),
+  useRemoveImages: () => removeImagesFn,
   useWorktrees: () => ({
     data: state.repos,
     isLoading: state.isLoading,
@@ -77,6 +91,14 @@ const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } as co
 
 describe("WorktreesPage", () => {
   beforeEach(() => {
+    // Reset between tests: a leaked image list makes a later assertion
+    // about paths fail on a Docker line it never set up.
+    dockerImages.mockReturnValue([]);
+    removeImagesFn.mockClear();
+    // `removeManyFn` is asserted as "not called" by a later test, and a
+    // confirm click in an earlier one leaks into it. Cleared here rather
+    // than in that test, so every test starts from the same state.
+    removeManyFn.mockClear();
     Object.assign(state, {
       repos: [{ identity: null, name: "proj", path: "/code/proj", worktrees: [wt({})] }],
       isLoading: false,
@@ -571,6 +593,81 @@ describe("WorktreesPage", () => {
       wt({ path: "/code/b", safety: { kind: "safe" }, size_bytes: 2048 }),
       wt({ path: "/code/c", safety: { kind: "never_pushed" } }),
     ];
+
+    /// #268: the cleanup that spans three systems. A merged branch
+    /// leaves a worktree on disk AND a Docker image built from it, and
+    /// removing the second used to mean going to another view and
+    /// working out by hand which images belonged to what.
+    describe("the Docker images those worktrees own", () => {
+      const image = (over: Record<string, unknown> = {}) => ({
+        id: "img-a",
+        repository: "registry/app",
+        tags: ["abc1234"],
+        created: "2026-08-01T00:00:00Z",
+        size_bytes: 4096,
+        origin: {
+          repo_path: "/code/a",
+          context: "/code/a",
+          commit: "abc123",
+          subject: "s",
+          merged: true,
+          source: "tag_resolution",
+        },
+        in_use: false,
+        superseded: true,
+        ...over,
+      });
+
+      it("names them in the confirmation, separately from the paths", () => {
+        state.classified = threeSafe();
+        dockerImages.mockReturnValue([image()]);
+        render(<WorktreesPage />);
+        fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+        const dialog = screen.getByRole("dialog");
+        expect(within(dialog).getByText(/registry\/app:abc1234/)).toBeTruthy();
+        expect(within(dialog).getByText(/Also removes 1 Docker image/)).toBeTruthy();
+      });
+
+      it("removes them alongside the worktrees", async () => {
+        state.classified = threeSafe();
+        dockerImages.mockReturnValue([image()]);
+        render(<WorktreesPage />);
+        fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+        fireEvent.click(
+          within(screen.getByRole("dialog")).getByRole("button", {
+            name: /remove 2 worktrees/i,
+          }),
+        );
+        await waitFor(() => expect(removeImagesFn).toHaveBeenCalled());
+        expect(removeImagesFn.mock.calls[0][0]).toEqual(["img-a"]);
+      });
+
+      /// An image built somewhere else is not this worktree's to
+      /// delete, and guessing would take out somebody else's build.
+      it("does not claim an image built from another path", () => {
+        state.classified = threeSafe();
+        dockerImages.mockReturnValue([
+          image({ origin: { ...image().origin, context: "/code/elsewhere", repo_path: "/code/elsewhere" } }),
+        ]);
+        render(<WorktreesPage />);
+        fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+        const dialog = screen.getByRole("dialog");
+        expect(within(dialog).queryByText(/Also removes/)).toBeNull();
+      });
+
+      /// Silence when there is nothing to add. A dialog that always
+      /// mentions Docker would train the user to skip the line that
+      /// matters.
+      it("says nothing about Docker when no image is owned", () => {
+        state.classified = threeSafe();
+        dockerImages.mockReturnValue([]);
+        render(<WorktreesPage />);
+        fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+        expect(
+          within(screen.getByRole("dialog")).queryByText(/Also removes/),
+        ).toBeNull();
+      });
+    });
 
     it("counts only the safe rows, in the label", () => {
       state.classified = threeSafe();

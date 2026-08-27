@@ -13,7 +13,7 @@ import { labelForeground } from "@/lib/labels";
 import { PrKebab } from "@/components/PrKebab";
 import { prKey } from "@/components/BulkBar";
 import { useFilters } from "@/store/filters";
-import { needsAttention } from "@/lib/derive";
+import { needsAttention, pendingReviewers } from "@/lib/derive";
 import { relativeTime } from "@/lib/time";
 
 /// A check for green, an X for red, and an amber dot while CI is running.
@@ -172,6 +172,7 @@ export function PrRow({
   selectable?: boolean;
 }) {
   const state = prState(pr);
+  const pending = pendingReviewers(pr);
   const { checked, toggleChecked, anchor, setAnchor, density } = useFilters();
   const dense = density === "dense";
   const key = prKey(pr);
@@ -328,6 +329,25 @@ export function PrRow({
           )}
           {pr.merge === "checking" && <span className="ml-2">• Checking mergeability</span>}
           <BranchPair pr={pr} />
+          {/* WHO is blocking this, which `review` cannot say -- it
+              collapses every reviewer into one verdict and names
+              nobody. This is the difference between "waiting on a
+              review" and "waiting on octocat", which is the difference
+              between knowing and being able to act.
+
+              Only the still-outstanding reviewers. Someone who has
+              already approved is not who you chase, and listing them
+              here would make the row longer while making it less
+              useful. */}
+          {pending.length > 0 ? (
+            <span
+              className="ml-2 text-[#8b949e]"
+              title={`Waiting on ${pending.join(", ")}`}
+            >
+              • waiting on {pending.slice(0, 2).join(", ")}
+              {pending.length > 2 ? ` +${pending.length - 2}` : ""}
+            </span>
+          ) : null}
           {/* Open review conversations on the current code. Deliberately
               worded as a count, not "blocked": whether a repo requires
               resolution before merging needs admin access on that repo,

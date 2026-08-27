@@ -28,6 +28,8 @@ export const PR_FIXTURES: PullRequest[] = [
     labels: [{ name: "enhancement", color: "a2eeef" }],
     comment_count: 2,
     unresolved_threads: 0,
+    requested_reviewers: [],
+    latest_reviews: [],
   },
   {
     id: "PR_fixture1",
@@ -51,6 +53,8 @@ export const PR_FIXTURES: PullRequest[] = [
     labels: [{ name: "bug", color: "d73a4a" }],
     comment_count: 5,
     unresolved_threads: 2,
+    requested_reviewers: [],
+    latest_reviews: [],
   },
   {
     id: "PR_fixture2",
@@ -74,6 +78,8 @@ export const PR_FIXTURES: PullRequest[] = [
     labels: [{ name: "dependencies", color: "0366d6" }],
     comment_count: 0,
     unresolved_threads: 0,
+    requested_reviewers: [],
+    latest_reviews: [],
   },
 ];
 

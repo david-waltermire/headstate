@@ -133,6 +133,23 @@ pub struct PullRequest {
     /// that repository and is unreadable for most of them.
     #[serde(default)]
     pub unresolved_threads: u64,
+    /// Logins whose review is still outstanding.
+    ///
+    /// Empty is ORDINARY, not missing data: repositories that assign
+    /// reviewers through a bot return nothing here, and so does a solo
+    /// account. Anything the UI shows must read sensibly when empty.
+    ///
+    /// Users only. `requestedReviewer` is a union that also admits
+    /// Team and Mannequin; those are dropped rather than given an
+    /// invented name.
+    #[serde(default)]
+    pub requested_reviewers: Vec<String>,
+    /// Who has already reviewed, and what they said.
+    ///
+    /// A different question from `review`, which collapses every
+    /// reviewer into one verdict and names nobody.
+    #[serde(default)]
+    pub latest_reviews: Vec<ReviewerVerdict>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,7 +276,7 @@ pub struct PrComment {
 }
 
 /// One reviewer's latest review on a pull request.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewerVerdict {
     pub author: String,
     /// GitHub's raw review state: APPROVED, CHANGES_REQUESTED,
@@ -369,6 +386,8 @@ mod attention_tests {
             labels: vec![],
             comment_count: 0,
             unresolved_threads: 0,
+            requested_reviewers: Vec::new(),
+            latest_reviews: Vec::new(),
         }
     }
 
