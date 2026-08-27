@@ -58,7 +58,7 @@ export function CourtStrip({
   }
 
   return (
-    <section className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-[#f85149]/40 bg-[#f85149]/5 px-4 py-3">
+    <section className="mb-4 flex flex-wrap items-baseline gap-3 rounded-md border border-[#f85149]/40 bg-[#f85149]/5 px-4 py-3">
       <button
         type="button"
         onClick={() => onSelect("mine")}
@@ -81,7 +81,12 @@ export function CourtStrip({
           reading 12 looks like an arithmetic bug rather than a
           deliberate exclusion. Naming the total makes the gap legible
           instead of suspicious. */}
-      <span className="text-xs text-[#8b949e]">of {total} open</span>
+      {/* Same SIZE as the counts beside it, with colour carrying the
+          hierarchy instead. At `text-xs` against their `text-sm` the
+          three parts sat on different baselines and read as a
+          rendering bug rather than as context -- and they are one
+          sentence. */}
+      <span className="text-sm text-[#8b949e]">of {total} open</span>
     </section>
   );
 }

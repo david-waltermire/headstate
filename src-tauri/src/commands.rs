@@ -688,7 +688,22 @@ pub fn docker_state() -> crate::docker::DockerState {
 /// machine configured once works for both.
 pub fn docker_images(app: AppHandle) -> Result<Vec<crate::docker::Image>, String> {
     let dirs = get_worktree_dirs(app);
-    let repos: Vec<std::path::PathBuf> = dirs.iter().map(std::path::PathBuf::from).collect();
+    // EXPANDED into repositories, not passed as scan roots.
+    //
+    // `classify` resolves a SHA-shaped image tag by running git in each
+    // path it is given, so handing it `~/code` asked git about a
+    // directory that is not a repository -- every lookup failed, no
+    // image resolved an origin, and the whole Docker page's provenance
+    // was silently empty. MEASURED on a real machine: 0 of 24 images
+    // resolved an origin with the roots, against 20 of 26 with the
+    // repositories.
+    //
+    // `scan_dirs_fast` is the same expansion the Worktrees view uses,
+    // which is why that view worked and this one did not.
+    let repos: Vec<std::path::PathBuf> = crate::worktrees::scan_dirs_fast(&dirs)
+        .into_iter()
+        .map(|r| std::path::PathBuf::from(r.path))
+        .collect();
     crate::docker::classify(&repos)
 }
 

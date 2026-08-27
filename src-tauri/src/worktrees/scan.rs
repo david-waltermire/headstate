@@ -309,7 +309,16 @@ fn squash_merged(dir: &Path, default_branch: &str) -> Safety {
                 }
                 saw_commit = true;
                 if line.starts_with('+') {
-                    return Safety::Unmerged;
+                    // NOT Unmerged yet. `git cherry` compares
+                    // PER-COMMIT patch-ids, so a squash that collapses
+                    // three commits into one matches none of them and
+                    // every commit comes back `+`.
+                    //
+                    // Verified on a real worktree: a branch merged as
+                    // PR #164 failed both ancestry and cherry, while
+                    // its AGGREGATE diff matched the squash commit
+                    // exactly. That is the case this falls through to.
+                    return aggregate_patch_merged(dir, default_branch);
                 }
             }
             // No output means no commits relative to the default branch.
@@ -325,6 +334,105 @@ fn squash_merged(dir: &Path, default_branch: &str) -> Safety {
         // Any git failure yields Unknown, never Safe.
         Err(e) => Safety::Unknown(e),
     }
+}
+
+/// Whether the branch's WHOLE diff already landed as one commit.
+///
+/// The signal `git cherry` structurally cannot see. A squash-merge
+/// replays the branch as a single new commit whose parent is the
+/// branch's BASE, not its tip -- so the original commits are not
+/// ancestors of the default branch and their individual patch-ids match
+/// nothing. Comparing the aggregate `merge-base..HEAD` diff against each
+/// recent commit on the default branch finds it.
+///
+/// `--stable` matters: the unstable form hashes differently across git
+/// versions and would silently stop matching.
+///
+/// This LOOSENS a gate that guards deletion, so it is deliberately
+/// strict: an exact patch-id match, or Unmerged. A false positive here
+/// deletes unmerged work, which is a worse failure than the one it
+/// fixes.
+///
+/// Bounded at 300 commits. A branch whose equivalent landed further back
+/// than that is old enough that the extra git calls cost more than the
+/// answer is worth, and the fallback is the safe direction.
+fn aggregate_patch_merged(dir: &Path, default_branch: &str) -> Safety {
+    const SCAN_DEPTH: &str = "300";
+
+    let Ok(base) = git(dir, &["merge-base", "HEAD", default_branch]) else {
+        return Safety::Unmerged;
+    };
+    let base = base.trim();
+    if base.is_empty() {
+        return Safety::Unmerged;
+    }
+
+    let Some(branch_pid) = patch_id(dir, base, "HEAD") else {
+        // No diff at all against the base means nothing to compare, and
+        // claiming merged on an empty comparison would greenlight a
+        // deletion we never established.
+        return Safety::Unmerged;
+    };
+
+    let Ok(candidates) = git(dir, &["rev-list", default_branch, "-n", SCAN_DEPTH]) else {
+        return Safety::Unmerged;
+    };
+
+    for sha in candidates.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        // `sha^` is the commit's parent, so this is that commit's own
+        // diff -- the squash commit's contents.
+        if patch_id(dir, &format!("{sha}^"), sha).as_deref() == Some(branch_pid.as_str()) {
+            return Safety::Safe;
+        }
+    }
+    Safety::Unmerged
+}
+
+/// The stable patch-id of `from..to`, or None when git could not answer.
+///
+/// `git patch-id` reads a diff on stdin, so this is the one place that
+/// pipes rather than using `git()`. Written with two processes and an
+/// explicit pipe rather than a shell string: the arguments are commit
+/// SHAs resolved by git itself, but running them through a shell would
+/// make that a property of where they came from rather than of this
+/// code.
+fn patch_id(dir: &Path, from: &str, to: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let diff = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["diff", from, to])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !diff.status.success() || diff.stdout.is_empty() {
+        return None;
+    }
+
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["patch-id", "--stable"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    child.stdin.take()?.write_all(&diff.stdout).ok()?;
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+
+    // `git patch-id` prints "<patch-id> <commit-id>"; only the first
+    // field identifies the change.
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
 }
 
 /// The repository's default branch, falling back to `main`.
@@ -1982,6 +2090,134 @@ mod live {
                 .expect_err("a missing directory must be refused");
             assert!(err.contains("missing"), "{err}");
         }
+    }
+
+    /// #343: a squash-merge is invisible to BOTH existing signals.
+    ///
+    /// Built with real git rather than mocked -- the whole defect is a
+    /// property of what git actually reports for a squash, and a mock
+    /// would encode my belief about that instead of testing it.
+    mod squash {
+        use super::*;
+        use std::process::Command;
+
+        const IDENT: [(&str, &str); 4] = [
+            ("GIT_AUTHOR_NAME", "octocat"),
+            ("GIT_COMMITTER_NAME", "octocat"),
+            ("GIT_AUTHOR_EMAIL", "octocat@invalid"),
+            ("GIT_COMMITTER_EMAIL", "octocat@invalid"),
+        ];
+
+        fn run(dir: &Path, args: &[&str]) -> bool {
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .envs(IDENT)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+
+        /// A repo whose `feature` branch was SQUASH-merged into main:
+        /// main gains one new commit carrying the whole change, and the
+        /// branch's own commits are never ancestors of it.
+        fn repo_with_squash_merge(base: &Path) -> std::path::PathBuf {
+            let repo = base.join("repo");
+            std::fs::create_dir_all(&repo).unwrap();
+            assert!(run(&repo, &["init", "-q", "-b", "main"]));
+            std::fs::write(repo.join("base.txt"), "base\n").unwrap();
+            assert!(run(&repo, &["add", "-A"]));
+            assert!(run(&repo, &["commit", "-q", "-m", "base"]));
+
+            // Three commits on a branch, the shape `git cherry` cannot
+            // match once they are collapsed into one.
+            assert!(run(&repo, &["checkout", "-q", "-b", "feature"]));
+            for (i, line) in ["one", "two", "three"].iter().enumerate() {
+                std::fs::write(
+                    repo.join("work.txt"),
+                    format!("{}\n", ["one", "one\ntwo", "one\ntwo\nthree"][i]),
+                )
+                .unwrap();
+                assert!(run(&repo, &["add", "-A"]));
+                assert!(run(&repo, &["commit", "-q", "-m", line]));
+            }
+
+            // The squash: main takes the whole diff as ONE new commit.
+            assert!(run(&repo, &["checkout", "-q", "main"]));
+            assert!(run(&repo, &["merge", "--squash", "feature"]));
+            assert!(run(&repo, &["commit", "-q", "-m", "feature (#164)"]));
+            assert!(run(&repo, &["checkout", "-q", "feature"]));
+            repo
+        }
+
+        #[test]
+        fn a_squash_merged_branch_is_recognised_as_merged() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let repo = repo_with_squash_merge(tmp.path());
+
+            // Both existing signals fail, which is the whole point.
+            assert!(
+                git(&repo, &["merge-base", "--is-ancestor", "HEAD", "main"]).is_err(),
+                "ancestry must NOT see a squash -- if it does, this test proves nothing"
+            );
+            let cherry = git(&repo, &["cherry", "main", "HEAD"]).unwrap();
+            assert!(
+                cherry.lines().any(|l| l.trim_start().starts_with('+')),
+                "git cherry must NOT see a squash: {cherry}"
+            );
+
+            // Through `squash_merged`, the REAL call site. Calling
+            // `aggregate_patch_merged` directly left the wiring
+            // untested: deleting the call entirely still passed.
+            assert_eq!(squash_merged(&repo, "main"), Safety::Safe);
+        }
+
+        /// The direction that matters for safety: this LOOSENS a gate
+        /// that guards deletion, so a branch that genuinely has not
+        /// landed must never come back Safe.
+        #[test]
+        fn genuinely_unmerged_work_stays_unmerged() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let repo = repo_with_squash_merge(tmp.path());
+            // A fourth commit that never reached main.
+            std::fs::write(repo.join("work.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+            assert!(run(&repo, &["add", "-A"]));
+            assert!(run(&repo, &["commit", "-q", "-m", "four"]));
+
+            assert_eq!(squash_merged(&repo, "main"), Safety::Unmerged);
+        }
+
+        /// A branch with no diff against its base has nothing to
+        /// compare, and claiming merged on an empty comparison would
+        /// greenlight deleting a worktree whose state was never
+        /// established.
+        #[test]
+        fn a_branch_with_no_changes_is_not_called_merged() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let repo = repo_with_squash_merge(tmp.path());
+            assert!(run(&repo, &["checkout", "-q", "-b", "empty", "main"]));
+            assert_eq!(squash_merged(&repo, "main"), Safety::Unmerged);
+        }
+    }
+
+    /// #343, against the REAL worktree that produced the report: a
+    /// branch merged as PR #164 through a squash-merge queue, which
+    /// both ancestry and `git cherry` call unmerged.
+    #[test]
+    #[ignore]
+    fn live_squash_merged_worktree_is_detected() {
+        let wt = std::path::Path::new(&std::env::var("HOME").unwrap())
+            .join("code/enclave/stohic-admin/.claude/worktrees/stohic-mcp-pr2-transport");
+        if !wt.is_dir() {
+            println!("worktree absent; nothing to check");
+            return;
+        }
+        println!(
+            "ancestry says merged: {}",
+            git(&wt, &["merge-base", "--is-ancestor", "HEAD", "origin/main"]).is_ok()
+        );
+        println!("verdict: {:?}", aggregate_patch_merged(&wt, "origin/main"));
     }
 }
 

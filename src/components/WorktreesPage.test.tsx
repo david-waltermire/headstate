@@ -57,7 +57,14 @@ vi.mock("../api/hooks", () => ({
   useRemoveWorktreeForced: () => forceFn,
   useAssessed: () => ({ data: state.assessed }),
   usePullRequests: () => ({ data: state.prs }),
-  useWorktreeSizes: () => ({ data: state.sizes, isLoading: state.sizing }),
+  // Mirrors the real hook: a DISABLED query reports `isLoading: true`
+  // forever, so the page reads `isFetching` instead -- and a mock that
+  // only carried `isLoading` would hide exactly the bug that caused.
+  useWorktreeSizes: () => ({
+    data: state.sizes,
+    isLoading: state.sizing,
+    isFetching: state.sizing,
+  }),
 }));
 
 const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
@@ -310,6 +317,40 @@ describe("WorktreesPage", () => {
   });
 
   // The em dash read as "measured, and the answer is nothing".
+  /// #348: on "All repositories" the page read "at least 0 B" with
+  /// dashes in every row, indefinitely. Sizes are measured PER
+  /// REPOSITORY, so with none selected the query is disabled -- and a
+  /// disabled query reports `isLoading: true` forever, so the UI waited
+  /// on a request that was never made.
+  it("says sizes are per-repository rather than waiting forever", () => {
+    Object.assign(state, {
+      repos: [
+        // `size_bytes: null` is the real state: nothing measured,
+        // because the query never ran.
+        { identity: null, name: "a", path: "/code/a", worktrees: [wt({ size_bytes: null })] },
+        {
+          identity: null,
+          name: "b",
+          path: "/code/b",
+          worktrees: [wt({ path: "/code/b-f", size_bytes: null })],
+        },
+      ],
+      // What a DISABLED query reports: loading true, fetching false.
+      sizing: false,
+      sizes: undefined,
+    });
+    useFilters.setState({
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+      view: "worktrees",
+    } as never);
+    render(<WorktreesPage />);
+    // The total still reads "at least 0 B" -- correct, since nothing
+    // has been measured -- but it is no longer the ONLY thing on
+    // screen, which is what made it read as a stuck measurement rather
+    // than one that was never started.
+    expect(screen.getByText(/open a repository to measure sizes/i)).toBeTruthy();
+  });
+
   it("shows a skeleton rather than an em dash while a size is still coming", () => {
     Object.assign(state, {
       repos: [
@@ -447,6 +488,28 @@ describe("WorktreesPage", () => {
       expect(toastSuccess).toHaveBeenCalled();
       const [, opts] = toastSuccess.mock.calls[0] as [string, { description: string }];
       expect(opts.description).toMatch(/paste it in your terminal/i);
+    });
+
+    /// #347: reported as "no indication it copied anything". The
+    /// success toast is asserted above, so the visible gap is the
+    /// FAILURE path -- `navigator.clipboard` rejects when the document
+    /// is not focused, which is a real case in a desktop webview, and
+    /// nothing tested that the user hears about it.
+    it("says so when the clipboard refuses", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(() =>
+        Promise.reject(new Error("Document is not focused")),
+      );
+      Object.assign(navigator, { clipboard: { writeText } });
+      state.classified = [wt({ safety: { kind: "never_pushed" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /claudify/i }));
+      await waitFor(() => expect(toastError).toHaveBeenCalled());
+      expect(toastError.mock.calls[0][0]).toMatch(/could not copy/i);
+      // And the reason, which is the actionable part -- "could not
+      // copy" alone leaves the user with nothing to do.
+      const [, opts] = toastError.mock.calls[0] as [string, { description?: string }];
+      expect(opts?.description).toMatch(/not focused/i);
     });
 
     // Better to learn it here than as `command not found` after pasting.

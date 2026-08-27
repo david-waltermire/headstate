@@ -231,9 +231,12 @@ export default function App() {
                   : "Pull requests"}
           </h1>
           <div className="ml-auto">
-            {/* PR views only: composing a list of pull requests needing
-                review is meaningless on a page about local directories. */}
-            {view !== "worktrees" ? (
+            {/* My pull requests ONLY. The wizard composes a nudge for
+                pull requests YOU authored, so it means nothing on
+                Docker or Worktrees (local state) and nothing on To
+                review (other people's work). The previous condition
+                excluded only Worktrees, so it appeared on all three. */}
+            {view === "my-prs" ? (
               // scopedRepo skips the wizard's "which repositories?" step:
               // selecting a repo in the sidebar already answers it.
               <NudgeWizard prs={source} scopedRepo={filters.repo} />
