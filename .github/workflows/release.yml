@@ -236,13 +236,30 @@ jobs:
       # macOS ships the .app as a tarball alongside the dmg: the dmg is
       # for humans, the tarball is what an updater or a scripted install
       # can consume.
+      #
+      # RENAMED, not re-tarred. This step used to build its own tarball
+      # with `tar -czf`, which predates the updater and was fine when
+      # nothing else produced one. Now Tauri produces a SIGNED tarball,
+      # and re-tarring the .app created a second, unsigned archive with
+      # the versioned name -- so the signature belonged to a file the
+      # manifest never referenced, and v3.11.0's publish correctly
+      # refused to advertise an update it could not sign.
+      #
+      # The `.sig` is renamed alongside it: a signature is only meaningful
+      # next to the exact bytes it signs.
       - name: Package the macOS app bundle
         if: matrix.os == 'macos-latest'
         shell: bash
         run: |
           set -euo pipefail
           BUNDLE=src-tauri/target/universal-apple-darwin/release/bundle
-          tar -czf "Headstate-${GITHUB_REF_NAME}.app.tar.gz" -C "$BUNDLE/macos" Headstate.app
+          SRC="$BUNDLE/macos/Headstate.app.tar.gz"
+          if [ ! -f "$SRC" ]; then
+            echo "Tauri did not produce $SRC -- updates would be unsignable." >&2
+            exit 1
+          fi
+          cp "$SRC" "Headstate-${GITHUB_REF_NAME}.app.tar.gz"
+          cp "$SRC.sig" "Headstate-${GITHUB_REF_NAME}.app.tar.gz.sig"
 
       # Collected into one directory so the upload glob does not have to
       # know each platform's bundle layout.
@@ -261,10 +278,14 @@ jobs:
           # at and the plugin refuses every download -- so they are
           # collected here alongside the installers rather than being
           # left in the build tree.
+          # NOT '*.tar.gz' or '*.sig' from the bundle tree: that is where
+          # Tauri's unversioned `Headstate.app.tar.gz` lives, and copying
+          # it shipped two macOS archives whose names differed only by
+          # the version. The versioned pair is copied by the step above.
           find "$BASE/release/bundle" -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \
                -o -name '*.deb' -o -name '*.AppImage' \
-               -o -name '*.tar.gz' -o -name '*.sig' \) \
+               -o -name '*.exe.sig' -o -name '*.AppImage.sig' \) \
             -exec cp {} release-assets/ \;
           cp Headstate-*.app.tar.gz release-assets/ 2>/dev/null || true
           cp Headstate-*.app.tar.gz.sig release-assets/ 2>/dev/null || true
