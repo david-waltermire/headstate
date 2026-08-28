@@ -30,6 +30,11 @@ export function safetyReason(s: Safety): string {
       return "branch not merged";
     case "pending":
       return "checking…";
+    case "orphaned":
+      // Says what IS known rather than hedging: the parent repository
+      // is gone, so nothing about the contents can be established, and
+      // the user needs that before deciding.
+      return "its repository is gone — nothing here can be checked";
     default:
       return `could not determine: ${s.detail}`;
   }
@@ -183,6 +188,12 @@ export function safetyTone(s: Safety): string {
       return "text-[#f85149]";
     case "dirty":
     case "unpushed":
+      return "text-[#d29922]";
+    case "orphaned":
+      // Amber, not red: an orphan is not dangerous, it is
+      // UNVERIFIABLE. Red would put it beside "commits exist only
+      // here" and imply work is at risk; grey would let 2.5 GB of
+      // unreachable directories read as ordinary.
       return "text-[#d29922]";
     default:
       return "text-[#8b949e]";

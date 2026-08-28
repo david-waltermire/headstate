@@ -435,6 +435,24 @@ fn patch_id(dir: &Path, from: &str, to: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The dead `gitdir` a worktree points at, when its parent is gone.
+///
+/// A worktree's `.git` is a FILE containing `gitdir: <path>`. When the
+/// repository that owns it has been deleted, that path no longer
+/// exists -- and nothing else on the filesystem distinguishes an
+/// orphan from a healthy worktree.
+///
+/// Both checks are filesystem-only, so this adds nothing measurable to
+/// a scan that already runs git per repository.
+fn orphan_gitdir(dir: &Path) -> Option<String> {
+    let contents = std::fs::read_to_string(dir.join(".git")).ok()?;
+    let target = contents.strip_prefix("gitdir:")?.trim();
+    if target.is_empty() || Path::new(target).exists() {
+        return None;
+    }
+    Some(target.to_string())
+}
+
 /// The repository's default branch, falling back to `main`.
 pub(super) fn default_branch(repo: &Path) -> String {
     git(
@@ -657,7 +675,40 @@ fn collect_inner(dir: &Path, depth: usize, out: &mut Vec<Repo>, with_safety: boo
     // -- each returning the same 152 entries -- and take over ten minutes
     // instead of seconds. Measured on this machine.
     if dir.join(".git").is_file() {
-        return; // a worktree; its own repo will report it
+        // Normally its own repository reports it -- EXCEPT when that
+        // repository is gone. Then nothing reports it, and the
+        // directory is invisible to a view whose entire purpose is
+        // reclaiming exactly this. MEASURED on a real machine: 2.5 GB
+        // across three orphans whose parent repos were deleted weeks
+        // earlier.
+        if orphan_gitdir(dir).is_some() {
+            out.push(Repo {
+                name: dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                path: dir.to_string_lossy().into_owned(),
+                identity: None,
+                worktrees: vec![Worktree {
+                    path: dir.to_string_lossy().into_owned(),
+                    branch: String::new(),
+                    head: String::new(),
+                    size_bytes: None,
+                    // Orphaned, NOT safe. Every safety signal is
+                    // computed by running git in the checkout, and
+                    // without the parent repository there is no git to
+                    // run -- no status, no merge-base, no upstream. The
+                    // app cannot answer "is this merged" or "is this
+                    // dirty", so it must not claim to.
+                    safety: Safety::Orphaned,
+                    is_main: false,
+                    merged_at: None,
+                    upstream: None,
+                    last_commit: None,
+                }],
+            });
+        }
+        return;
     }
     if dir.join(".git").is_dir() {
         if let Ok(list) = git(dir, &["worktree", "list", "--porcelain"]) {
@@ -1892,6 +1943,7 @@ mod live {
                 Safety::NeverPushed => "never_pushed",
                 Safety::Unmerged => "unmerged",
                 Safety::Pending => "pending",
+                Safety::Orphaned => "orphaned",
                 Safety::Unknown(_) => "unknown",
             };
             *counts.entry(k).or_default() += 1;
@@ -2089,6 +2141,142 @@ mod live {
             let err = pull_checkout("/nonexistent/path/for/a/test")
                 .expect_err("a missing directory must be refused");
             assert!(err.contains("missing"), "{err}");
+        }
+    }
+
+    /// #356: a worktree whose parent repository was deleted is
+    /// invisible to the scan -- it is not a repository, so the walker
+    /// skips it, and its own repo can no longer report it.
+    ///
+    /// MEASURED on a real machine: 2.5 GB across three such
+    /// directories, entirely absent from a view whose purpose is
+    /// reclaiming exactly this.
+    mod orphans {
+        use super::*;
+        use std::process::Command;
+
+        const IDENT: [(&str, &str); 4] = [
+            ("GIT_AUTHOR_NAME", "octocat"),
+            ("GIT_COMMITTER_NAME", "octocat"),
+            ("GIT_AUTHOR_EMAIL", "octocat@invalid"),
+            ("GIT_COMMITTER_EMAIL", "octocat@invalid"),
+        ];
+
+        fn run(dir: &Path, args: &[&str]) -> bool {
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .envs(IDENT)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+
+        /// A real worktree, then its repository deleted out from under
+        /// it -- built with git rather than by hand-writing a `.git`
+        /// file, so the shape is whatever git actually produces.
+        fn orphaned_worktree(base: &Path) -> std::path::PathBuf {
+            let repo = base.join("proj");
+            std::fs::create_dir_all(&repo).unwrap();
+            assert!(run(&repo, &["init", "-q", "-b", "main"]));
+            assert!(run(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]));
+
+            let wt = base.join("proj-feature");
+            assert!(run(
+                &repo,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    "feature",
+                    wt.to_str().unwrap(),
+                ]
+            ));
+            assert!(wt.join(".git").is_file(), "a worktree's .git is a file");
+
+            // The repository goes away; the worktree stays behind.
+            std::fs::remove_dir_all(&repo).unwrap();
+            wt
+        }
+
+        #[test]
+        fn an_orphan_is_found_and_reported_as_orphaned() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let wt = orphaned_worktree(tmp.path());
+
+            let repos = scan_dirs_fast(&[tmp.path().to_string_lossy().into_owned()]);
+            let found: Vec<_> = repos
+                .iter()
+                .flat_map(|r| &r.worktrees)
+                .filter(|w| w.safety == Safety::Orphaned)
+                .collect();
+            assert_eq!(found.len(), 1, "the orphan must be reported at all");
+            assert_eq!(found[0].path, wt.to_string_lossy());
+        }
+
+        /// The safety rule that matters: an orphan can never be
+        /// classified -- there is no git to run in it -- so it must not
+        /// reach the path that removes "safe" worktrees in bulk.
+        #[test]
+        fn an_orphan_is_never_safe() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            orphaned_worktree(tmp.path());
+            let repos = scan_dirs_fast(&[tmp.path().to_string_lossy().into_owned()]);
+            for w in repos.iter().flat_map(|r| &r.worktrees) {
+                assert!(!w.safety.is_safe(), "an orphan must never be is_safe()");
+            }
+        }
+
+        /// Against the REAL directories that prompted #356.
+        #[test]
+        #[ignore]
+        fn live_orphans_in_the_code_directory() {
+            let base = format!("{}/code/enclave", std::env::var("HOME").unwrap());
+            if !Path::new(&base).is_dir() {
+                println!("no such directory; nothing to check");
+                return;
+            }
+            let repos = scan_dirs_fast(&[base]);
+            let orphans: Vec<_> = repos
+                .iter()
+                .flat_map(|r| &r.worktrees)
+                .filter(|w| w.safety == Safety::Orphaned)
+                .collect();
+            println!("found {} orphaned worktree(s)", orphans.len());
+            for o in &orphans {
+                println!("  {}", o.path);
+            }
+        }
+
+        /// A HEALTHY worktree must not be mistaken for an orphan --
+        /// that would put every ordinary worktree in a section saying
+        /// its repository is gone.
+        #[test]
+        fn a_live_worktree_is_not_an_orphan() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let repo = tmp.path().join("proj");
+            std::fs::create_dir_all(&repo).unwrap();
+            assert!(run(&repo, &["init", "-q", "-b", "main"]));
+            assert!(run(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]));
+            let wt = tmp.path().join("proj-feature");
+            assert!(run(
+                &repo,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    "feature",
+                    wt.to_str().unwrap(),
+                ]
+            ));
+
+            assert!(
+                orphan_gitdir(&wt).is_none(),
+                "a live worktree is not orphaned"
+            );
         }
     }
 

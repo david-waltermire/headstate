@@ -83,7 +83,26 @@ query($q: String!, $first: Int!) {
         latestReviews(first: 5) { nodes { state author { login } } }
         labels(first: 20) { nodes { name color } }
         reviewThreads(first: 20) { nodes { isResolved isOutdated } }
-        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+        # `state` alone is not enough: the rollup RANKS FAILURE above
+        # PENDING, so a pull request whose checks are re-running after a
+        # fix still reads as failing. Per-check `status` is what
+        # separates "failed" from "failed, and now re-running".
+        #
+        # MEASURED: this takes the query from 3 points to 4, and there is
+        # no cheaper shape -- `first: 1`, `first: 20` and `checkSuites`
+        # all cost the same, because the cost is the connection rather
+        # than the page. Worth it: on a real account 16 of 58 check
+        # suites were QUEUED, which is exactly the state being hidden.
+        commits(last: 1) {
+          nodes {
+            commit {
+              statusCheckRollup {
+                state
+                contexts(first: 20) { nodes { ... on CheckRun { status } } }
+              }
+            }
+          }
+        }
       }
     }
   }

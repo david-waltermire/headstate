@@ -20,9 +20,21 @@ function unavailable(pr: PrDetail, action: PrActionName): string | null {
       if (pr.merge_status === "blocked") return "a required review or check is missing";
       if (pr.merge_status === "unstable") return "checks are failing";
       if (pr.merge_status === "behind") return "the branch is behind its base";
-      // Anything unrecognised, including `unknown`, is NOT mergeable:
-      // enabling merge on a state we cannot read would ask GitHub to
-      // reject it, or worse, succeed unexpectedly.
+      // `unknown` is TRANSIENT, not a verdict. GitHub sets it while it
+      // recomputes mergeability -- which an approval is precisely what
+      // triggers -- so the old wording reported "GitHub has not
+      // confirmed this can merge" about a pull request that was about
+      // to become mergeable, and stayed that way until something else
+      // refetched. Reported as merge failing on a PR that had in fact
+      // merged.
+      //
+      // Still disabled: enabling merge on a state we cannot read would
+      // ask GitHub to reject it. The defect was the wording and the
+      // absence of a refresh, not the gate.
+      if (pr.merge_status === "unknown") return "GitHub is still checking — this usually clears in a moment";
+      // Anything else unrecognised is NOT mergeable, for the same
+      // reason: acting on a state we cannot read is the one wrong
+      // answer that costs something.
       if (pr.merge_status !== "clean") return "GitHub has not confirmed this can merge";
       return null;
     case "ready":

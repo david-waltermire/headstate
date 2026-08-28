@@ -178,6 +178,9 @@ export type Safety =
   | { kind: "unpushed"; detail: number }
   | { kind: "never_pushed" }
   | { kind: "unmerged" }
+  /// The repository that owned this worktree is gone, so nothing about
+  /// the checkout can be classified -- there is no git to run in it.
+  | { kind: "orphaned" }
   /// Listed, but not yet classified. Distinct from `unknown`, which
   /// means the check ran and could not decide.
   | { kind: "pending" }

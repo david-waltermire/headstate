@@ -1068,6 +1068,7 @@ mod tests {
         let connections = [
             "labels(",
             "statusCheckRollup",
+            "contexts(",
             "reviewThreads(",
             "reviewRequests(",
             "latestReviews(",
@@ -1085,14 +1086,20 @@ mod tests {
         // (re-measured against the live API on 2026-08-26 by extracting
         // the query and running it with `rateLimit { cost }`).
         //
-        // The guard still earns its place -- it caught this change and
-        // forced the measurement, which is exactly its job. What it must
-        // not do is silently drift, so the two numbers are recorded
-        // separately below.
+        // The guard still earns its place -- it caught that change and
+        // forced the measurement, which is exactly its job.
+        //
+        // It MISSED the next one, and that is worth recording: adding
+        // `contexts(` for #312 took the live cost from 3 to 4 while
+        // this count stayed at 6, because `contexts` nests inside
+        // `statusCheckRollup`, which was already in the list. A NESTED
+        // connection is invisible to a substring count of its parent,
+        // so a new connection has to be listed here BY NAME rather than
+        // assumed covered by the field it sits inside.
         assert_eq!(
-            cost, 6,
+            cost, 7,
             "PRS_QUERY connection count changed; re-measure the LIVE cost \
-             (6 connections = 3 points on 2026-08-27, for ONE search -- \
+             (7 connections = 4 points on 2026-08-28, for ONE search -- \
               the query carried two aliases and cost 6 until they were \
               split)"
         );

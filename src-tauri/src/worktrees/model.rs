@@ -42,6 +42,15 @@ pub enum Safety {
     Unpushed(u64),
     /// No upstream branch at all -- nothing has ever been pushed.
     NeverPushed,
+    /// The repository that owned this worktree is gone.
+    ///
+    /// A category of its own rather than a flavour of `Unknown`,
+    /// because the claim is different: `Unknown` means a check failed
+    /// and might succeed later, while this means the checkout can never
+    /// be classified again -- there is no git to run in it. It is also
+    /// the only state where the DIRECTORY is the whole story, since
+    /// nothing else can be read from it.
+    Orphaned,
     /// Branch is not merged into the default branch.
     Unmerged,
     /// Listed, but not yet classified. A transient state the UI shows as
@@ -90,6 +99,11 @@ impl Safety {
             Safety::NeverPushed => "never pushed — commits exist only here".into(),
             Safety::Unmerged => "branch not merged".into(),
             Safety::Pending => "checking…".into(),
+            // Says what IS known, not what could not be checked. The
+            // parent repository is gone, so nothing about this
+            // checkout's contents can be established -- and the user
+            // needs to know that before deciding, not a hedge.
+            Safety::Orphaned => "its repository is gone — nothing here can be checked".into(),
             Safety::Unknown(why) => format!("could not determine: {why}"),
         }
     }

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DockerImage, DockerState } from "@/types/pr";
+import type { DockerBuild, DockerImage, DockerState } from "@/types/pr";
 
 const state = vi.hoisted(() => ({
   docker: { kind: "running" } as DockerState,
@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   imagesFailed: false,
   diskFailed: false,
   volumes: [] as { name: string; size_bytes: number }[],
+  builds: [] as DockerBuild[],
 }));
 
 type Outcome = { id: string; error: string | null };
@@ -21,6 +22,10 @@ const removeVolumeFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../api/hooks", () => ({
   useDockerState: () => ({ data: state.docker }),
+  // The image row joins to builds on the commit (#326). Empty is the
+  // ordinary case -- a project tagging by version rather than by commit
+  // matches nothing here.
+  useDockerBuilds: () => ({ data: state.builds ?? [] }),
   useDockerImages: () => ({
     data: state.images,
     isLoading: false,

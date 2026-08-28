@@ -9,35 +9,7 @@ import { QueryError, errorMessage } from "./QueryError";
 import { formatDockerSize } from "../lib/docker";
 import { relativeTime } from "../lib/time";
 import type { DockerBuild } from "../types/pr";
-
-/// A duration a human reads at a glance.
-///
-/// Sub-second builds are common (a fully cached target finishes in
-/// 0.4s), so seconds get a decimal below ten -- rendering those as "0s"
-/// would hide the difference between cached and instant.
-function formatDuration(secs: number): string {
-  if (secs < 10) return `${secs.toFixed(1)}s`;
-  if (secs < 60) return `${Math.round(secs)}s`;
-  const m = Math.floor(secs / 60);
-  const s = Math.round(secs % 60);
-  return `${m}m ${s}s`;
-}
-
-/// Cache ratio, coloured by what it implies.
-///
-/// This is the number that explains the duration beside it. Real data:
-/// the same target at 48% cached took 56.9s, at 23% took 80.7s. A cold
-/// build is not a problem in itself -- a cold build that used to be warm
-/// is.
-function cachePercent(b: DockerBuild): number {
-  return b.total_steps === 0 ? 0 : Math.floor((b.cached_steps * 100) / b.total_steps);
-}
-
-function cacheTone(pct: number): string {
-  if (pct >= 60) return "text-[#3fb950]";
-  if (pct >= 25) return "text-[#d29922]";
-  return "text-[#8b949e]";
-}
+import { cachePercent, cacheTone, formatDuration } from "../lib/buildJoin";
 
 /// What a build produced, and where it came from.
 ///

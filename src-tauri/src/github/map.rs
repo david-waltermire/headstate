@@ -12,7 +12,27 @@ fn ts(v: &Value, key: &str) -> Option<DateTime<Utc>> {
 }
 
 fn ci_state(node: &Value) -> CiState {
-    let state = node["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["state"].as_str();
+    let rollup = &node["commits"]["nodes"][0]["commit"]["statusCheckRollup"];
+    let state = rollup["state"].as_str();
+
+    // A FAILURE the rollup reports may already be re-running.
+    //
+    // `statusCheckRollup.state` ranks FAILURE above PENDING, so a pull
+    // request whose checks restarted after a fix keeps reading as
+    // broken -- it sits in Needs Attention through the whole rerun,
+    // which is exactly when the author has already acted. Per-check
+    // `status` is what separates the two: a check that is QUEUED or
+    // IN_PROGRESS has no verdict yet, whatever the collapsed state
+    // says.
+    //
+    // Only applied to FAILURE. A rollup that says SUCCESS while
+    // something is still running is not a state to second-guess, and
+    // reporting pending there would make a mergeable pull request look
+    // unready.
+    if matches!(state, Some("FAILURE") | Some("ERROR")) && any_check_running(rollup) {
+        return CiState::Pending;
+    }
+
     match state {
         Some("SUCCESS") => CiState::Success,
         Some("FAILURE") | Some("ERROR") => CiState::Failure,
@@ -20,6 +40,25 @@ fn ci_state(node: &Value) -> CiState {
         // No rollup at all means the repo runs no checks on this PR.
         _ => CiState::None,
     }
+}
+
+/// Whether any individual check has not finished.
+///
+/// `status` is the check's LIFECYCLE (QUEUED / IN_PROGRESS / COMPLETED),
+/// which is a different axis from `conclusion` (SUCCESS / FAILURE). A
+/// check with no conclusion yet is one whose verdict is still coming.
+fn any_check_running(rollup: &Value) -> bool {
+    rollup["contexts"]["nodes"]
+        .as_array()
+        .map(|a| {
+            a.iter().any(|c| {
+                matches!(
+                    c["status"].as_str(),
+                    Some("QUEUED") | Some("IN_PROGRESS") | Some("WAITING") | Some("PENDING")
+                )
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// One check's outcome, normalised.
@@ -801,6 +840,61 @@ mod tests {
         assert_eq!(d.checks[1].name, "legacy", "StatusContext uses `context`");
         assert_eq!(d.checks[1].state, "failure");
         assert_eq!(d.comments[0].author, "octocat");
+    }
+
+    /// #312: a pull request stays in Needs Attention through the whole
+    /// rerun after its author has already fixed the problem.
+    ///
+    /// `statusCheckRollup.state` RANKS FAILURE above PENDING, so the
+    /// collapsed value keeps saying failure while checks restart. That
+    /// is the single state most likely to make the list untrustworthy:
+    /// it nags about work already done.
+    #[test]
+    fn a_failure_that_is_re_running_reads_as_pending() {
+        let node = json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {
+            "state": "FAILURE",
+            "contexts": {"nodes": [
+                {"status": "COMPLETED"},
+                {"status": "IN_PROGRESS"}
+            ]}
+        }}}]}});
+        assert_eq!(ci_state(&node), CiState::Pending);
+    }
+
+    /// A failure with nothing running is still a failure. Reporting
+    /// pending here would hide a genuinely broken pull request, which
+    /// is the opposite and worse error.
+    #[test]
+    fn a_settled_failure_is_still_a_failure() {
+        let node = json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {
+            "state": "FAILURE",
+            "contexts": {"nodes": [{"status": "COMPLETED"}, {"status": "COMPLETED"}]}
+        }}}]}});
+        assert_eq!(ci_state(&node), CiState::Failure);
+    }
+
+    /// Only FAILURE is second-guessed. A rollup that says SUCCESS while
+    /// something is still running is not a state to override --
+    /// reporting pending would make a mergeable pull request look
+    /// unready.
+    #[test]
+    fn a_success_is_not_downgraded_by_a_running_check() {
+        let node = json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {
+            "state": "SUCCESS",
+            "contexts": {"nodes": [{"status": "IN_PROGRESS"}]}
+        }}}]}});
+        assert_eq!(ci_state(&node), CiState::Success);
+    }
+
+    /// A cached snapshot written before this field existed has no
+    /// contexts at all, and a failure must not silently become pending
+    /// because the data is absent.
+    #[test]
+    fn a_failure_without_context_data_stays_a_failure() {
+        let node = json!({"commits": {"nodes": [{"commit": {"statusCheckRollup": {
+            "state": "FAILURE"
+        }}}]}});
+        assert_eq!(ci_state(&node), CiState::Failure);
     }
 
     /// Who is blocking a pull request -- the question `reviewDecision`

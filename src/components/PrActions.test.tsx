@@ -68,6 +68,36 @@ describe("PrActions", () => {
   /// and it sits beside "Back to list", where a bare "Close" reads as
   /// "close this view". Both halves of that fix are asserted: the words
   /// and the destructive styling.
+  /// #349: approved a pull request, clicked merge, got "GitHub has not
+  /// confirmed this can merge" -- then found it merged on GitHub.
+  ///
+  /// `unknown` is what GitHub reports WHILE it recomputes mergeability,
+  /// and an approval is exactly what triggers that. The old wording
+  /// reported a transient state in the words of a settled refusal.
+  it("says the unknown merge state is transient, not a refusal", () => {
+    render(<PrActions pr={pr({ merge_status: "unknown" })} />);
+    expect(screen.getByText(/still checking/i)).toBeTruthy();
+    expect(screen.queryByText(/has not confirmed/i)).toBeNull();
+  });
+
+  /// Still disabled: acting on a state we cannot read is the one wrong
+  /// answer that costs something. The defect was the wording, not the
+  /// gate.
+  it("keeps merge disabled while the state is unknown", () => {
+    render(<PrActions pr={pr({ merge_status: "unknown" })} />);
+    const btn = screen.getByRole("button", { name: "Merge" }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  /// A genuinely unmergeable state keeps its own words -- collapsing
+  /// them all into "still checking" would tell the user to wait for
+  /// something that is never going to resolve.
+  it("keeps the settled wording for a state that is not transient", () => {
+    render(<PrActions pr={pr({ merge_status: "dirty" })} />);
+    expect(screen.getByText(/merge conflicts/i)).toBeTruthy();
+    expect(screen.queryByText(/still checking/i)).toBeNull();
+  });
+
   it("names the close action so it cannot be read as closing the view", () => {
     render(<PrActions pr={pr()} />);
     expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
@@ -144,7 +174,9 @@ describe("PrActions", () => {
       ["blocked", /required review/i],
       ["unstable", /checks are failing/i],
       ["behind", /behind its base/i],
-      ["unknown", /has not confirmed/i],
+      // Transient, so it gets its own wording -- see #349. Still
+      // disabled, which is what this test is really pinning.
+      ["unknown", /still checking/i],
     ] as const) {
       const { unmount } = render(<PrActions pr={pr({ merge_status: status })} />);
       expect(screen.getByRole("button", { name: "Merge" })).toHaveProperty("disabled", true);

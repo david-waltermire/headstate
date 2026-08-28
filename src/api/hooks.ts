@@ -489,6 +489,18 @@ export function usePrDetail(repo: string | undefined, number: number | undefined
     queryFn: () => getPrDetail(repo as string, number as number),
     enabled: Boolean(repo && number),
     staleTime: 30_000,
+    // `unknown` mergeability is TRANSIENT: GitHub sets it while it
+    // recomputes, which approving a pull request is precisely what
+    // triggers. One invalidation after the mutation is not enough --
+    // the refetch lands while GitHub is still computing and gets
+    // `unknown` back, then nothing asks again.
+    //
+    // Polling only in that state, and only while the detail view is
+    // open. It stops the moment a real answer arrives, so this is a few
+    // seconds of extra requests on one pull request rather than a
+    // background cost.
+    refetchInterval: (query) =>
+      query.state.data?.merge_status === "unknown" ? 3_000 : false,
   });
 }
 

@@ -7,13 +7,15 @@ import {
   useDockerVolumes,
   usePruneCache,
   useRemoveImages,
+  useDockerBuilds,
   useRemoveVolume,
 } from "../api/hooks";
 import { dockerRestart, dockerRunningContainers, dockerStart } from "../api/tauri";
 import { formatDockerSize, imageState, imageTone, isStale, isSuperseded } from "../lib/docker";
+import { buildForImage, cachePercent, cacheTone, formatDuration } from "../lib/buildJoin";
 import { relativeTime } from "../lib/time";
 
-import type { DockerImage } from "../types/pr";
+import type { DockerBuild, DockerImage } from "../types/pr";
 import { QueryError, errorMessage } from "./QueryError";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
@@ -86,12 +88,18 @@ function ImageRow({
   img,
   onRemove,
   removing,
+  builds,
 }: {
   img: DockerImage;
   onRemove: (img: DockerImage) => void;
   removing: boolean;
+  /// Every known build, for the commit join. Empty is ordinary.
+  builds: DockerBuild[];
 }) {
   const [open, setOpen] = useState(false);
+  // Only once the row is expanded: the join is cheap, but the builds
+  // themselves are not fetched at all unless something needs them.
+  const build = open ? buildForImage(img, builds) : null;
   // An untagged image is exactly the one the user cannot identify, and
   // it is what accumulates from repeated rebuilds. `repository` was on
   // the type all along and never rendered -- so the row said `abc123`
@@ -190,6 +198,31 @@ function ImageRow({
               </dd>
             </>
           )}
+          {/* The Builds page folded in here (#326).
+              
+              A build's duration and cache ratio are facts about the
+              IMAGE it produced, and on their own page they were a log
+              nobody could act on. Matched on the commit: `buildx
+              history` records a VCS Revision and these images are
+              tagged with it, so the key was already on both sides --
+              no new field was needed.
+              
+              Absent freely: a project that tags by version rather than
+              by commit matches nothing here, which is ordinary rather
+              than an error. */}
+          {build ? (
+            <>
+              <dt>Build</dt>
+              <dd>
+                {formatDuration(build.duration_secs)}
+                {build.total_steps > 0 ? (
+                  <span className={`ml-2 ${cacheTone(cachePercent(build))}`}>
+                    {cachePercent(build)}% cached
+                  </span>
+                ) : null}
+              </dd>
+            </>
+          ) : null}
         </dl>
       ) : null}
     </div>
@@ -202,6 +235,10 @@ export function DockerPage() {
   const { data: images, isLoading, isError, error, refetch } = useDockerImages(up);
   const { data: volumes } = useDockerVolumes(up);
   const removeImages = useRemoveImages();
+  // For the build join on an expanded row (#326). Fetched with the
+  // page rather than per row: one listing serves every image, and the
+  // Builds page it replaces fetched exactly this.
+  const { data: builds = [] } = useDockerBuilds(up);
   const removeVolume = useRemoveVolume();
   const prune = usePruneCache();
 
@@ -376,6 +413,7 @@ export function DockerPage() {
               img={img}
               removing={removing === img.id}
               onRemove={setPending}
+              builds={builds}
             />
           ))
         )}
