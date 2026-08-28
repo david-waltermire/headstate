@@ -313,6 +313,13 @@ export const sizeWorktrees = (repoPath: string) =>
 /// fast-forwards only; returns git's own output or its own refusal.
 export const pullCheckout = (path: string) => invoke<string>("pull_checkout", { path });
 
+/// Delete an orphaned worktree directory.
+///
+/// Separate from `removeWorktree` because git cannot remove it -- the
+/// repository that owned it is gone. The Rust side re-checks that the
+/// path is still orphaned before deleting anything.
+export const removeOrphan = (path: string) => invoke<void>("remove_orphan", { path });
+
 export const removeWorktree = (repoPath: string, worktreePath: string) =>
   invoke<void>("remove_worktree", { repoPath, worktreePath });
 

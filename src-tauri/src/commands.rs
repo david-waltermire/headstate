@@ -616,6 +616,27 @@ pub async fn pull_checkout(path: String) -> Result<String, String> {
     result
 }
 
+/// Delete an orphaned worktree directory.
+///
+/// Separate from `remove_worktree` because git cannot do it: the
+/// repository that owned the checkout is gone, so there is nothing to
+/// run `git worktree remove` against. That makes it a plain recursive
+/// delete, and `remove_orphan` re-derives orphan status itself rather
+/// than trusting this call.
+#[tauri::command]
+pub async fn remove_orphan(path: String) -> Result<(), String> {
+    let p = path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || crate::worktrees::remove_orphan(&p))
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match &result {
+        Ok(()) => log::info!("removed orphaned worktree {path}"),
+        Err(e) => log::warn!("refused to remove orphan {path}: {e}"),
+    }
+    result
+}
+
 /// Directories scanned for git checkouts.
 ///
 /// Defaults to `~/code` when unset, so the app works with no

@@ -12,6 +12,9 @@ const state = vi.hoisted(() => ({
   assessed: [] as string[],
   prs: [] as import("@/types/pr").PullRequest[],
   sizes: undefined as Map<string, number> | undefined,
+  allSizes: undefined as Map<string, number> | undefined,
+  sizesPending: 0,
+  sizesTotal: 0,
   sizing: false,
 }));
 
@@ -22,6 +25,9 @@ vi.mock("sonner", () => ({
 }));
 
 const dockerImages = vi.hoisted(() => vi.fn(() => [] as unknown[]));
+const removeOrphanFn = vi.hoisted(() =>
+  vi.fn<(path: string) => Promise<void>>(() => Promise.resolve()),
+);
 const pullFn = vi.hoisted(() =>
   vi.fn<(path: string) => Promise<string>>(() => Promise.resolve("Already up to date.")),
 );
@@ -42,6 +48,14 @@ vi.mock("../api/hooks", () => ({
   // page now reads Docker state -- but only while the confirmation is
   // open, which is why the default here is an empty list.
   usePullCheckout: () => pullFn,
+  useRemoveOrphan: () => removeOrphanFn,
+  // Sizes land one repository at a time on the all-repos view, so the
+  // mock carries the progress fields the page renders.
+  useAllWorktreeSizes: () => ({
+    sizes: state.allSizes ?? new Map<string, number>(),
+    pending: state.sizesPending ?? 0,
+    total: state.sizesTotal ?? 0,
+  }),
   useDockerImages: () => ({ data: dockerImages() }),
   useRemoveImages: () => removeImagesFn,
   useWorktrees: () => ({
@@ -111,6 +125,7 @@ describe("WorktreesPage", () => {
     // than in that test, so every test starts from the same state.
     removeManyFn.mockClear();
     pullFn.mockClear();
+    removeOrphanFn.mockClear();
     Object.assign(state, {
       repos: [{ identity: null, name: "proj", path: "/code/proj", worktrees: [wt({})] }],
       isLoading: false,
@@ -317,16 +332,17 @@ describe("WorktreesPage", () => {
   });
 
   // The em dash read as "measured, and the answer is nothing".
-  /// #348: on "All repositories" the page read "at least 0 B" with
-  /// dashes in every row, indefinitely. Sizes are measured PER
-  /// REPOSITORY, so with none selected the query is disabled -- and a
-  /// disabled query reports `isLoading: true` forever, so the UI waited
-  /// on a request that was never made.
-  it("says sizes are per-repository rather than waiting forever", () => {
+  /// #348/#358: the page read "at least 0 B" with dashes, indefinitely.
+  ///
+  /// The first fix said "open a repository to measure sizes" -- honest,
+  /// but the view exists to answer where the disk went and could not.
+  /// It now measures, one repository at a time, and says how many are
+  /// outstanding. MEASURED: the full set takes ~2 minutes, so a count
+  /// that visibly falls is the difference between "still working" and
+  /// "broken".
+  it("says how many repositories are still being measured", () => {
     Object.assign(state, {
       repos: [
-        // `size_bytes: null` is the real state: nothing measured,
-        // because the query never ran.
         { identity: null, name: "a", path: "/code/a", worktrees: [wt({ size_bytes: null })] },
         {
           identity: null,
@@ -335,20 +351,33 @@ describe("WorktreesPage", () => {
           worktrees: [wt({ path: "/code/b-f", size_bytes: null })],
         },
       ],
-      // What a DISABLED query reports: loading true, fetching false.
-      sizing: false,
-      sizes: undefined,
+      sizesPending: 2,
+      sizesTotal: 2,
     });
     useFilters.setState({
       filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
       view: "worktrees",
     } as never);
     render(<WorktreesPage />);
-    // The total still reads "at least 0 B" -- correct, since nothing
-    // has been measured -- but it is no longer the ONLY thing on
-    // screen, which is what made it read as a stuck measurement rather
-    // than one that was never started.
-    expect(screen.getByText(/open a repository to measure sizes/i)).toBeTruthy();
+    expect(screen.getByText(/2 of 2 repositories still to go/i)).toBeTruthy();
+  });
+
+  /// Silence once everything has answered -- a progress line that never
+  /// clears is indistinguishable from one that is stuck.
+  it("stops saying it once every repository has answered", () => {
+    Object.assign(state, {
+      repos: [
+        { identity: null, name: "a", path: "/code/a", worktrees: [wt({ size_bytes: 2048 })] },
+      ],
+      sizesPending: 0,
+      sizesTotal: 1,
+    });
+    useFilters.setState({
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+      view: "worktrees",
+    } as never);
+    render(<WorktreesPage />);
+    expect(screen.queryByText(/still to go/i)).toBeNull();
   });
 
   it("shows a skeleton rather than an em dash while a size is still coming", () => {
@@ -733,6 +762,51 @@ describe("WorktreesPage", () => {
       expect(toastError.mock.calls[0][1]).toMatchObject({
         description: "divergent branches",
       });
+    });
+  });
+
+  /// Reported: the orphan row said "its repository is gone" and the
+  /// Remove button could not be clicked -- so the user was told about
+  /// 2.5 GB they could not act on.
+  describe("orphaned worktrees", () => {
+    const orphan = () =>
+      wt({ path: "/code/veil-coh", safety: { kind: "orphaned" } as never });
+
+    it("offers Delete rather than a disabled Remove", () => {
+      state.classified = [orphan()];
+      render(<WorktreesPage />);
+      const btn = screen.getByRole("button", { name: /delete/i }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+
+    /// A DIFFERENT call from the ordinary removal: git cannot remove a
+    /// worktree whose repository is gone, so this deletes the
+    /// directory after re-checking on the Rust side.
+    it("deletes through the orphan path, not the worktree path", async () => {
+      state.classified = [orphan()];
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+      await waitFor(() => expect(removeOrphanFn).toHaveBeenCalledWith("/code/veil-coh"));
+      expect(removeFn).not.toHaveBeenCalled();
+    });
+
+    it("reports a refusal in the Rust side's own words", async () => {
+      state.classified = [orphan()];
+      removeOrphanFn.mockRejectedValueOnce("this is no longer an orphaned worktree");
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+      await waitFor(() => expect(toastError).toHaveBeenCalled());
+      expect(toastError.mock.calls[0][1]).toMatchObject({
+        description: "this is no longer an orphaned worktree",
+      });
+    });
+
+    /// An orphan must never reach the bulk path: it is precisely the
+    /// case where the delete-time safety re-check cannot run.
+    it("is not counted among the safe worktrees", () => {
+      state.classified = [orphan(), wt({ path: "/code/ok", safety: { kind: "safe" } })];
+      render(<WorktreesPage />);
+      expect(screen.queryByRole("button", { name: /remove 2 safe/i })).toBeNull();
     });
   });
 

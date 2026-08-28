@@ -435,6 +435,37 @@ fn patch_id(dir: &Path, from: &str, to: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Delete an ORPHANED worktree directory.
+///
+/// A separate command from `remove_worktree`, because git cannot do it:
+/// with the parent repository gone there is nothing to run
+/// `git worktree remove` against. Verified on a real orphan --
+/// `git status` inside it fails with "not a git repository", and the
+/// parent path does not exist to be asked.
+///
+/// So this is a plain recursive delete, which makes the gate the ONLY
+/// protection. It re-derives orphan status here rather than trusting
+/// the caller: the scan is a snapshot, and a path that has since become
+/// a real checkout must not be deleted by a stale click. Same rule
+/// `remove_inner` applies for the same reason.
+pub fn remove_orphan(path: &str) -> Result<(), String> {
+    let dir = Path::new(path);
+    if !dir.is_dir() {
+        return Err("that directory is missing".into());
+    }
+
+    // Re-checked RIGHT NOW. Without this the command is "delete any
+    // directory the frontend names", which is not a gate at all.
+    if orphan_gitdir(dir).is_none() {
+        return Err(
+            "this is no longer an orphaned worktree -- its repository may have been restored"
+                .into(),
+        );
+    }
+
+    std::fs::remove_dir_all(dir).map_err(|e| format!("could not remove: {e}"))
+}
+
 /// The dead `gitdir` a worktree points at, when its parent is gone.
 ///
 /// A worktree's `.git` is a FILE containing `gitdir: <path>`. When the
@@ -2229,6 +2260,62 @@ mod live {
             }
         }
 
+        /// The counting discrepancy in the v3.10.0 screenshot: the
+        /// sidebar said 120 while the panel said 123 across 41 repos,
+        /// and only 10 repos were listed.
+        #[test]
+        #[ignore]
+        fn live_sidebar_versus_rollup_counts() {
+            let base = format!("{}/code", std::env::var("HOME").unwrap());
+            let repos = scan_dirs_fast(&[base]);
+            // What the sidebar computes: n - 1 per repo.
+            let sidebar: usize = repos
+                .iter()
+                .map(|r| r.worktrees.len().saturating_sub(1))
+                .sum();
+            // What the rollup computes: everything not is_main.
+            let rollup: usize = repos
+                .iter()
+                .flat_map(|r| &r.worktrees)
+                .filter(|w| !w.is_main)
+                .count();
+            let no_main = repos
+                .iter()
+                .filter(|r| !r.worktrees.iter().any(|w| w.is_main))
+                .count();
+            let hidden = repos
+                .iter()
+                .filter(|r| r.worktrees.len().saturating_sub(1) == 0)
+                .count();
+            println!(
+                "repos={} sidebar={sidebar} rollup={rollup} repos_without_main={no_main} hidden_by_sidebar={hidden}",
+                repos.len()
+            );
+        }
+
+        /// How long would sizing EVERY repository take? That decides
+        /// whether the all-repositories view can measure at all, or
+        /// whether it has to keep saying "open a repository".
+        #[test]
+        #[ignore]
+        fn live_cost_of_sizing_every_repo() {
+            let base = format!("{}/code", std::env::var("HOME").unwrap());
+            let repos = scan_dirs_fast(&[base]);
+            let t = std::time::Instant::now();
+            let mut measured = 0usize;
+            for r in &repos {
+                if let Ok(sizes) = size_repo(&r.path) {
+                    measured += sizes.len();
+                }
+            }
+            println!(
+                "sized {} worktrees across {} repos in {:?}",
+                measured,
+                repos.len(),
+                t.elapsed()
+            );
+        }
+
         /// Against the REAL directories that prompted #356.
         #[test]
         #[ignore]
@@ -2250,7 +2337,66 @@ mod live {
             }
         }
 
-        /// A HEALTHY worktree must not be mistaken for an orphan --
+        /// `remove_orphan` is a plain recursive delete -- git cannot
+        /// help, since the repository that owned the worktree is gone.
+        /// That makes the gate the ONLY protection, so these test it
+        /// rather than the happy path.
+        #[test]
+        fn removes_an_orphan() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let wt = orphaned_worktree(tmp.path());
+            assert!(wt.is_dir());
+            remove_orphan(&wt.to_string_lossy()).expect("an orphan must be removable");
+            assert!(!wt.exists(), "the directory must be gone");
+        }
+
+        /// The gate that matters: a LIVE worktree must never be
+        /// deleted by this path. It has a repository, so it belongs to
+        /// `remove_worktree`, which re-checks safety.
+        #[test]
+        fn refuses_a_live_worktree() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let repo = tmp.path().join("proj");
+            std::fs::create_dir_all(&repo).unwrap();
+            assert!(run(&repo, &["init", "-q", "-b", "main"]));
+            assert!(run(&repo, &["commit", "-q", "--allow-empty", "-m", "init"]));
+            let wt = tmp.path().join("proj-feature");
+            assert!(run(
+                &repo,
+                &[
+                    "worktree",
+                    "add",
+                    "-q",
+                    "-b",
+                    "feature",
+                    wt.to_str().unwrap(),
+                ]
+            ));
+
+            let err =
+                remove_orphan(&wt.to_string_lossy()).expect_err("a live worktree must be refused");
+            assert!(err.contains("no longer an orphaned worktree"), "{err}");
+            assert!(wt.is_dir(), "and it must still be there");
+        }
+
+        /// An ordinary directory is not an orphan either. Without the
+        /// re-check this command would be "delete any path the
+        /// frontend names".
+        #[test]
+        fn refuses_a_directory_that_is_not_a_worktree() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            let plain = tmp.path().join("just-a-folder");
+            std::fs::create_dir_all(&plain).unwrap();
+            std::fs::write(plain.join("important.txt"), "data").unwrap();
+
+            assert!(remove_orphan(&plain.to_string_lossy()).is_err());
+            assert!(
+                plain.join("important.txt").exists(),
+                "nothing may be deleted"
+            );
+        }
+
+        /// A HEALTHY worktree must not be mistaken for an orphan        /// A HEALTHY worktree must not be mistaken for an orphan --
         /// that would put every ordinary worktree in a section saying
         /// its repository is gone.
         #[test]

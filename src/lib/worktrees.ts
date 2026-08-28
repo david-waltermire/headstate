@@ -5,6 +5,22 @@ import type { PullRequest, Safety, Upstream } from "@/types/pr";
 /// Everything else is genuinely disabled rather than warned past: a
 /// cleanup tool that occasionally eats a day of work is worse than no
 /// cleanup tool.
+/// The `repo` filter value that selects orphaned worktrees.
+///
+/// A sentinel rather than a new axis on the store: the sidebar already
+/// drives everything through `repo`, and adding a parallel "mode" would
+/// mean every consumer had to learn about it. A path-shaped value that
+/// no real repository can have keeps the existing plumbing honest.
+export const ORPHAN_FILTER = "\0orphaned";
+
+/// Whether a worktree's repository is gone.
+///
+/// Its own predicate rather than an inline comparison, so the several
+/// places that need it cannot drift -- the same reason `isSafe` exists.
+export function isOrphaned(s: Safety): boolean {
+  return s.kind === "orphaned";
+}
+
 export function isSafe(s: Safety): boolean {
   return s.kind === "safe";
 }

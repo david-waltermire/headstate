@@ -11,6 +11,8 @@ import {
   useWorktreeSizes,
   useWorktrees,
   usePullCheckout,
+  useRemoveOrphan,
+  useAllWorktreeSizes,
   useDockerImages,
   useRemoveImages,
   useRemovalProgress,
@@ -24,6 +26,8 @@ import {
   pathBasename,
   prForWorktree,
   worktreeSignal,
+  isOrphaned,
+  ORPHAN_FILTER,
   safetyReason,
   safetyTone,
   upstreamReason,
@@ -73,6 +77,7 @@ function Row({
   removing = false,
   assessed = false,
   onForce,
+  onRemoveOrphan,
   onPull,
   pulling = false,
 }: {
@@ -90,6 +95,9 @@ function Row({
   /// moved since. Unlocks the override.
   assessed?: boolean;
   onForce: (wt: Worktree) => void;
+  /// Delete an orphaned directory. A different call from `onRemove`:
+  /// git cannot remove a worktree whose repository is gone.
+  onRemoveOrphan: (wt: Worktree) => void;
   /// Sizes arrive in their own pass, after safety. Tracked separately so
   /// a row whose safety has resolved does not keep waiting on its size.
   sizePending?: boolean;
@@ -102,6 +110,7 @@ function Row({
   pulling?: boolean;
 }) {
   const safe = isSafe(wt.safety);
+  const orphaned = isOrphaned(wt.safety);
   // `Safety` already answers "is this dirty, and by how much" -- reusing
   // it means the button's reason cannot disagree with the row's own
   // explanation of the same checkout.
@@ -221,16 +230,27 @@ function Row({
       ) : (
         <button
           type="button"
-          disabled={!safe || removing}
-          onClick={() => onRemove(wt)}
-          title={safe ? "Remove this worktree" : safetyReason(wt.safety)}
+          // An ORPHAN is removable too, by a different route: git
+          // cannot remove it (its repository is gone), so the Rust side
+          // deletes the directory after re-checking that it is still
+          // orphaned. Gating it on `safe` left the user looking at 2.5
+          // GB they were told about and could not act on.
+          disabled={(!safe && !orphaned) || removing}
+          onClick={() => (orphaned ? onRemoveOrphan(wt) : onRemove(wt))}
+          title={
+            orphaned
+              ? "Delete this directory — its repository is gone, so nothing about the contents can be checked first"
+              : safe
+                ? "Remove this worktree"
+                : safetyReason(wt.safety)
+          }
           className={`shrink-0 rounded border px-2 py-0.5 text-xs ${
-            safe && !removing
+            (safe || orphaned) && !removing
               ? "border-[#f85149]/40 text-[#f85149] hover:bg-[#f85149]/10"
               : "border-[#30363d] text-[#8b949e] opacity-50"
           }`}
         >
-          {removing ? "Removing…" : "Remove"}
+          {removing ? "Removing…" : orphaned ? "Delete" : "Remove"}
         </button>
       )}
       {/* The disclosure, not a second action: the row keeps its
@@ -431,6 +451,41 @@ export function WorktreesPage() {
   const assessed = new Set(assessedPaths ?? []);
   const [forcing, setForcing] = useState<Worktree | null>(null);
   const [pullingPath, setPullingPath] = useState<string | null>(null);
+  const removeOrphanFn = useRemoveOrphan();
+  // Every repository's sizes, only on the all-repositories view. One
+  // query per repository so results land progressively -- the full set
+  // takes ~2 minutes, and blocking on it is what made this page look
+  // stuck.
+  const {
+    sizes: allSizes,
+    pending: sizesPending,
+    total: sizesTotal,
+  } = useAllWorktreeSizes(
+    (repos ?? []).map((r) => r.path),
+    !filters.repo,
+  );
+
+  /// Delete an orphaned directory, reporting the Rust side's own words.
+  ///
+  /// No confirmation dialog: nothing about the contents can be checked
+  /// -- that is the definition of an orphan -- so a dialog could only
+  /// repeat what the button's title already says. The re-check that
+  /// matters happens in Rust, at the moment of deletion.
+  const runRemoveOrphan = (wt: Worktree) => {
+    setRemoving(wt.path);
+    removeOrphanFn(wt.path).then(
+      () => {
+        setRemoving(null);
+        toast.success(`Deleted ${pathBasename(wt.path)}`);
+      },
+      (e: unknown) => {
+        setRemoving(null);
+        toast.error(`Could not delete ${pathBasename(wt.path)}`, {
+          description: typeof e === "string" ? e : undefined,
+        });
+      },
+    );
+  };
   const pull = usePullCheckout();
 
   /// Fast-forward the main checkout, reporting git's own words either
@@ -492,8 +547,60 @@ export function WorktreesPage() {
   // would mean either deleting without a safety check or blocking the
   // view on a 16-second scan; showing where the disk went, and sending
   // the user into the repo to act, is neither.
+  // The Orphaned section. Its own branch rather than a repo page: an
+  // orphan belongs to no repository, so `selected` cannot express it,
+  // and the per-repo page's safety affordances do not apply.
+  if (filters.repo === ORPHAN_FILTER) {
+    const orphans = (repos ?? [])
+      .flatMap((r) => r.worktrees)
+      .filter((w) => isOrphaned(w.safety));
+    return (
+      <div className="rounded-md border border-[#30363d]">
+        <div className="border-b border-[#30363d] px-4 py-3">
+          <span className="text-sm font-semibold text-[#e6edf3]">
+            {orphans.length} orphaned worktree{orphans.length === 1 ? "" : "s"}
+          </span>
+          {/* Says what these ARE before offering to delete them. The
+              row's own reason says nothing can be checked; this says
+              why that is, which is what makes the Delete button a
+              considered choice rather than a gamble. */}
+          <p className="mt-1 text-xs text-[#8b949e]">
+            The repository each of these belonged to has been deleted, so git can
+            no longer read them — not whether they hold uncommitted work, and not
+            whether their branch ever merged. Deleting one removes the directory
+            outright.
+          </p>
+        </div>
+        {orphans.map((wt) => (
+          <Row
+            key={wt.path}
+            wt={wt}
+            repoPath=""
+            assessed={false}
+            onForce={setForcing}
+            onRemoveOrphan={runRemoveOrphan}
+            onPull={runPull}
+            onRemove={setPending}
+            onClaudify={claudify}
+            removing={removing === wt.path}
+          />
+        ))}
+      </div>
+    );
+  }
+
   if (!filters.repo) {
-    const { worktrees, totalBytes, sizesComplete } = rollupRepos(repos);
+    // Sizes merged in as each repository answers. MEASURED: the full
+    // set takes ~2 minutes, so awaiting it would show dashes for that
+    // long with nothing to explain them -- which is what was reported.
+    const withSizes = repos.map((r) => ({
+      ...r,
+      worktrees: r.worktrees.map((w) => ({
+        ...w,
+        size_bytes: allSizes.get(w.path) ?? w.size_bytes,
+      })),
+    }));
+    const { worktrees, totalBytes, sizesComplete } = rollupRepos(withSizes);
     return (
       <div className="rounded-md border border-[#30363d]">
         <div className="flex items-baseline justify-between border-b border-[#30363d] px-4 py-3">
@@ -505,26 +612,22 @@ export function WorktreesPage() {
             {/* "at least" while any size is still unmeasured: a total
                 that silently counts unknowns as zero is a confident
                 wrong answer. */}
-            {/* "at least" while any size is still unmeasured: a total
-                that silently counts unknowns as zero is a confident
-                wrong answer. */}
             {sizesComplete ? "" : "at least "}
             {formatSize(totalBytes)}
           </span>
         </div>
-        {/* Sizes are measured PER REPOSITORY -- `size_repo` runs `du`
-            over one repo's worktrees, and the query is keyed on the
-            SELECTED repo, so on this view it never runs at all. The
-            page read "at least 0 B" with a dash in every row
-            indefinitely, which is indistinguishable from a measurement
-            that failed rather than one never started.
-
-            Said once, above the rows, rather than replacing the total:
-            a partially-measured set can legitimately total zero, and
-            that is a real answer. */}
-        {worktrees.length > 0 && worktrees.every((w) => w.size_bytes == null) ? (
+        {/* Sizes arrive one repository at a time, and this says how
+            many are still outstanding.
+            
+            MEASURED: the full set takes ~2 minutes on a real machine
+            (158 worktrees, `du` per worktree). Awaiting all of it
+            showed dashes for that long with nothing to explain them.
+            A count that visibly falls is the difference between "still
+            working" and "broken". */}
+        {sizesPending > 0 ? (
           <p className="border-b border-[#30363d] px-4 py-2 text-xs text-[#8b949e]">
-            Open a repository to measure sizes.
+            Measuring sizes — {sizesPending} of {sizesTotal} repositor
+            {sizesTotal === 1 ? "y" : "ies"} still to go.
           </p>
         ) : null}
         {worktrees.map((wt) => (
@@ -892,6 +995,7 @@ export function WorktreesPage() {
               pr={prForWorktree(prs, selected?.identity ?? null, wt.branch)}
               assessed={assessed.has(wt.path)}
               onForce={setForcing}
+              onRemoveOrphan={runRemoveOrphan}
               onPull={runPull}
               pulling={pullingPath === wt.path}
               onRemove={setPending}

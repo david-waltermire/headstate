@@ -1,4 +1,4 @@
-import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { safeUnlisten } from "./unlisten";
 import { timed } from "./diag";
@@ -21,6 +21,7 @@ import {
   listWorktrees,
   removeWorktree,
   pullCheckout,
+  removeOrphan,
   assessedWorktrees,
   dockerBuildDetail,
   dockerBuilds,
@@ -545,6 +546,47 @@ export function useWorktreeSizes(repoPath: string | undefined) {
   });
 }
 
+/// Sizes for EVERY repository, landing one repository at a time.
+///
+/// MEASURED: sizing all 41 repositories on a real machine takes 119
+/// seconds -- `size_repo` shells out to `du` per worktree, and 158
+/// worktrees at roughly 0.75s each is the whole cost. Issuing them all
+/// and awaiting the set would leave the all-repositories view showing
+/// dashes for two minutes with nothing to say why, which is exactly
+/// what was reported.
+///
+/// So: one query PER REPOSITORY, merged as each resolves. The view
+/// fills in progressively and can say how much is still outstanding.
+/// The per-repository queries share `worktree-sizes` keys with
+/// `useWorktreeSizes`, so opening a repository afterwards is free.
+///
+/// `staleTime` is long for the same reason it is on the single-repo
+/// hook: a worktree's size does not change unless its contents do.
+export function useAllWorktreeSizes(repoPaths: string[], enabled: boolean) {
+  const results = useQueries({
+    queries: repoPaths.map((path) => ({
+      queryKey: ["worktree-sizes", path],
+      queryFn: async () => new Map(await sizeWorktrees(path)),
+      enabled,
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
+
+  // Merged into one map, so callers do not care that it arrived in
+  // pieces.
+  const sizes = new Map<string, number>();
+  for (const r of results) {
+    if (r.data) for (const [k, v] of r.data) sizes.set(k, v);
+  }
+  return {
+    sizes,
+    /// How many repositories have not answered yet -- the number that
+    /// makes a partially-filled page legible rather than broken.
+    pending: results.filter((r) => r.isFetching).length,
+    total: results.length,
+  };
+}
+
 /// Remove a worktree, then refresh both queries.
 ///
 /// Deliberately NOT optimistic. Every other mutation in this app updates
@@ -565,6 +607,19 @@ export function usePullCheckout() {
     pullCheckout(path).then((out) => {
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
       return out;
+    });
+}
+
+/// Delete an orphaned worktree directory.
+///
+/// Invalidates rather than patching a row: an orphan's removal changes
+/// what the Orphaned section contains, and that section disappears
+/// entirely at zero.
+export function useRemoveOrphan() {
+  const qc = useQueryClient();
+  return (path: string) =>
+    removeOrphan(path).then(() => {
+      void qc.invalidateQueries({ queryKey: ["worktrees"] });
     });
 }
 

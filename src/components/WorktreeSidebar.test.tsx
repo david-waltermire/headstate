@@ -10,12 +10,32 @@ import { WorktreeSidebar } from "./WorktreeSidebar";
 import { useFilters } from "../store/filters";
 
 /// `worktrees` includes the MAIN checkout, so a repo with only main has
-/// a length of 1 and nothing anyone would remove.
+/// nothing anyone would remove.
+///
+/// `is_main` is set on the first entry, which the real scanner always
+/// does. The fixture omitted it before, and the count was computed as
+/// `n - 1` -- so the two agreed by coincidence rather than because the
+/// fixture was right. An ORPHANED repo has no main at all, which is
+/// what broke that arithmetic.
 const repo = (name: string, worktreeCount: number) => ({
   identity: null,
   name,
   path: `/code/${name}`,
-  worktrees: Array.from({ length: worktreeCount }, (_, i) => ({ path: `/w/${name}/${i}` })),
+  worktrees: Array.from({ length: worktreeCount }, (_, i) => ({
+    path: `/w/${name}/${i}`,
+    is_main: i === 0,
+    safety: { kind: "safe" as const },
+  })),
+});
+
+/// A repository record for an ORPHAN: one worktree, no main checkout.
+const orphanRepo = (name: string) => ({
+  identity: null,
+  name,
+  path: `/code/${name}`,
+  worktrees: [
+    { path: `/code/${name}`, is_main: false, safety: { kind: "orphaned" as const } },
+  ],
 });
 
 beforeEach(() => {
@@ -63,5 +83,47 @@ describe("WorktreeSidebar", () => {
     render(<WorktreeSidebar />);
     expect(screen.getByText(/No repositories found/i)).toBeTruthy();
     expect(screen.queryByText(/No worktrees in any scanned/i)).toBeNull();
+  });
+
+  /// Reported: orphans were invisible in the sidebar. `n - 1` assumed
+  /// every repository has a main checkout -- an orphan has one entry
+  /// and no main, so it counted as zero and the row was hidden.
+  describe("orphans", () => {
+    it("gives them their own section rather than a repo row", () => {
+      repos.mockReturnValue([repo("busy", 3), orphanRepo("veil-coh")]);
+      render(<WorktreeSidebar />);
+      expect(screen.getByText("Orphaned")).toBeTruthy();
+      // NOT listed among the repositories: an orphan is not one.
+      expect(screen.queryByText("veil-coh")).toBeNull();
+    });
+
+    it("counts them, and does not fold them into the repository total", () => {
+      repos.mockReturnValue([
+        repo("busy", 3),
+        orphanRepo("a"),
+        orphanRepo("b"),
+      ]);
+      render(<WorktreeSidebar />);
+      const orphan = screen.getByText("Orphaned").closest("button");
+      expect(orphan?.textContent).toContain("2");
+    });
+
+    /// A permanent empty heading trains the eye to skip it.
+    it("is absent entirely when there are none", () => {
+      repos.mockReturnValue([repo("busy", 3)]);
+      render(<WorktreeSidebar />);
+      expect(screen.queryByText("Orphaned")).toBeNull();
+    });
+
+    /// The reported symptom behind the 120-vs-123 mismatch: the
+    /// sidebar's `n - 1` undercounted by exactly the number of
+    /// repositories with no main checkout.
+    it("counts a repository by what is not its main checkout", () => {
+      repos.mockReturnValue([repo("busy", 3), orphanRepo("orphan")]);
+      render(<WorktreeSidebar />);
+      const all = screen.getByText("All repositories").closest("button");
+      // 2 removable in `busy`, plus the 1 orphan = 3.
+      expect(all?.textContent).toContain("3");
+    });
   });
 });
