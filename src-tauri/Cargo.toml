@@ -43,6 +43,13 @@ tokio = { version = "1.53", features = ["full"] }
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
 tauri-plugin-log = "2.9.0"
+# Auto-update. Verifies an Ed25519 signature over each bundle with the
+# public key in `tauri.conf.json` -- separate from Apple code signing
+# (#23) and not a substitute for it: this proves the archive came from
+# our release pipeline, not that macOS trusts the app.
+tauri-plugin-updater = "2"
+# The updater needs to restart the app to apply an update.
+tauri-plugin-process = "2"
 log = "0.4.33"
 tauri-plugin-notification = "2.3.3"
 # Start at login. A tray app whose value is a live badge while hidden is

@@ -193,6 +193,19 @@ jobs:
           APPLE_ID: ${{ env.HAS_SIGNING_CERT == 'true' && secrets.APPLE_ID || '' }}
           APPLE_PASSWORD: ${{ env.HAS_SIGNING_CERT == 'true' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ env.HAS_SIGNING_CERT == 'true' && secrets.APPLE_TEAM_ID || '' }}
+          # The UPDATER's own signature, unrelated to Apple signing above.
+          # Tauri verifies this Ed25519 signature against the public key
+          # in tauri.conf.json before it will install anything, so a
+          # bundle built without this key can never be applied as an
+          # update -- which is why the build fails loudly below rather
+          # than shipping unsignable artifacts.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # REQUIRED even though the key has no password. Without it
+          # Tauri prompts on a terminal that does not exist in CI and
+          # fails with "Device not configured (os error 6)" -- found by
+          # running the signed build by hand before trusting the
+          # pipeline with it.
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
           set -euo pipefail
           if [ "${HAS_SIGNING_CERT:-}" != "true" ]; then
@@ -201,6 +214,15 @@ jobs:
             unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD
             unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
             echo "No signing certificate: building an unsigned bundle."
+          fi
+          # A missing updater key is a HARD failure, not a warning. An
+          # unsigned bundle looks identical in the release but can never
+          # be installed as an update -- the plugin rejects it before
+          # writing anything to disk. Discovering that from a user
+          # report is much worse than failing here.
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is not set; updates would be unusable." >&2
+            exit 1
           fi
           # Only macOS builds a universal binary; the other targets are
           # the runner's own architecture, so --target is omitted there
@@ -234,11 +256,18 @@ jobs:
           mkdir -p release-assets
           BASE=src-tauri/target
           if [ -n "${{ matrix.target }}" ]; then BASE="$BASE/${{ matrix.target }}"; fi
+          # `.sig` files are the UPDATER's signatures, one per updater
+          # bundle. Without them the manifest below has nothing to point
+          # at and the plugin refuses every download -- so they are
+          # collected here alongside the installers rather than being
+          # left in the build tree.
           find "$BASE/release/bundle" -type f \
             \( -name '*.dmg' -o -name '*.exe' -o -name '*.msi' \
-               -o -name '*.deb' -o -name '*.AppImage' \) \
+               -o -name '*.deb' -o -name '*.AppImage' \
+               -o -name '*.tar.gz' -o -name '*.sig' \) \
             -exec cp {} release-assets/ \;
           cp Headstate-*.app.tar.gz release-assets/ 2>/dev/null || true
+          cp Headstate-*.app.tar.gz.sig release-assets/ 2>/dev/null || true
           ls -la release-assets
           # A platform that builds but produces nothing must fail here,
           # not silently contribute zero assets to the release.
@@ -328,6 +357,54 @@ jobs:
           **Windows** — this build is unsigned, so SmartScreen will warn on first run. Choose \"More info\" then \"Run anyway\".
 
           **Linux** — \`.deb\` for Debian and Ubuntu, \`.AppImage\` for everything else. Mark the AppImage executable with \`chmod +x\` before running it."
+
+          # The updater manifest. `latest.json` is what the plugin
+          # fetches; it maps each platform to a download URL and the
+          # Ed25519 signature the plugin verifies before installing.
+          #
+          # Built here rather than by a tauri action so the URLs point at
+          # THIS tag's assets, and so a missing signature is a hard
+          # failure: an entry with no signature would advertise an
+          # update the plugin then refuses, which is worse than not
+          # advertising it.
+          VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST_PLATFORMS=""
+          add_platform() {
+            local key="$1" bundle="$2"
+            local sig_file="release-assets/${bundle}.sig"
+            [ -f "release-assets/$bundle" ] || return 0
+            if [ ! -f "$sig_file" ]; then
+              echo "No signature for $bundle; refusing to advertise it." >&2
+              exit 1
+            fi
+            local url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${bundle}"
+            local sig
+            sig=$(cat "$sig_file")
+            MANIFEST_PLATFORMS="${MANIFEST_PLATFORMS}$(printf '"%s":{"signature":"%s","url":"%s"},' "$key" "$sig" "$url")"
+          }
+
+          # macOS ships a universal binary, so both architectures resolve
+          # to the same bundle.
+          add_platform "darwin-aarch64" "Headstate-${GITHUB_REF_NAME}.app.tar.gz"
+          add_platform "darwin-x86_64"  "Headstate-${GITHUB_REF_NAME}.app.tar.gz"
+          for f in release-assets/*_x64-setup.exe; do
+            [ -f "$f" ] && add_platform "windows-x86_64" "$(basename "$f")"
+          done
+          for f in release-assets/*_amd64.AppImage; do
+            [ -f "$f" ] && add_platform "linux-x86_64" "$(basename "$f")"
+          done
+
+          if [ -z "$MANIFEST_PLATFORMS" ]; then
+            echo "No signed updater bundles; not publishing a manifest." >&2
+            exit 1
+          fi
+
+          printf '{"version":"%s","pub_date":"%s","platforms":{%s}}\n' \
+            "$VERSION" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "${MANIFEST_PLATFORMS%,}" > release-assets/latest.json
+          python3 -m json.tool release-assets/latest.json > /dev/null
+          ASSETS+=("release-assets/latest.json")
 
           # Idempotent: a rerun after a partial failure -- exactly what
           # happened on the first v2.0.1 attempt, where all three platforms

@@ -90,6 +90,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - name: Build the app bundle
+        env:
+          # Needed here too, not just in the release workflow: once
+          # `tauri.conf.json` carries an updater public key, `tauri
+          # build` refuses to produce a bundle without the matching
+          # private key -- "A public key has been found, but no private
+          # key". Found by this very job failing on the updater PR.
+          #
+          # Signing in CI also means the bundle this job builds is the
+          # same shape the release builds, rather than a variant that
+          # only compiles here.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: yarn tauri build --bundles app
 
       # The release ships a UNIVERSAL binary, but this job builds native
