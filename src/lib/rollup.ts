@@ -42,15 +42,24 @@ export function rollupRepos(repos: WorktreeRepo[]): {
     }
   }
 
-  // Largest first, because finding where the disk went is the point.
-  // Unmeasured sorts ABOVE the smallest measured rows rather than to the
-  // bottom: an unknown size is unknown, not small, and burying it would
-  // hide the very rows still being measured.
-  worktrees.sort((a, b) => {
-    const aSize = a.size_bytes ?? Infinity;
-    const bSize = b.size_bytes ?? Infinity;
-    return bSize - aSize;
-  });
+  // A STABLE order while sizes are still arriving, then largest first.
+  //
+  // The previous rule sorted unmeasured rows as `Infinity`, so they sat
+  // above every measured one. That was defensible when a handful were
+  // outstanding -- an unknown size is unknown, not small -- but this
+  // view now starts with ALL of them unmeasured, so the visible page
+  // was by construction the rows with no data, and each arrival moved
+  // rows out from under the cursor.
+  //
+  // The per-repository view already holds a stable order for exactly
+  // this reason. Sorting by path until everything has answered means
+  // rows fill in WHERE THEY ARE, which is what "populate as it becomes
+  // available" means.
+  worktrees.sort((a, b) =>
+    sizesComplete
+      ? (b.size_bytes ?? 0) - (a.size_bytes ?? 0)
+      : a.path.localeCompare(b.path),
+  );
 
   return { worktrees, totalBytes, sizesComplete };
 }

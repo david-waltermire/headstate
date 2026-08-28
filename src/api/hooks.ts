@@ -606,6 +606,13 @@ export function usePullCheckout() {
   return (path: string) =>
     pullCheckout(path).then((out) => {
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
+      // AND the safety classification, which is what actually renders
+      // the "N commits behind upstream" line. Invalidating only the
+      // base list left the row yellow for ~10 seconds after a
+      // SUCCESSFUL pull, until something else happened to refresh it --
+      // so the button looked like it had done nothing, which is exactly
+      // what #346 reported.
+      void qc.invalidateQueries({ queryKey: ["worktree-safety"] });
       return out;
     });
 }

@@ -87,13 +87,29 @@ describe("rollupRepos", () => {
     expect(rolled.worktrees[0].size_bytes).toBe(900);
   });
 
-  // An unmeasured worktree must not sort as if it were empty and vanish
-  // to the bottom -- it is unknown, not small.
-  it("keeps unmeasured worktrees above the smallest measured ones", () => {
+  /// #360: reported as "can information populate as it becomes
+  /// available?" while the countdown was visibly running.
+  ///
+  /// It WAS populating. Unmeasured rows sorted as `Infinity`, so they
+  /// sat above every measured one -- the visible page was by
+  /// construction the rows with no data, and each arrival moved rows
+  /// out from under the cursor.
+  it("holds a stable order while any size is still arriving", () => {
     const rolled = rollupRepos([
-      repo("a", [wt({ size_bytes: 1 })]),
-      repo("b", [wt({ path: "/w/b", size_bytes: null })]),
+      repo("z", [wt({ path: "/w/z", size_bytes: 1 })]),
+      repo("a", [wt({ path: "/w/a", size_bytes: null })]),
     ]);
-    expect(rolled.worktrees[0].size_bytes).toBeNull();
+    // By path, not by size: a row must not move when its number lands.
+    expect(rolled.worktrees.map((w) => w.path)).toEqual(["/w/a", "/w/z"]);
+  });
+
+  /// Once everything has answered, largest first -- finding where the
+  /// disk went is the point of the view.
+  it("sorts by size once every size has arrived", () => {
+    const rolled = rollupRepos([
+      repo("a", [wt({ path: "/w/a", size_bytes: 1 })]),
+      repo("z", [wt({ path: "/w/z", size_bytes: 900 })]),
+    ]);
+    expect(rolled.worktrees.map((w) => w.path)).toEqual(["/w/z", "/w/a"]);
   });
 });
