@@ -1,5 +1,6 @@
 import { ExternalLink } from "./ExternalLink";
 import { AlertTriangle } from "lucide-react";
+import { HelpButton } from "./HelpButton";
 import type { PullRequest } from "@/types/pr";
 import { needsAttention } from "@/lib/derive";
 
@@ -51,6 +52,10 @@ export function PrioritiesStrip({
       <h2 className="flex items-center gap-2 border-b border-[#f85149]/30 px-4 py-2 text-sm font-semibold text-[#f85149]">
         <AlertTriangle className="h-4 w-4" aria-hidden="true" />
         Needs your attention ({blocked.length})
+        {/* The count is correct and the RULE behind it is invisible --
+            which is what made "where are the missing 6?" a reasonable
+            question rather than a misreading. */}
+        <HelpButton topic="needs-attention" />
       </h2>
       <ul>
         {blocked.map((pr) => (

@@ -12,6 +12,7 @@ import {
 } from "../api/hooks";
 import { dockerRestart, dockerRunningContainers, dockerStart } from "../api/tauri";
 import { formatDockerSize, imageState, imageTone, isStale, isSuperseded } from "../lib/docker";
+import { HelpButton } from "./HelpButton";
 import {
   buildForImage,
   cachePercent,
@@ -98,6 +99,9 @@ function DiskSummary({
               >
                 {cacheHealth.percent}% cached
               </span>
+            ) : null}
+            {cacheHealth ? (
+              <HelpButton topic="build-cache" />
             ) : null}
             {du.build_cache_bytes > 0 ? (
               <button
@@ -213,7 +217,13 @@ function ImageRow({
               <dd className="font-mono">
                 {img.origin.commit} — {img.origin.subject}
               </dd>
-              <dt>Built from</dt>
+              <dt className="inline-flex items-center">
+                Built from
+                {/* Empty provenance looks identical whether the image
+                    was pulled or the app is looking in the wrong
+                    place -- which it was, silently, until #344. */}
+                <HelpButton topic="image-provenance" />
+              </dt>
               <dd className="font-mono">{img.origin.context ?? img.origin.repo_path}</dd>
               <dt>Branch</dt>
               <dd>{img.origin.merged ? "merged" : "still open"}</dd>
@@ -379,7 +389,12 @@ export function DockerPage() {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3 text-sm">
-        <span className="font-semibold">Images</span>
+        <span className="inline-flex items-center font-semibold">
+          Images
+          {/* Two near-identical words decide what a bulk removal takes,
+              and the difference was already reported as unreadable. */}
+          <HelpButton topic="image-states" />
+        </span>
         <span className="text-[#8b949e]">{shown.length}</span>
         {stale.length > 0 ? (
           <button

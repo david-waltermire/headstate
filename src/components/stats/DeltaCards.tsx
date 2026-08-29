@@ -1,4 +1,5 @@
 import { ArrowDown, ArrowUp, Minus } from "lucide-react";
+import { HelpButton } from "../HelpButton";
 import { Card } from "@/components/ui/card";
 import { formatPct, pctChange } from "@/lib/stats";
 import type { Periods } from "@/types/pr";
@@ -60,7 +61,14 @@ function DeltaCard({
 export function DeltaCards({ periods }: { periods: Periods }) {
   const netFlow = periods.opened_week_current - periods.week_current;
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <>
+      {/* Why "+150% opened" is not green: intake and throughput are
+          different axes, and only one of them is scored. */}
+      <div className="flex items-center gap-1 text-xs text-[#8b949e]">
+        <span>Change against the previous period</span>
+        <HelpButton topic="stats-deltas" />
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <DeltaCard
         label="Merged this week"
         value={String(periods.week_current)}
@@ -93,5 +101,6 @@ export function DeltaCards({ periods }: { periods: Periods }) {
         polarity="neutral"
       />
     </div>
+    </>
   );
 }

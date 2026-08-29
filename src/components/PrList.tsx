@@ -1,5 +1,6 @@
 import type { PullRequest } from "@/types/pr";
 import { PrRow } from "@/components/PrRow";
+import { HelpButton } from "@/components/HelpButton";
 import { useFilters } from "@/store/filters";
 import { prKey } from "@/components/BulkBar";
 
@@ -92,6 +93,10 @@ export function PrList({
             </label>
           ) : null}
           {prs.length} Open
+          {/* One icon for the row vocabulary, at the head of the list
+              rather than on every row -- a `?` per row is the noise
+              that teaches people to ignore all of them. */}
+          <HelpButton topic="pending-reviewers" />
         </span>
         {total !== undefined && total > prs.length ? (
           <span className="text-xs text-[#d29922]">

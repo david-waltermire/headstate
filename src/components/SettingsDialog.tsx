@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { HelpButton } from "./HelpButton";
 import {
   useAutostart,
   useNotifyPrefs,
@@ -81,9 +82,13 @@ export function SettingsDialog({
             dialog instead of scrolling -- which is the bug. */}
         <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
         <div className="mt-4 flex flex-col gap-1">
-          <label htmlFor="poll-interval" className="text-sm font-medium">
-            Check GitHub every
-          </label>
+          <div className="flex items-center">
+            <label htmlFor="poll-interval" className="text-sm font-medium">
+              Check GitHub every
+            </label>
+            {/* Outside the label, for the same reason as above. */}
+            <HelpButton topic="poll-interval" />
+          </div>
           <select
             id="poll-interval"
             value={seconds ?? 120}
@@ -152,9 +157,20 @@ export function SettingsDialog({
         </div>
 
         <div className="mt-5 flex flex-col gap-1">
-          <label htmlFor="worktree-dirs" className="text-sm font-medium">
-            Directories to scan for repositories
-          </label>
+          <div className="flex items-center">
+            <label htmlFor="worktree-dirs" className="text-sm font-medium">
+              Directories to scan for repositories
+            </label>
+            {/* OUTSIDE the label: a button nested inside one joins its
+                accessible name, so the field would announce as
+                "Directories to scan for repositories About scanned
+                directories".
+                
+                Feeds Docker provenance too, which is not guessable from
+                a setting that reads as being about worktrees -- and is
+                the first thing to check when provenance is empty. */}
+            <HelpButton topic="scanned-dirs" />
+          </div>
           <textarea
             id="worktree-dirs"
             value={value}
@@ -256,6 +272,11 @@ export function SettingsDialog({
             />
             Write a detailed timing log (for diagnosing slowness)
           </label>
+          {/* This log is meant to be SENT to someone, so what it
+              contains has to be checkable rather than trusted. */}
+          <span className="-mt-1 self-start">
+            <HelpButton topic="diagnostic-log" />
+          </span>
           {ui?.diagnostic_logging ? (
             <p className="text-xs text-[#8b949e]">
               Records how long each GitHub request takes. Counts and timings only —

@@ -34,6 +34,7 @@ import {
   upstreamShort,
   upstreamTone,
 } from "../lib/worktrees";
+import { HelpButton } from "./HelpButton";
 import { claudifyCommand } from "../api/tauri";
 import { relativeTime } from "../lib/time";
 import { assessmentSummary } from "../lib/assessment";
@@ -284,6 +285,11 @@ function Row({
         >
           {pulling ? "Updating…" : "Update to latest"}
         </button>
+      ) : null}
+      {/* Beside the action, since its two limits -- refuses on a dirty
+          tree, never merges -- are not guessable from the label. */}
+      {wt.is_main ? (
+        <HelpButton topic="update-checkout" />
       ) : null}
       {claudifiable ? (
         <button
@@ -559,6 +565,9 @@ export function WorktreesPage() {
         <div className="border-b border-[#30363d] px-4 py-3">
           <span className="text-sm font-semibold text-[#e6edf3]">
             {orphans.length} orphaned worktree{orphans.length === 1 ? "" : "s"}
+            {/* The most important help in the app: this is the only
+                place it offers a delete having verified nothing. */}
+            <HelpButton topic="orphaned-worktrees" />
           </span>
           {/* Says what these ARE before offering to delete them. The
               row's own reason says nothing can be checked; this says
@@ -721,7 +730,13 @@ export function WorktreesPage() {
             could not check what is safe — retry
           </button>
         ) : (
-          <span className="text-xs text-[#3fb950]">{safeCount} safe to remove</span>
+          <span className="inline-flex items-center text-xs text-[#3fb950]">
+            {safeCount} safe to remove
+            {/* This view deletes directories on the strength of a
+                one-line verdict. The rules behind it run to several
+                paragraphs and lived only in source comments. */}
+            <HelpButton topic="worktree-safety" />
+          </span>
         )}
         {!classifying && sizing ? (
           <span className="text-xs text-[#8b949e]">measuring sizes…</span>

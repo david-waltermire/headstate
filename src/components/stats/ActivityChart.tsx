@@ -1,4 +1,5 @@
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
+import { HelpButton } from "../HelpButton";
 import { Card } from "@/components/ui/card";
 import {
   ChartContainer,
@@ -39,7 +40,12 @@ export function ActivityChart({
     <Card className="px-4">
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-sm font-semibold">Pull request activity</div>
+          <div className="inline-flex items-center text-sm font-semibold">
+            Pull request activity
+            {/* Beside the chart the UTC boundary actually distorts,
+                not on a page-level banner. */}
+            <HelpButton topic="stats-timezone" />
+          </div>
           {/* Buckets come from GitHub's bare date qualifiers, which it
               evaluates in UTC, so a 6pm Pacific merge lands in the next
               day's column. Aggregates are unaffected (the shift is

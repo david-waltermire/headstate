@@ -73,7 +73,9 @@ describe("TriageChips", () => {
   // count and the filter were computed by different code.
   it("every chip's count equals the number of PRs its own filter yields", () => {
     render(<TriageChips prs={PRS} now={NOW} />);
-    for (const btn of screen.getAllByRole("button")) {
+    // The CHIPS, not every button: a help button sits beside them now,
+    // and it has no count to check.
+    for (const btn of Array.from(document.querySelectorAll<HTMLElement>("[data-chip]"))) {
       const shown = Number(btn.textContent?.match(/\d+/)?.[0]);
       fireEvent.click(btn);
       const listed = applyFilters(PRS, useFilters.getState().filtersByView[useFilters.getState().view], NOW).length;

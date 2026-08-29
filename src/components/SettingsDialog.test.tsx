@@ -74,4 +74,15 @@ describe("SettingsDialog", () => {
     ).map((o) => Number(o.getAttribute("value")));
     expect(Math.min(...opts)).toBeGreaterThanOrEqual(60);
   });
+
+  /// A `<button>` nested inside a `<label>` joins that label's
+  /// accessible name, so a help icon there would make the field
+  /// announce as "Directories to scan for repositories About scanned
+  /// directories". Caught by getByLabelText finding two matches.
+  it("keeps help buttons out of field labels", () => {
+    open();
+    for (const label of Array.from(document.querySelectorAll("label"))) {
+      expect(label.querySelector("button")).toBeNull();
+    }
+  });
 });

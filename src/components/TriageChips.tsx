@@ -2,6 +2,7 @@ import type { PullRequest } from "@/types/pr";
 import type { Filters } from "@/lib/derive";
 import { deriveStats, hasUnresolvedThreads, isStale } from "@/lib/derive";
 import { useActiveFilters, useFilters } from "@/store/filters";
+import { HelpButton } from "./HelpButton";
 
 /// Clickable counters above the list.
 ///
@@ -68,7 +69,11 @@ export function TriageChips({ prs, now = new Date() }: { prs: PullRequest[]; now
   if (active.length === 0) return null;
 
   return (
-    <div className="mb-3 flex flex-wrap gap-2">
+    <div className="mb-3 flex flex-wrap items-center gap-2">
+      {/* These look like a tally and are not one -- they overlap by
+          design, so they do not sum to the total. That is worth one
+          icon rather than a sentence taking permanent space. */}
+      <HelpButton topic="triage-chips" />
       {active.map((chip) => {
         const isOn = Object.keys(chip.preset).every(
           (k) => filters[k as keyof Filters] === true,
@@ -77,6 +82,7 @@ export function TriageChips({ prs, now = new Date() }: { prs: PullRequest[]; now
           <button
             key={chip.key}
             type="button"
+            data-chip={chip.key}
             aria-pressed={isOn}
             onClick={() =>
               applyPreset(

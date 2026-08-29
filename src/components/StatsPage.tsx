@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useCycleTrend, useHistory, useMergedDetail, usePeriods } from "../api/hooks";
 import { QueryError, errorMessage } from "./QueryError";
 import { ActivityChart } from "./stats/ActivityChart";
+import { HelpButton } from "./HelpButton";
 import { DeltaCards } from "./stats/DeltaCards";
 import { InsightCards } from "./stats/InsightCards";
 import { Outliers } from "./stats/Outliers";
@@ -77,6 +78,14 @@ export function StatsPage() {
 
   return (
     <div className="flex flex-col gap-3">
+      {/* One line for the caveat that governs every figure below: these
+          are drawn from a SAMPLE, and p90 is the maximum on a small
+          one. If the sample caveat can be made in only one place, it is
+          at the top of the view rather than on a card. */}
+      <div className="flex items-center gap-1 text-xs text-[#8b949e]">
+        <span>From a sample of recent merged pull requests</span>
+        <HelpButton topic="stats-sample" />
+      </div>
       {periods ? (
         <DeltaCards periods={periods} />
       ) : periodsQ.isError ? (
