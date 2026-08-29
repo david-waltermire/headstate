@@ -12,7 +12,13 @@ import {
 } from "../api/hooks";
 import { dockerRestart, dockerRunningContainers, dockerStart } from "../api/tauri";
 import { formatDockerSize, imageState, imageTone, isStale, isSuperseded } from "../lib/docker";
-import { buildForImage, cachePercent, cacheTone, formatDuration } from "../lib/buildJoin";
+import {
+  buildForImage,
+  cachePercent,
+  cacheTone,
+  formatDuration,
+  recentCacheHealth,
+} from "../lib/buildJoin";
 import { relativeTime } from "../lib/time";
 
 import type { DockerBuild, DockerImage } from "../types/pr";
@@ -48,8 +54,18 @@ function UsageRow({
 /// images sat beside 4.65GB of build cache and a 4.74GB orphaned volume.
 /// A page that listed only images would leave most of the waste
 /// invisible, so the summary leads.
-function DiskSummary({ onPrune }: { onPrune: () => void }) {
+function DiskSummary({
+  onPrune,
+  builds,
+}: {
+  onPrune: () => void;
+  /// For the cache-health figure. Empty is ordinary -- a machine that
+  /// has never built anything has no health to report, and the row
+  /// simply omits it.
+  builds: DockerBuild[];
+}) {
   const { data: du, isError } = useDockerDiskUsage(true);
+  const cacheHealth = recentCacheHealth(builds);
   if (isError) {
     // Vanishing silently is a wrong answer by omission: this panel leads
     // the page and is the argument for the feature existing.
@@ -68,15 +84,31 @@ function DiskSummary({ onPrune }: { onPrune: () => void }) {
         label="Build cache"
         size={du.build_cache_bytes}
         extra={
-          du.build_cache_bytes > 0 ? (
-            <button
-              type="button"
-              onClick={onPrune}
-              className="text-[#58a6ff] hover:underline"
-            >
-              clear
-            </button>
-          ) : null
+          <>
+            {/* The number the Builds page existed to show, next to the
+                cache it describes. A cold build is not a problem in
+                itself; a target that USED to be warm and is not any
+                more means something invalidated the cache. Sitting
+                beside "clear" also makes the trade legible -- clearing
+                is what turns this number cold. */}
+            {cacheHealth ? (
+              <span
+                className={cacheTone(cacheHealth.percent)}
+                title={`Across the last ${cacheHealth.count} builds, weighted by steps`}
+              >
+                {cacheHealth.percent}% cached
+              </span>
+            ) : null}
+            {du.build_cache_bytes > 0 ? (
+              <button
+                type="button"
+                onClick={onPrune}
+                className="text-[#58a6ff] hover:underline"
+              >
+                clear
+              </button>
+            ) : null}
+          </>
         }
       />
       <UsageRow label="Volumes" size={du.volumes_bytes} />
@@ -378,6 +410,7 @@ export function DockerPage() {
       </div>
 
       <DiskSummary
+        builds={builds}
         onPrune={() =>
           // A week, not everything: the last day's cache is what makes
           // today's builds fast, while a month-old entry is unlikely to

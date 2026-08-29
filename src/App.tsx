@@ -25,7 +25,6 @@ import { PrList } from "./components/PrList";
 import { ReviewChips } from "./components/ReviewChips";
 import { TriageChips } from "./components/TriageChips";
 import { WorktreeSidebar } from "./components/WorktreeSidebar";
-import { DockerBuildsPage } from "./components/DockerBuilds";
 import { DockerPage } from "./components/DockerPage";
 import { DockerSidebar } from "./components/DockerSidebar";
 import { WorktreesPage } from "./components/WorktreesPage";
@@ -221,9 +220,7 @@ export default function App() {
             {view === "to-review"
               ? "Pull requests to review"
               : view === "docker"
-                ? panel === "builds"
-                  ? "Docker builds"
-                  : "Docker images"
+                ? "Docker images"
                 : view === "worktrees"
                   ? "Worktrees"
                 : panel === "stats"
@@ -254,7 +251,7 @@ export default function App() {
           </div>
         ) : view === "docker" ? (
           <div className="p-4">
-            {panel === "builds" ? <DockerBuildsPage /> : <DockerPage />}
+            <DockerPage />
           </div>
         ) : view === "worktrees" ? (
           <div className="p-4">

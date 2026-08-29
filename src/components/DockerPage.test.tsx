@@ -380,4 +380,33 @@ describe("DockerPage", () => {
     render(<DockerPage />);
     expect(screen.getByText(/usermod -aG docker/)).toBeTruthy();
   });
+
+  /// #326: the Builds page was retired, so its one glanceable number
+  /// moved beside the cache it describes.
+  it("shows cache health next to the build cache it describes", () => {
+    state.builds = [
+      {
+        reference: "r1",
+        name: "api",
+        status: "completed",
+        started: "2026-08-28T00:00:00Z",
+        duration_secs: 30,
+        total_steps: 10,
+        cached_steps: 7,
+        context: null,
+        revision: null,
+      },
+    ] as never;
+    render(<DockerPage />);
+    expect(screen.getByText("70% cached")).toBeTruthy();
+  });
+
+  /// A machine that has never built anything has no health to report,
+  /// and a confident "0% cached" would be a wrong answer rather than an
+  /// absent one.
+  it("omits cache health when nothing has been built", () => {
+    state.builds = [] as never;
+    render(<DockerPage />);
+    expect(screen.queryByText(/% cached/)).toBeNull();
+  });
 });

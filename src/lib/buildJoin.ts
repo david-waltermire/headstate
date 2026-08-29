@@ -76,3 +76,34 @@ export function cacheTone(pct: number): string {
   if (pct >= 25) return "text-[#d29922]";
   return "text-[#8b949e]";
 }
+
+/// Cache health across the most recent builds.
+///
+/// The number the Builds page existed to show, reduced to the form that
+/// is worth a glance: a cold build is not a problem in itself, but a
+/// target that USED to be warm and is not any more means something
+/// invalidated the cache -- a reordered Dockerfile layer, usually.
+///
+/// Deliberately over recent builds rather than all of them. Averaging
+/// six months of history hides exactly the change worth noticing, and
+/// the answer to "is my build cache working today" is not improved by
+/// last quarter's numbers.
+export function recentCacheHealth(
+  builds: DockerBuild[],
+  recent = 10,
+): { percent: number; count: number } | null {
+  const usable = builds
+    .filter((b) => b.total_steps > 0)
+    // Newest first. `started` is RFC 3339, so lexical order is
+    // chronological.
+    .sort((a, b) => b.started.localeCompare(a.started))
+    .slice(0, recent);
+  if (usable.length === 0) return null;
+
+  // Weighted by STEPS, not a mean of percentages: a 2-step build at 0%
+  // and a 40-step build at 90% is not 45% cached, and the unweighted
+  // form would make one trivial target swing the whole number.
+  const cached = usable.reduce((n, b) => n + b.cached_steps, 0);
+  const total = usable.reduce((n, b) => n + b.total_steps, 0);
+  return { percent: Math.floor((cached * 100) / total), count: usable.length };
+}

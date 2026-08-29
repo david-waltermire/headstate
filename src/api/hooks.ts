@@ -23,7 +23,6 @@ import {
   pullCheckout,
   removeOrphan,
   assessedWorktrees,
-  dockerBuildDetail,
   dockerBuilds,
   dockerDanglingVolumes,
   dockerDiskUsage,
@@ -764,15 +763,6 @@ export function useDockerBuilds(enabled: boolean) {
   });
 }
 
-/// One build's context and revision, fetched only when selected.
-export function useDockerBuildDetail(reference: string | undefined) {
-  return useQuery({
-    queryKey: ["docker-build", reference],
-    queryFn: () => dockerBuildDetail(reference as string),
-    enabled: Boolean(reference),
-    staleTime: 60_000,
-  });
-}
 
 export function useDockerDiskUsage(enabled: boolean) {
   return useQuery({

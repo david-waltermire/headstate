@@ -681,18 +681,6 @@ pub fn docker_builds() -> Result<Vec<crate::docker::Build>, String> {
 }
 
 #[tauri::command]
-/// The build context and revision for one build, resolved on demand.
-pub fn docker_build_detail(reference: String) -> Result<crate::docker::Build, String> {
-    let out = crate::docker::docker(&["buildx", "history", "ls", "--format", "{{json .}}"])?;
-    let mut build = crate::docker::parse_history(&out)
-        .into_iter()
-        .find(|b| b.reference == reference)
-        .ok_or_else(|| "that build is no longer in history".to_string())?;
-    crate::docker::enrich(&mut build);
-    Ok(build)
-}
-
-#[tauri::command]
 /// Whether Docker can be talked to.
 ///
 /// A stopped daemon is a state, not an error: reporting it as a failure

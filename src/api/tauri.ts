@@ -185,8 +185,6 @@ export const latestRelease = () => invoke<string | null>("latest_release");
 
 export const dockerState = () => invoke<DockerState>("docker_state");
 export const dockerBuilds = () => invoke<DockerBuild[]>("docker_builds");
-export const dockerBuildDetail = (reference: string) =>
-  invoke<DockerBuild>("docker_build_detail", { reference });
 export const dockerImages = () => invoke<DockerImage[]>("docker_images");
 export const dockerDiskUsage = () => invoke<DockerDiskUsage>("docker_disk_usage");
 export const dockerRemoveImages = (ids: string[]) =>

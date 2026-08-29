@@ -1,4 +1,4 @@
-import { BarChart3, Hammer, Layers } from "lucide-react";
+import { BarChart3, Layers } from "lucide-react";
 import { type View, useFilters } from "../store/filters";
 import { ViewSwitcher } from "./ViewSwitcher";
 
@@ -12,7 +12,7 @@ export function DockerSidebar({
 }: {
   viewCounts?: Partial<Record<View, number>>;
 }) {
-  const { panel, setPanel, setView } = useFilters();
+  const { setPanel, setView } = useFilters();
 
   const rowClass = (active: boolean) =>
     `flex w-full items-center gap-2 rounded px-3 py-2 text-sm ${
@@ -23,26 +23,24 @@ export function DockerSidebar({
     <nav className="flex w-64 shrink-0 flex-col border-r border-[#30363d] p-3">
       <ViewSwitcher counts={viewCounts} />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* Images is the disk problem; Builds is the provenance and the
-            timing. Images leads because reclaiming space is why someone
-            opens this view. */}
+        {/* Builds no longer has its own page (#326). Its data was
+            diagnostic rather than actionable -- a log with no button on
+            it -- and both useful halves now sit where the decision is
+            made: a build's duration and cache ratio on the image row it
+            produced, and cache health beside the cache it describes.
+            
+            MEASURED before removing it: of 50 local builds, 41 matched
+            a surviving image and the other 9 were superseded builds of
+            targets that still appear among those 41. So nothing is
+            hidden that the image rows do not already say. */}
         <button
           type="button"
           onClick={() => setPanel("list")}
-          aria-pressed={panel !== "builds"}
-          className={rowClass(panel !== "builds")}
+          aria-pressed
+          className={rowClass(true)}
         >
           <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
           Images
-        </button>
-        <button
-          type="button"
-          onClick={() => setPanel("builds")}
-          aria-pressed={panel === "builds"}
-          className={rowClass(panel === "builds")}
-        >
-          <Hammer className="h-4 w-4 shrink-0" aria-hidden="true" />
-          Builds
         </button>
       </div>
 
