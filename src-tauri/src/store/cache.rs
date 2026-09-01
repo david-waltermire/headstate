@@ -31,6 +31,15 @@ impl CachedList {
             CachedList::Reviewing => 2,
         }
     }
+
+    /// For logs. Names the list a stale row belonged to, so "ignoring a
+    /// snapshot" says WHICH view will be slow to paint.
+    fn label(self) -> &'static str {
+        match self {
+            CachedList::Authored => "authored",
+            CachedList::Reviewing => "reviewing",
+        }
+    }
 }
 
 /// The whole snapshot is one JSON row. At ~30 PRs this is a few hundred KB,
@@ -49,18 +58,73 @@ pub fn save_snapshot(
     Ok(())
 }
 
+/// How old a cached list may be and still be shown.
+///
+/// The reviewing snapshot is written in exactly one place -- inside
+/// `get_reviewing`, which only runs when the To review view is open. The
+/// poll loop never touches it. So visiting that view once and not
+/// returning froze the snapshot forever, and every later cold start
+/// painted it as though it were current. On a real machine that meant a
+/// pull request merged four days earlier still listed as awaiting review.
+///
+/// An hour is well past the live query's 60s `staleTime`, so this never
+/// costs the cold-start win the cache exists for (#328): a snapshot
+/// written this session is always fresh enough. It only refuses one old
+/// enough to be wrong.
+const MAX_SNAPSHOT_AGE_SECS: i64 = 60 * 60;
+
+/// Whether a snapshot written at `fetched_at` is still worth showing.
+///
+/// `fetched_at` is written by SQLite's `datetime('now')`, which is UTC
+/// with no offset marker -- so it is parsed as naive and compared against
+/// UTC rather than local time. Reading it as local would make the cache
+/// look hours old or hours in the future depending on the zone, which is
+/// the kind of bug that only appears for users east of UTC.
+///
+/// An UNPARSEABLE timestamp counts as too old. That direction is
+/// deliberate: the cost of refusing a good snapshot is one slow view, and
+/// the cost of accepting a bad one is showing merged work as open.
+fn is_fresh(fetched_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let Ok(naive) = chrono::NaiveDateTime::parse_from_str(fetched_at, "%Y-%m-%d %H:%M:%S") else {
+        return false;
+    };
+    let age = now.signed_duration_since(naive.and_utc()).num_seconds();
+    // A NEGATIVE age -- a row written in the future -- is treated as
+    // fresh rather than as an error. Clocks move backwards (NTP
+    // corrections, timezone changes, a VM resuming), and refusing a
+    // snapshot for that would blank the view over something harmless.
+    age <= MAX_SNAPSHOT_AGE_SECS
+}
+
 pub fn load_snapshot(conn: &Connection, which: CachedList) -> Result<Vec<PullRequest>, StoreError> {
     // `.optional()`, not `.ok()`: the latter collapses every rusqlite error
     // into "no snapshot", so a corrupt or locked database would render as
     // "you have no pull requests". Silently showing an empty list when the
     // store is broken is worse than surfacing the failure.
-    let payload: Option<String> = conn
+    let row: Option<(String, String)> = conn
         .query_row(
-            "SELECT payload FROM snapshot WHERE id = ?1",
+            "SELECT payload, fetched_at FROM snapshot WHERE id = ?1",
             [which.id()],
-            |r| r.get(0),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()?;
+
+    // Age it out BEFORE parsing. A snapshot too old to trust is reported
+    // as no snapshot, which sends the caller to a fresh fetch and shows
+    // the loading state -- honest about not knowing, rather than
+    // confidently wrong. Nothing else reads `fetched_at`, so without this
+    // the column was written on every save and never once consulted.
+    let payload = match row {
+        Some((p, at)) if is_fresh(&at, chrono::Utc::now()) => Some(p),
+        Some((_, at)) => {
+            log::info!(
+                "ignoring a {} snapshot from {at}: older than {MAX_SNAPSHOT_AGE_SECS}s",
+                which.label()
+            );
+            None
+        }
+        None => None,
+    };
     match payload {
         // A cache that cannot be parsed is NOT the same as an empty one.
         // Propagating the error would blank the list behind a retry, and
@@ -162,6 +226,110 @@ mod tests {
         assert_eq!(
             load_snapshot(&conn, CachedList::Reviewing).unwrap()[0].number,
             99
+        );
+    }
+
+    /// The reported bug, at its root.
+    ///
+    /// `CachedList::Reviewing` is written in exactly one place -- inside
+    /// `get_reviewing`, which only runs when the To review view is open.
+    /// The poll loop never touches it. So visiting that view once and not
+    /// returning froze the snapshot, and on a real machine a pull request
+    /// merged four days earlier was still listed as awaiting review, with
+    /// nothing on screen suggesting the data was old.
+    #[test]
+    fn a_stale_snapshot_is_not_returned() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = crate::store::open_db(&dir.path().join("t.db")).unwrap();
+        let prs: Vec<PullRequest> = serde_json::from_str(V1_SNAPSHOT).unwrap();
+        save_snapshot(&conn, CachedList::Reviewing, &prs).unwrap();
+
+        // Backdate the row the way four days of not visiting the view
+        // would have.
+        conn.execute(
+            "UPDATE snapshot SET fetched_at = datetime('now', '-4 days') WHERE id = 2",
+            [],
+        )
+        .unwrap();
+
+        assert!(
+            load_snapshot(&conn, CachedList::Reviewing)
+                .unwrap()
+                .is_empty(),
+            "a four-day-old review list must not be painted as current"
+        );
+    }
+
+    /// ...but the cold-start win the cache exists for (#328) must survive.
+    /// A snapshot written this session is always fresh enough.
+    #[test]
+    fn a_snapshot_written_now_is_still_returned() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let conn = crate::store::open_db(&dir.path().join("t.db")).unwrap();
+        let prs: Vec<PullRequest> = serde_json::from_str(V1_SNAPSHOT).unwrap();
+        save_snapshot(&conn, CachedList::Reviewing, &prs).unwrap();
+
+        assert_eq!(
+            load_snapshot(&conn, CachedList::Reviewing).unwrap()[0].number,
+            42
+        );
+    }
+
+    /// The boundary, from both sides.
+    #[test]
+    fn freshness_is_bounded_at_an_hour() {
+        let now = chrono::Utc::now();
+        let at = |secs: i64| {
+            (now - chrono::Duration::seconds(secs))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        };
+        assert!(is_fresh(&at(60), now), "a minute old is fresh");
+        assert!(is_fresh(&at(MAX_SNAPSHOT_AGE_SECS - 5), now));
+        assert!(!is_fresh(&at(MAX_SNAPSHOT_AGE_SECS + 5), now));
+        assert!(!is_fresh(&at(4 * 24 * 3600), now), "four days is not fresh");
+    }
+
+    /// `fetched_at` is SQLite's `datetime('now')`: UTC with no offset
+    /// marker. Parsing it as LOCAL time would make the cache look hours
+    /// stale or hours in the future depending on the zone -- a bug that
+    /// only shows up for users away from UTC, which is most of them.
+    #[test]
+    fn the_timestamp_is_read_as_utc_not_local() {
+        let now = chrono::Utc::now();
+        let recent = (now - chrono::Duration::minutes(2))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        assert!(
+            is_fresh(&recent, now),
+            "a two-minute-old snapshot must be fresh in every timezone"
+        );
+    }
+
+    /// Clocks move backwards -- NTP corrections, timezone changes, a VM
+    /// resuming. A row that appears to come from the future is harmless,
+    /// and blanking the view over it would be a worse outcome than
+    /// showing it.
+    #[test]
+    fn a_future_timestamp_is_treated_as_fresh() {
+        let now = chrono::Utc::now();
+        let ahead = (now + chrono::Duration::hours(3))
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string();
+        assert!(is_fresh(&ahead, now));
+    }
+
+    /// An unreadable timestamp counts as TOO OLD. Refusing a good
+    /// snapshot costs one slow view; accepting a bad one shows merged
+    /// work as open.
+    #[test]
+    fn an_unparseable_timestamp_is_not_fresh() {
+        let now = chrono::Utc::now();
+        assert!(!is_fresh("", now));
+        assert!(!is_fresh("not a date", now));
+        assert!(
+            !is_fresh("2026-09-01T21:02:38Z", now),
+            "RFC 3339 is not the stored shape"
         );
     }
 
