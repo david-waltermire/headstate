@@ -856,6 +856,98 @@ mod tests {
         GitHubClient::new(oc)
     }
 
+    /// The verification must be wired into the CALLER, not merely exist.
+    ///
+    /// `verify_resolved` can be perfectly correct and perfectly unused:
+    /// the original bug was exactly that shape, since the document always
+    /// selected `thread { isResolved }` and the caller discarded it. A
+    /// unit test on the helper cannot see that, so this drives the real
+    /// method through a server that answers "accepted, still unresolved".
+    #[tokio::test]
+    async fn resolve_reports_failure_when_the_thread_did_not_resolve() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "resolveReviewThread": { "thread": { "isResolved": false } } }
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server)
+            .await
+            .resolve_thread("RT_1")
+            .await
+            .expect_err("a resolve that did not take must not report success");
+        assert!(
+            err.to_string().contains("still"),
+            "the message must say what GitHub actually did: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_succeeds_when_the_thread_really_resolved() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "resolveReviewThread": { "thread": { "isResolved": true } } }
+            })))
+            .mount(&server)
+            .await;
+
+        client_for(&server)
+            .await
+            .resolve_thread("RT_1")
+            .await
+            .unwrap();
+    }
+
+    /// Auto-merge claims a FUTURE unattended write. GitHub accepts the
+    /// call and arms nothing when the repository forbids the method --
+    /// which looked identical to success, and nothing in the app reads
+    /// `autoMergeRequest` afterwards to contradict the toast.
+    #[tokio::test]
+    async fn auto_merge_reports_failure_when_nothing_was_armed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "enablePullRequestAutoMerge": {
+                    "pullRequest": { "autoMergeRequest": null }
+                } }
+            })))
+            .mount(&server)
+            .await;
+
+        let err = client_for(&server)
+            .await
+            .enable_auto_merge("PR_1", "deadbeef")
+            .await
+            .expect_err("auto-merge that armed nothing must not report success");
+        assert!(err.to_string().contains("did not enable"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn auto_merge_succeeds_when_it_really_armed() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": { "enablePullRequestAutoMerge": {
+                    "pullRequest": { "autoMergeRequest": { "enabledAt": "2026-09-01T10:00:00Z" } }
+                } }
+            })))
+            .mount(&server)
+            .await;
+
+        client_for(&server)
+            .await
+            .enable_auto_merge("PR_1", "deadbeef")
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn fetch_prs_maps_the_response() {
         let server = MockServer::start().await;

@@ -19,9 +19,19 @@ use serde_json::json;
 /// matters MORE here: auto-merge is a DEFERRED write that fires later,
 /// unattended, when the user is not looking. Without the guard, a push
 /// after enabling would auto-merge a commit they never saw.
+/// Asks for `autoMergeRequest { enabledAt }` rather than the echo.
+///
+/// This mutation makes a claim about a write GitHub will perform LATER,
+/// unattended -- "#N will merge when green" -- which is the hardest kind
+/// of claim to make honestly. GitHub can accept the call without arming
+/// anything: repository-level auto-merge may be off, or branch protection
+/// may forbid the SQUASH method hardcoded here. With only
+/// `clientMutationId` back, both look identical to success, and nothing
+/// in the app ever reads `autoMergeRequest` afterwards, so no later view
+/// could contradict the toast either.
 const ENABLE_AUTO_MERGE_DOC: &str = "mutation($id: ID!, $oid: GitObjectID!) { \
      enablePullRequestAutoMerge(input: { pullRequestId: $id, expectedHeadOid: $oid, \
-     mergeMethod: SQUASH }) { clientMutationId } }";
+     mergeMethod: SQUASH }) { pullRequest { autoMergeRequest { enabledAt } } } }";
 
 const DISABLE_AUTO_MERGE_DOC: &str = "mutation($id: ID!) { \
      disablePullRequestAutoMerge(input: { pullRequestId: $id }) { clientMutationId } }";
@@ -253,6 +263,37 @@ impl PrAction {
     }
 }
 
+/// Whether the thread ended up in the state the caller asked for.
+///
+/// The documents have always selected `thread { isResolved }` -- the field
+/// crossed the wire and was thrown away, because both callers used
+/// `graphql_mutation`, which discards the payload. So GitHub could accept
+/// a resolve it did not apply (raced against a force-push that outdated
+/// the thread) and the UI would toast "Conversation resolved" over a chip
+/// that stayed amber.
+///
+/// Same rule as `add_review`'s PENDING check and `PrAction::verify`: only
+/// a value KNOWN to contradict the request is a failure. A missing or
+/// non-boolean field is left alone, because guessing that an unreadable
+/// response means failure would report working resolves as broken -- a
+/// worse error than the one being fixed.
+fn verify_resolved(thread: &serde_json::Value, want: bool) -> Result<(), ClientError> {
+    match thread["isResolved"].as_bool() {
+        Some(got) if got != want => Err(ClientError::Graphql(
+            if want {
+                "GitHub accepted the request but the conversation is still \
+                 unresolved. It may have been reopened, or the thread may \
+                 have changed since this view loaded."
+            } else {
+                "GitHub accepted the request but the conversation is still \
+                 resolved."
+            }
+            .into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 impl GitHubClient {
     /// Re-run the failed jobs of an Actions workflow run.
     ///
@@ -354,20 +395,24 @@ impl GitHubClient {
     ///
     /// Takes the THREAD id from `ReviewThread.id`, not the pull request's.
     pub async fn resolve_thread(&self, thread_id: &str) -> Result<(), ClientError> {
-        self.graphql_mutation(&json!({
-            "query": RESOLVE_THREAD_DOC,
-            "variables": { "id": thread_id }
-        }))
-        .await
+        let data = self
+            .graphql_mutation_data(&json!({
+                "query": RESOLVE_THREAD_DOC,
+                "variables": { "id": thread_id }
+            }))
+            .await?;
+        verify_resolved(&data["resolveReviewThread"]["thread"], true)
     }
 
     /// Reopen a review conversation that was resolved.
     pub async fn unresolve_thread(&self, thread_id: &str) -> Result<(), ClientError> {
-        self.graphql_mutation(&json!({
-            "query": UNRESOLVE_THREAD_DOC,
-            "variables": { "id": thread_id }
-        }))
-        .await
+        let data = self
+            .graphql_mutation_data(&json!({
+                "query": UNRESOLVE_THREAD_DOC,
+                "variables": { "id": thread_id }
+            }))
+            .await?;
+        verify_resolved(&data["unresolveReviewThread"]["thread"], false)
     }
 
     /// Reply within a review conversation, keeping the answer attached to
@@ -400,11 +445,25 @@ impl GitHubClient {
         id: &str,
         expected_head: &str,
     ) -> Result<(), ClientError> {
-        self.graphql_mutation(&json!({
-            "query": ENABLE_AUTO_MERGE_DOC,
-            "variables": { "id": id, "oid": expected_head }
-        }))
-        .await
+        let data = self
+            .graphql_mutation_data(&json!({
+                "query": ENABLE_AUTO_MERGE_DOC,
+                "variables": { "id": id, "oid": expected_head }
+            }))
+            .await?;
+        // `enabledAt` absent means nothing was armed. Distinguished from
+        // an unreadable response the same way every other check here is:
+        // only a MISSING request object is a failure, and a present one
+        // whose timestamp we cannot parse is left alone.
+        if data["enablePullRequestAutoMerge"]["pullRequest"]["autoMergeRequest"].is_null() {
+            return Err(ClientError::Graphql(
+                "GitHub accepted the request but did not enable auto-merge. \
+                 The repository may not allow it, or branch protection may \
+                 not permit squash merges."
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Cancel it, mirroring the enqueue/dequeue pair.
@@ -620,6 +679,66 @@ mod tests {
         for a in [PrAction::Merge, PrAction::Close, PrAction::Dequeue] {
             assert!(a.verify(&json!({ "clientMutationId": null })).is_ok());
         }
+    }
+
+    /// The bug: the documents ALWAYS selected `thread { isResolved }`, but
+    /// both callers used the discarding helper, so the proof crossed the
+    /// wire and was thrown away. GitHub can accept a resolve it does not
+    /// apply.
+    #[test]
+    fn a_resolve_that_did_not_take_is_a_failure() {
+        let err = verify_resolved(&json!({ "isResolved": false }), true).unwrap_err();
+        assert!(
+            err.to_string().contains("still \nunresolved")
+                || err.to_string().contains("still unresolved"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_unresolve_that_did_not_take_is_a_failure() {
+        let err = verify_resolved(&json!({ "isResolved": true }), false).unwrap_err();
+        assert!(err.to_string().contains("still resolved"), "{err}");
+    }
+
+    #[test]
+    fn a_thread_in_the_requested_state_is_a_success() {
+        assert!(verify_resolved(&json!({ "isResolved": true }), true).is_ok());
+        assert!(verify_resolved(&json!({ "isResolved": false }), false).is_ok());
+    }
+
+    /// Same restraint as `add_review`'s PENDING check and
+    /// `PrAction::verify`: only a value KNOWN to contradict the request
+    /// fails. Treating an unreadable response as failure would report
+    /// working resolves as broken.
+    #[test]
+    fn an_unreadable_thread_is_not_treated_as_failure() {
+        assert!(verify_resolved(&json!(null), true).is_ok());
+        assert!(verify_resolved(&json!({}), true).is_ok());
+        assert!(verify_resolved(&json!({ "isResolved": "yes" }), true).is_ok());
+    }
+
+    /// Auto-merge claims a write GitHub will perform LATER, unattended.
+    /// With only `clientMutationId` back, "accepted but armed nothing"
+    /// and "armed" were indistinguishable -- and nothing in the app reads
+    /// `autoMergeRequest` afterwards, so no later view could correct it.
+    #[test]
+    fn auto_merge_asks_for_proof_that_it_armed() {
+        assert!(ENABLE_AUTO_MERGE_DOC.contains("autoMergeRequest"));
+        assert!(ENABLE_AUTO_MERGE_DOC.contains("enabledAt"));
+        assert!(
+            !ENABLE_AUTO_MERGE_DOC.contains("clientMutationId"),
+            "the echo field proves only that the mutation parsed"
+        );
+    }
+
+    /// The thread documents must keep selecting their proof field --
+    /// dropping it is what created this bug, and it is invisible at the
+    /// call site.
+    #[test]
+    fn thread_documents_select_their_proof_field() {
+        assert!(RESOLVE_THREAD_DOC.contains("isResolved"));
+        assert!(UNRESOLVE_THREAD_DOC.contains("isResolved"));
     }
 
     /// Only Close destroys work. Merging is recoverable and is the action

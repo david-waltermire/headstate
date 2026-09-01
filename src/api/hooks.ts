@@ -489,27 +489,34 @@ export function useCommentOnPr() {
 /// on the list model too, but a poll refreshes it within the minute and
 /// invalidating a 6-second query for a number nobody is looking at is the
 /// cost #328 measured and rejected.
+///
+/// AWAITED, not `void`-ed. A fire-and-forget invalidation settles the
+/// promise immediately, so the button cleared its busy state before the
+/// data it depends on existed -- the same defect as #377, which these
+/// three inherited by being written one commit before that fix. The
+/// backend now verifies each of these mutations landed, so refetching
+/// here is confirming a known-good result rather than hoping.
 export function useResolveThread() {
   const qc = useQueryClient();
   return (threadId: string, repo: string, number: number) =>
-    resolveThread(threadId, repo, number).then(() => {
-      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+    resolveThread(threadId, repo, number).then(async () => {
+      await qc.refetchQueries({ queryKey: ["pr-detail", repo, number] });
     });
 }
 
 export function useUnresolveThread() {
   const qc = useQueryClient();
   return (threadId: string, repo: string, number: number) =>
-    unresolveThread(threadId, repo, number).then(() => {
-      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+    unresolveThread(threadId, repo, number).then(async () => {
+      await qc.refetchQueries({ queryKey: ["pr-detail", repo, number] });
     });
 }
 
 export function useReplyToThread() {
   const qc = useQueryClient();
   return (threadId: string, repo: string, number: number, body: string) =>
-    replyToThread(threadId, repo, number, body).then(() => {
-      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+    replyToThread(threadId, repo, number, body).then(async () => {
+      await qc.refetchQueries({ queryKey: ["pr-detail", repo, number] });
     });
 }
 
