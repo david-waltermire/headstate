@@ -20,6 +20,23 @@ export interface ShortcutHandlers {
   onToggleSelect: () => void;
 }
 
+/// Whether a dialog or sheet is currently open.
+///
+/// Keyed on `role="dialog"` plus Base UI's `data-open`, which is what it
+/// actually renders (verified against the DOM, not assumed) -- and which
+/// is also what a screen reader keys on, so the two agree by
+/// construction. Both `Dialog` and `Sheet` build on the same primitive,
+/// so one check covers every dismissable surface, including any added
+/// later.
+///
+/// Guarded for a non-DOM environment: `shortcutFor` is a pure function
+/// tested in isolation, and reaching for `document` unconditionally would
+/// make it depend on a browser it does not otherwise need.
+function hasOpenOverlay(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.querySelector('[role="dialog"][data-open]') !== null;
+}
+
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -49,8 +66,19 @@ export function shortcutFor(
   // fired at all there; accepting `metaKey || ctrlKey` would instead make
   // Ctrl+R fire on macOS, where it means something else.
   const mod = mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-  // Escape closes the search field first; only hide when not typing.
-  if (e.key === "Escape") return isTyping(e.target ?? null) ? null : "onHide";
+  // Escape closes the search field first, and belongs to an open dialog
+  // before it belongs to the window.
+  //
+  // Escape inside a dialog HID THE WHOLE APP. Both this window listener
+  // and Base UI's own dismiss handler are live at once, so pressing
+  // Escape to cancel "Close this pull request?" sent the app to the tray
+  // -- and a dialog is the most natural place in the entire UI to press
+  // Escape. It got worse as more dismissable surfaces landed: v3.13's
+  // help Sheets and v3.14's review conversations both added more.
+  if (e.key === "Escape") {
+    if (isTyping(e.target ?? null) || hasOpenOverlay()) return null;
+    return "onHide";
+  }
 
   // Refresh the pull request list. Ctrl+R is a browser reload elsewhere,
   // which is why this was Cmd-only -- but a Tauri window has no browser

@@ -143,6 +143,12 @@ function Row({
         // The whole row is one live region while it fills in, so a
         // screen reader hears the resolved value once rather than
         // announcing each cell as it lands.
+        //
+        // `aria-live` is what makes that true. `aria-busy` alone is
+        // INERT on a non-live element -- it suppresses announcements
+        // from a live region, so without the pairing the comment above
+        // described an intent the markup never carried out.
+        aria-live="polite"
         aria-busy={pending || sizePending ? true : undefined}
       >
         {pending ? <Skeleton className="w-40" /> : safetyReason(wt.safety)}

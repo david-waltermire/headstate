@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { PullRequest } from "@/types/pr";
 import { PR_FIXTURES } from "@/fixtures/prs";
@@ -83,5 +83,43 @@ describe("TriageChips", () => {
       // Reset for the next chip.
       useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
     }
+  });
+
+  /// The chip claimed to be the active filter when it was not.
+  ///
+  /// `applyPreset` replaces the filter set; `setFilter` merges into it.
+  /// So clicking a chip and then typing a search leaves the chip's own
+  /// keys set, and a subset test kept reading pressed while the list had
+  /// been narrowed by something else entirely. For a screen reader that
+  /// is a false statement about the current view, and clicking to
+  /// un-press silently discarded the search term.
+  it("is not pressed once another filter also narrows the list", () => {
+    render(<TriageChips prs={PRS} now={NOW} />);
+    const chip = document.querySelector('[data-chip="attention"]') as HTMLElement;
+    fireEvent.click(chip);
+    expect(
+      (document.querySelector('[data-chip="attention"]') as HTMLElement)
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    // A search arrives from the filter bar, merged into the same set.
+    act(() => useFilters.getState().setFilter("query", "retry"));
+    expect(
+      (document.querySelector('[data-chip="attention"]') as HTMLElement)
+        .getAttribute("aria-pressed"),
+    ).toBe("false");
+  });
+
+  /// The repo is navigation, not a filter -- the same rule
+  /// `hasActiveFilters` and the store's `reset` apply -- so being on a
+  /// repo page must not un-press the chip.
+  it("stays pressed while scoped to a repository", () => {
+    render(<TriageChips prs={PRS} now={NOW} />);
+    fireEvent.click(document.querySelector('[data-chip="attention"]') as HTMLElement);
+    act(() => useFilters.getState().setFilter("repo", "octocat/hello-world"));
+    expect(
+      (document.querySelector('[data-chip="attention"]') as HTMLElement)
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
   });
 });

@@ -176,11 +176,15 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
           look like it had stopped. The status bar is the surface that
           persists across views, which makes it the honest place for
           work that does. */}
-      {removal ? (
-        <span className="text-[#58a6ff]">
-          Removing worktrees — {removal.done} of {removal.total}
-        </span>
-      ) : null}
+      {/* `aria-live` on the CONTAINER, which is always mounted, rather
+          than on the message, which is not. A live region has to exist
+          before the text appears or the first announcement is missed --
+          the one that matters most, since it is the one saying work
+          started. `polite` because a removal count must not interrupt
+          whatever the user is reading. */}
+      <span aria-live="polite" className="text-[#58a6ff]">
+        {removal ? `Removing worktrees — ${removal.done} of ${removal.total}` : ""}
+      </span>
 
       <label className="ml-auto flex items-center gap-1.5">
         <span>Check every</span>

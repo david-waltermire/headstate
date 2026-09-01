@@ -273,6 +273,27 @@ describe("StatusBar", () => {
   /// Reporting it only there made a running batch look stopped the
   /// moment the user navigated away -- which is exactly what prompted
   /// "will leaving the page stop the deletion?".
+  /// A live region must EXIST before its text appears, or the first
+  /// announcement -- the one saying work started -- is never made. So the
+  /// container is always mounted and only its content changes.
+  it("keeps the progress live region mounted while idle", () => {
+    state.removal = null;
+    const { container } = render(<StatusBar updatedAt={Date.now()} />);
+    const live = container.querySelector('[aria-live="polite"]');
+    expect(live).toBeTruthy();
+    expect(live?.textContent).toBe("");
+  });
+
+  it("announces progress through that same region", () => {
+    state.removal = { done: 7, total: 20 };
+    const { container, unmount } = render(<StatusBar updatedAt={Date.now()} />);
+    expect(
+      container.querySelector('[aria-live="polite"]')?.textContent,
+    ).toMatch(/7 of 20/);
+    unmount();
+    state.removal = null;
+  });
+
   it("shows bulk removal progress, so it survives leaving the page", () => {
     state.removal = { done: 12, total: 50 };
     const { unmount } = render(<StatusBar updatedAt={Date.now()} />);

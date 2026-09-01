@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { isMac, shortcutFor } from "./shortcuts";
 
 function key(k: string, mods: Partial<KeyboardEvent> = {}, target?: EventTarget | null) {
@@ -124,5 +124,46 @@ describe("shortcutFor (macOS)", () => {
       // no working shortcuts at all.
       expect(isMac("")).toBe(false);
     });
+  });
+});
+
+describe("Escape and open dialogs", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  /// The reported bug: pressing Escape to cancel a confirmation dialog
+  /// sent the whole app to the tray. Both this window listener and Base
+  /// UI's own dismiss handler are live, and a dialog is the most natural
+  /// place in the entire UI to press Escape.
+  it("does not hide the window while a dialog is open", () => {
+    document.body.innerHTML = '<div role="dialog" data-open></div>';
+    expect(shortcutFor(key("Escape"))).toBeNull();
+  });
+
+  it("still hides the window when no dialog is open", () => {
+    expect(shortcutFor(key("Escape"))).toBe("onHide");
+  });
+
+  /// A CLOSED dialog stays in the DOM through Base UI's exit animation.
+  /// Keying on presence alone would leave Escape dead for its duration.
+  it("hides again once the dialog is closing", () => {
+    document.body.innerHTML = '<div role="dialog"></div>';
+    expect(shortcutFor(key("Escape"))).toBe("onHide");
+  });
+
+  /// Sheets are the same Base UI primitive, so one check covers the help
+  /// panels too -- and any dismissable surface added later.
+  it("covers sheets, not only dialogs", () => {
+    document.body.innerHTML =
+      '<div role="dialog" data-open data-slot="sheet-content"></div>';
+    expect(shortcutFor(key("Escape"))).toBeNull();
+  });
+
+  /// Typing still wins: Escape belongs to the search field first.
+  it("still lets a text field keep Escape", () => {
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    expect(shortcutFor(key("Escape", {}, input))).toBeNull();
   });
 });
