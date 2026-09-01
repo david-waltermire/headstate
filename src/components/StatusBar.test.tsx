@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   current: "idle" as "idle" | "fetching" | "retrying",
   error: null as string | null,
+  removal: null as { done: number; total: number } | null,
 }));
 const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
 
@@ -30,6 +31,7 @@ vi.mock("../api/hooks", () => ({
   }),
   useAutostart: () => ({ enabled: false, set: () => Promise.resolve() }),
   usePollState: () => state.current,
+  useRemovalProgress: () => state.removal,
   usePollError: () => state.error,
   usePollInterval: () => ({ seconds: 120, set: setInterval_ }),
   useWorktreeDirs: () => ({ dirs: [], set: () => Promise.resolve([]) }),
@@ -194,5 +196,94 @@ describe("StatusBar", () => {
       await new Promise((r) => setTimeout(r, 0));
       expect(screen.queryByRole("link", { name: /available/ })).toBeNull();
     });
+  });
+
+  /// The reported bug: a machine that hides to the tray instead of
+  /// quitting never re-mounts, so a once-per-mount check meant it took
+  /// one release and then sat there while later ones shipped.
+  it("asks again when the window is shown, not only at startup", async () => {
+    version.newer = null;
+    const { unmount } = render(<StatusBar updatedAt={Date.now()} />);
+    await act(async () => {});
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // A release ships while the app sits in the tray.
+    version.newer = "9.9.9";
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    unmount();
+  });
+
+  /// ...and the timer covers a window that is never hidden at all.
+  it("asks again on the daily timer", async () => {
+    vi.useFakeTimers();
+    version.newer = null;
+    const { unmount } = render(<StatusBar updatedAt={Date.now()} />);
+    await act(async () => {});
+
+    version.newer = "9.9.9";
+    await act(async () => {
+      vi.advanceTimersByTime(24 * 60 * 60 * 1000 + 1000);
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    unmount();
+    vi.useRealTimers();
+  });
+
+  /// The regression the re-checking introduces if the dismissal is not
+  /// respected: asking every 24 hours about a release the user already
+  /// declined is precisely the nag the per-version key exists to stop.
+  it("does not reopen a version the user dismissed", async () => {
+    localStorage.setItem("headstate-update-dismissed", "9.9.9");
+    version.newer = "9.9.9";
+    const { unmount } = render(<StatusBar updatedAt={Date.now()} />);
+    await act(async () => {});
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    // Re-checking finds the same version. It must stay dismissed.
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    unmount();
+    localStorage.clear();
+  });
+
+  /// But a NEWER release must get through, or dismissing one version
+  /// would silence every future one.
+  it("opens for a newer version even after dismissing an older one", async () => {
+    localStorage.setItem("headstate-update-dismissed", "9.9.9");
+    version.newer = "9.9.9";
+    const { unmount } = render(<StatusBar updatedAt={Date.now()} />);
+    await act(async () => {});
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    version.newer = "10.0.0";
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    unmount();
+    localStorage.clear();
+  });
+
+  /// Bulk removal runs on the backend and outlives the Worktrees page.
+  /// Reporting it only there made a running batch look stopped the
+  /// moment the user navigated away -- which is exactly what prompted
+  /// "will leaving the page stop the deletion?".
+  it("shows bulk removal progress, so it survives leaving the page", () => {
+    state.removal = { done: 12, total: 50 };
+    const { unmount } = render(<StatusBar updatedAt={Date.now()} />);
+    expect(screen.getByText(/Removing worktrees . 12 of 50/)).toBeTruthy();
+    unmount();
+    state.removal = null;
+  });
+
+  it("says nothing about removals when none is running", () => {
+    state.removal = null;
+    render(<StatusBar updatedAt={Date.now()} />);
+    expect(screen.queryByText(/Removing worktrees/)).toBeNull();
   });
 });

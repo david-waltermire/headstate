@@ -773,6 +773,10 @@ export function WorktreesPage() {
               : `Remove ${safeCount} safe worktree${safeCount === 1 ? "" : "s"}`}
           </button>
         ) : null}
+        {/* Beside the button rather than in the dialog: the question
+            ("can I leave this page?") occurs while it is running, which
+            is when the dialog is already gone. */}
+        {safeCount > 1 && safeKnown ? <HelpButton topic="bulk-removal" /> : null}
 
         <button
           type="button"

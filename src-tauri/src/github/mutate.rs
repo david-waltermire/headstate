@@ -182,6 +182,66 @@ impl PrAction {
         }
     }
 
+    /// What to ask for back, so the answer can be CHECKED rather than
+    /// assumed.
+    ///
+    /// `clientMutationId` is an echo: it proves the mutation parsed, not
+    /// that it did anything. For most actions that is all GitHub offers
+    /// and the absence of an error really is the answer. Enqueue is the
+    /// exception -- see `verify`.
+    fn result_selection(self) -> &'static str {
+        match self {
+            PrAction::Enqueue => "mergeQueueEntry { state }",
+            _ => "clientMutationId",
+        }
+    }
+
+    /// Whether the payload says the action actually happened.
+    ///
+    /// The same principle `add_review` already applies to PENDING
+    /// reviews: the mutation succeeding is not the same as the change
+    /// landing. `enqueuePullRequest` returns no error at all when it
+    /// queues nothing -- `mergeQueueEntry` comes back null, or holds an
+    /// entry GitHub immediately rejected -- and reporting that as
+    /// success is what put "added to the merge queue" on screen for pull
+    /// requests that were never in it.
+    ///
+    /// Unknown states are treated as SUCCESS, matching `add_review`'s
+    /// rule: only states known to mean "not queued" are failures, since
+    /// guessing that an unfamiliar value means failure would be a worse
+    /// error than the one being fixed.
+    fn verify(self, payload: &serde_json::Value) -> Result<(), ClientError> {
+        if self != PrAction::Enqueue {
+            return Ok(());
+        }
+        let entry = &payload["mergeQueueEntry"];
+        if entry.is_null() {
+            return Err(ClientError::Graphql(
+                "GitHub accepted the request but did not add this pull request \
+                 to the merge queue. It may not be mergeable, or the base \
+                 branch may not use a merge queue."
+                    .into(),
+            ));
+        }
+        match entry["state"].as_str() {
+            // Accepted, then rejected: an entry exists but it will never
+            // merge, which is the "no record of being added" the report
+            // describes once GitHub drops it.
+            Some("UNMERGEABLE") => Err(ClientError::Graphql(
+                "GitHub queued this pull request and then rejected it as \
+                 unmergeable. Check the branch is up to date and its \
+                 required checks pass."
+                    .into(),
+            )),
+            Some("LOCKED") => Err(ClientError::Graphql(
+                "GitHub could not queue this pull request: the merge queue \
+                 is locked."
+                    .into(),
+            )),
+            _ => Ok(()),
+        }
+    }
+
     /// Whether this destroys work if done by mistake.
     ///
     /// Only `Close` qualifies. Merging is recoverable (revert, or reopen
@@ -224,14 +284,17 @@ impl GitHubClient {
     /// specifics the user needs.
     pub async fn mutate_pr(&self, id: &str, action: PrAction) -> Result<(), ClientError> {
         let query = format!(
-            "mutation($id: ID!) {{ {}(input: {{ pullRequestId: $id }}) {{ clientMutationId }} }}",
-            action.field()
+            "mutation($id: ID!) {{ {}(input: {{ pullRequestId: $id }}) {{ {} }} }}",
+            action.field(),
+            action.result_selection()
         );
-        self.graphql_mutation(&json!({
-            "query": query,
-            "variables": { "id": id }
-        }))
-        .await
+        let data = self
+            .graphql_mutation_data(&json!({
+                "query": query,
+                "variables": { "id": id }
+            }))
+            .await?;
+        action.verify(&data[action.field()])
     }
 
     /// Submit a review on a pull request.
@@ -469,6 +532,94 @@ mod tests {
         // A reply must not be routed through addComment, which would post
         // a top-level comment detached from the code under discussion.
         assert!(!REPLY_TO_THREAD_DOC.contains("addComment"));
+    }
+
+    /// The bug this guards: `enqueuePullRequest` returns NO error when it
+    /// queues nothing, so asking only for `clientMutationId` reported
+    /// "added to the merge queue" for pull requests that were never in
+    /// it. The answer is in `mergeQueueEntry`, which must be requested.
+    #[test]
+    fn enqueue_asks_for_the_field_that_proves_it_worked() {
+        assert_eq!(
+            PrAction::Enqueue.result_selection(),
+            "mergeQueueEntry { state }"
+        );
+        // Every other action has no such field; the echo is all GitHub
+        // offers and the absence of an error really is the answer.
+        for a in [
+            PrAction::Merge,
+            PrAction::Close,
+            PrAction::Reopen,
+            PrAction::ConvertToDraft,
+            PrAction::MarkReady,
+            PrAction::Dequeue,
+        ] {
+            assert_eq!(a.result_selection(), "clientMutationId");
+        }
+    }
+
+    /// A null entry means nothing was queued at all.
+    #[test]
+    fn a_null_merge_queue_entry_is_a_failure() {
+        let err = PrAction::Enqueue
+            .verify(&json!({ "mergeQueueEntry": null }))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("did not add"),
+            "the message must say what GitHub actually did: {err}"
+        );
+    }
+
+    /// Accepted, then rejected. An entry exists, so a null check alone
+    /// would pass this -- and the pull request still never merges.
+    #[test]
+    fn an_unmergeable_entry_is_a_failure() {
+        let err = PrAction::Enqueue
+            .verify(&json!({ "mergeQueueEntry": { "state": "UNMERGEABLE" } }))
+            .unwrap_err();
+        assert!(err.to_string().contains("unmergeable"), "{err}");
+    }
+
+    #[test]
+    fn a_locked_queue_is_a_failure() {
+        let err = PrAction::Enqueue
+            .verify(&json!({ "mergeQueueEntry": { "state": "LOCKED" } }))
+            .unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+    }
+
+    /// The states that mean it worked.
+    #[test]
+    fn a_queued_entry_is_a_success() {
+        for state in ["QUEUED", "AWAITING_CHECKS", "MERGEABLE"] {
+            assert!(
+                PrAction::Enqueue
+                    .verify(&json!({ "mergeQueueEntry": { "state": state } }))
+                    .is_ok(),
+                "{state} means the pull request is in the queue"
+            );
+        }
+    }
+
+    /// Same rule as `add_review`'s PENDING check: only states KNOWN to
+    /// mean "not queued" are failures. Treating an unfamiliar value as a
+    /// failure would report a working enqueue as broken, which is a worse
+    /// error than the one being fixed.
+    #[test]
+    fn an_unknown_entry_state_is_not_treated_as_failure() {
+        assert!(PrAction::Enqueue
+            .verify(&json!({ "mergeQueueEntry": { "state": "SOME_NEW_STATE" } }))
+            .is_ok());
+    }
+
+    /// The check is enqueue-specific. Every other action's payload is an
+    /// echo, and demanding a queue entry from `mergePullRequest` would
+    /// fail every merge.
+    #[test]
+    fn other_actions_are_not_subject_to_the_queue_check() {
+        for a in [PrAction::Merge, PrAction::Close, PrAction::Dequeue] {
+            assert!(a.verify(&json!({ "clientMutationId": null })).is_ok());
+        }
     }
 
     /// Only Close destroys work. Merging is recoverable and is the action

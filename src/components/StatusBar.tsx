@@ -5,7 +5,7 @@ import { UpdateDialog } from "./UpdateDialog";
 import { useUiPrefs } from "../api/hooks";
 import { Settings } from "lucide-react";
 import { useEffect, useState } from "react";
-import { usePollError, usePollInterval, usePollState } from "../api/hooks";
+import { usePollError, usePollInterval, usePollState, useRemovalProgress } from "../api/hooks";
 import { relativeTime } from "../lib/time";
 import { SettingsDialog } from "./SettingsDialog";
 
@@ -29,6 +29,13 @@ function label(secs: number): string {
 ///
 /// It still shows STATE, not messages: the banner keeps the detail and
 /// the retry. This just stops claiming success it cannot vouch for.
+/// How often to re-ask GitHub for the newest release.
+///
+/// Daily. Releases ship every few days at most, and the request is one
+/// unauthenticated call -- so this is far below any rate concern while
+/// still being fast enough that nobody sits three versions behind.
+const UPDATE_CHECK_MS = 24 * 60 * 60 * 1000;
+
 export function StatusBar({ updatedAt }: { updatedAt: number }) {
   const state = usePollState();
   const pollError = usePollError();
@@ -76,6 +83,9 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
   const [version, setVersion] = useState<string | null>(null);
   const [newer, setNewer] = useState<string | null>(null);
   const { prefs: ui } = useUiPrefs();
+  // Subscribed here, not only on the Worktrees page, so the count
+  // survives navigating away from it.
+  const removal = useRemovalProgress();
   // Which version's announcement has been dismissed. localStorage, not
   // the settings table: it is a transient acknowledgement of one
   // release, not a preference, and it is meaningless on another machine.
@@ -97,17 +107,39 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
     };
   }, []);
 
-  // Once, at startup -- not on the poll loop. A failure is silent: a
-  // missing update hint is better than a broken status bar, and the app
-  // works perfectly well without knowing.
+  // At startup, then daily, and whenever the window is shown again.
+  //
+  // This used to run ONCE per mount, which is wrong for an app that
+  // hides to the tray instead of quitting (`lib.rs` intercepts
+  // CloseRequested and calls `window.hide()`). A machine left running
+  // never asked again: it took one release and then stayed on it while
+  // two more shipped, with no way for the user to discover them.
+  //
+  // The visibility trigger matters as much as the timer: a laptop asleep
+  // for a week should learn about an update when its owner comes back to
+  // it, not up to a day later.
+  //
+  // A failure is silent: a missing update hint is better than a broken
+  // status bar, and the app works perfectly well without knowing.
   useEffect(() => {
     let live = true;
-    latestRelease().then(
-      (v) => live && setNewer(v),
-      () => {},
-    );
+    const ask = () =>
+      latestRelease().then(
+        (v) => live && setNewer(v),
+        () => {},
+      );
+
+    void ask();
+    const timer = setInterval(() => void ask(), UPDATE_CHECK_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void ask();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
       live = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
 
@@ -136,6 +168,18 @@ export function StatusBar({ updatedAt }: { updatedAt: number }) {
           former on both routes but never flips the latter. */}
       {updatedAt > 0 ? (
         <span>Updated {relativeTime(new Date(updatedAt).toISOString())}</span>
+      ) : null}
+
+      {/* Bulk worktree removal reported progress only on the Worktrees
+          page's own button -- but the work runs on the backend and
+          outlives that page, so navigating away made a running batch
+          look like it had stopped. The status bar is the surface that
+          persists across views, which makes it the honest place for
+          work that does. */}
+      {removal ? (
+        <span className="text-[#58a6ff]">
+          Removing worktrees — {removal.done} of {removal.total}
+        </span>
       ) : null}
 
       <label className="ml-auto flex items-center gap-1.5">

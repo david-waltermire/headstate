@@ -107,6 +107,38 @@ that, a measurement on a real machine found ancestry alone recognised
 10 of 157 merged worktrees.`,
   },
 
+  "bulk-removal": {
+    title: "Bulk cleanup, and leaving the page",
+    body: `Removals run **on the backend, in one batch** — not one request per
+worktree from this page.
+
+### You can navigate away
+
+The work does not belong to this page. Leaving the Worktrees view, or
+switching to Docker or Pull requests, does not cancel or pause anything:
+the batch runs to completion and the result still arrives as a
+notification when it finishes.
+
+What you lose by leaving is only the running count on the button. The
+removals themselves are unaffected.
+
+### Why it can take a while
+
+Each worktree is removed with git plumbing, and git has real work to do
+per checkout. A repository with fifty worktrees is fifty sequential
+operations, so several minutes is normal rather than a sign that
+something has stalled.
+
+Progress is reported as a count, not a spinner, so a slow batch is
+distinguishable from a hung one.
+
+### Nothing unsafe is removed
+
+Safety is re-checked at deletion time, not just when the list was
+scanned. A worktree that became dirty since the scan is refused and
+named in the result, so the count of what was actually removed is
+always honest.`,
+  },
   "orphaned-worktrees": {
     title: "Orphaned worktrees",
     body: `A worktree whose **repository has been deleted**. The directory is

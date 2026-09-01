@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { safeUnlisten } from "./unlisten";
 import { timed } from "./diag";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { DockerImage, PullRequest, Worktree } from "../types/pr";
+import type { DockerImage, PrDetail, PullRequest, Worktree } from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
   getCached,
@@ -396,6 +396,26 @@ export function useRerunChecks() {
     });
 }
 
+/// The `latestReviews` state each verdict produces.
+///
+/// `comment` is absent deliberately: a COMMENT review does not change
+/// whether the viewer has approved, so seeding one would be inventing a
+/// state change that did not happen.
+export const REVIEW_STATE: Partial<Record<ReviewVerdictName, string>> = {
+  approve: "APPROVED",
+  request_changes: "CHANGES_REQUESTED",
+};
+
+/// `detail` with the viewer's own review replaced by `state`.
+///
+/// Pure and non-mutating: React Query compares by reference, and editing
+/// the cached object in place would leave components rendering the old
+/// value.
+export function withOwnReview(detail: PrDetail, viewer: string, state: string): PrDetail {
+  const others = detail.latest_reviews.filter((r) => r.author !== viewer);
+  return { ...detail, latest_reviews: [...others, { author: viewer, state }] };
+}
+
 /// Submit a review on a pull request.
 ///
 /// Invalidates `["reviewing"]` and refreshes the PR list: approving a PR
@@ -411,8 +431,37 @@ export function useReviewPr() {
     body: string,
   ) =>
     reviewPr(id, repo, number, verdict, body).then(async () => {
-      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
       void qc.invalidateQueries({ queryKey: ["reviewing"] });
+      // Write the verdict we KNOW landed straight into the cache, before
+      // asking GitHub anything.
+      //
+      // `latestReviews` lags `addPullRequestReview`: for a second or two
+      // afterwards GitHub still returns the pre-approval review set. The
+      // refetch below can land inside that window, and `staleTime` means
+      // nothing asks again -- so the button reverted to "Approve" for an
+      // approval that had succeeded, which reads as "the click did
+      // nothing" and invites a second review.
+      //
+      // The mutation already verified the outcome (it rejects a PENDING
+      // review), so this is not optimism about whether it worked. It is
+      // the authoritative answer, applied while GitHub's read side
+      // catches up. The refetch that follows overwrites it either way.
+      // From the cache rather than a hook argument: `useViewer` has
+      // `staleTime: Infinity` and is fetched once at launch, so by the
+      // time anyone can click Approve it is populated. Undefined means we
+      // genuinely could not ask, and then the seed is skipped rather than
+      // attributed to the wrong person.
+      const viewer = qc.getQueryData<string>(["viewer"]);
+      const state = REVIEW_STATE[verdict];
+      if (state !== undefined && viewer !== undefined) {
+        qc.setQueryData<PrDetail>(["pr-detail", repo, number], (prev) =>
+          prev === undefined ? prev : withOwnReview(prev, viewer, state),
+        );
+      }
+      // AWAITED, unlike the list refresh. The button stays busy until the
+      // detail view reflects the click, rather than until an unrelated
+      // list finishes.
+      await qc.refetchQueries({ queryKey: ["pr-detail", repo, number] });
       await refreshPrs(qc);
     });
 }
