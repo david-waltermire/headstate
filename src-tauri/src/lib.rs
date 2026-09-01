@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod caches;
 pub mod commands;
 pub mod diag;
 pub mod docker;
