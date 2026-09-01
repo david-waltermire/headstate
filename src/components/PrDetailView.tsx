@@ -12,9 +12,10 @@ import {
 import { useState } from "react";
 import type { ReviewVerdictName } from "../api/tauri";
 import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
-import { relativeTime } from "../lib/time";
 import { rerunnableRun } from "../lib/rerun";
 import { Markdown } from "./Markdown";
+import { CommentRow } from "./CommentRow";
+import { ReviewThreads } from "./ReviewThreads";
 import { Section } from "./Section";
 import { PrActions } from "./PrActions";
 import { ReviewBox } from "./ReviewBox";
@@ -375,25 +376,35 @@ export function PrDetailView({
         </Section>
       ) : null}
 
+      {/* ABOVE the comments: a conversation waiting on an answer is
+          more urgent than the discussion thread, and the header's
+          unresolved count points at this section. */}
+      <ReviewThreads threads={pr.review_threads} repo={pr.repo} number={pr.number} />
+
       {pr.comments.length > 0 ? (
         // COLLAPSED past a handful. Fifty comments is the longest block
         // in this view by far, and scrolling past all of it to reach
         // the footer links was most of the "shoved together" problem.
         // A short thread stays open, because collapsing three comments
         // hides nothing worth a click.
-        <Section
-          title="Comments"
-          count={pr.comment_count}
-          defaultOpen={pr.comments.length <= 5}
-        >
-          <div className="flex flex-col gap-3">
+        <Section title="Comments" count={pr.comment_count}>
+          <div className="flex flex-col gap-2">
+          {/* Each comment collapses on its OWN, rather than the whole
+              block collapsing together. One section for fifty comments
+              meant finding a particular one required expanding all of
+              them and scrolling; the collapsed row carries a body
+              preview so it can be picked out without opening it.
+
+              A lone comment opens by default -- there is nothing to
+              scan past, so collapsing it only adds a click. */}
           {pr.comments.map((c, i) => (
-            <div key={`${c.author}-${c.created_at}-${i}`} className="rounded-md border border-[#30363d] p-3">
-              <p className="mb-2 text-xs text-[#8b949e]">
-                {c.author} · {relativeTime(c.created_at)}
-              </p>
-              <Markdown>{c.body}</Markdown>
-            </div>
+            <CommentRow
+              key={`${c.author}-${c.created_at}-${i}`}
+              author={c.author}
+              createdAt={c.created_at}
+              body={c.body}
+              defaultOpen={pr.comments.length === 1}
+            />
           ))}
           {/* GitHub is where you reply; this view is for deciding. */}
           {pr.comment_count > pr.comments.length ? (

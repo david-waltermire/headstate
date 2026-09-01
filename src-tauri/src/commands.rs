@@ -307,6 +307,85 @@ pub async fn comment_on_pr(
     }
 }
 
+/// Resolve a review conversation.
+///
+/// `thread_id` is the THREAD's node id, not the pull request's -- a
+/// different node from every other mutation command here.
+#[tauri::command]
+pub async fn resolve_thread(
+    client: State<'_, GhClient>,
+    thread_id: String,
+    repo: String,
+    number: u64,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    match client.resolve_thread(&thread_id).await {
+        Ok(()) => {
+            log::info!("{repo}#{number} resolved a conversation");
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} could not resolve a conversation: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Reopen a resolved review conversation.
+///
+/// The undo for `resolve_thread`. Resolving is a single click and GitHub
+/// offers no confirmation, so without this a mis-click could only be
+/// corrected by leaving the app.
+#[tauri::command]
+pub async fn unresolve_thread(
+    client: State<'_, GhClient>,
+    thread_id: String,
+    repo: String,
+    number: u64,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    match client.unresolve_thread(&thread_id).await {
+        Ok(()) => {
+            log::info!("{repo}#{number} reopened a conversation");
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} could not reopen a conversation: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Reply inside a review conversation.
+///
+/// Not `comment_on_pr`: that starts a new top-level comment, which would
+/// strand the answer away from the code it is about.
+#[tauri::command]
+pub async fn reply_to_thread(
+    client: State<'_, GhClient>,
+    thread_id: String,
+    repo: String,
+    number: u64,
+    body: String,
+) -> Result<(), String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+    // Matches `comment_on_pr`: GitHub accepts an empty reply and posts a
+    // blank comment, which is never what the click meant.
+    if body.trim().is_empty() {
+        return Err("A reply cannot be empty.".to_string());
+    }
+    match client.reply_to_thread(&thread_id, &body).await {
+        Ok(()) => {
+            log::info!("{repo}#{number} replied to a conversation");
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{repo}#{number} could not reply to a conversation: {e}");
+            Err(e.to_string())
+        }
+    }
+}
+
 /// Map the frontend's verdict name onto the typed verdict.
 fn parse_verdict(v: &str) -> Result<ReviewVerdict, String> {
     match v {

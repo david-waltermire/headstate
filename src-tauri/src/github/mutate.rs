@@ -70,6 +70,26 @@ const ADD_REVIEW_DOC: &str =
 const ADD_COMMENT_DOC: &str = "mutation($id: ID!, $body: String!) { \
      addComment(input: { subjectId: $id, body: $body }) { clientMutationId } }";
 
+/// Resolve and unresolve take the THREAD's id, not the pull request's --
+/// a different node from every other mutation in this file.
+///
+/// Unresolve exists because resolving is one click with no in-app undo:
+/// without it a mis-click can only be corrected on github.com.
+const RESOLVE_THREAD_DOC: &str = "mutation($id: ID!) { \
+     resolveReviewThread(input: { threadId: $id }) { thread { isResolved } } }";
+
+const UNRESOLVE_THREAD_DOC: &str = "mutation($id: ID!) { \
+     unresolveReviewThread(input: { threadId: $id }) { thread { isResolved } } }";
+
+/// A reply goes INTO an existing thread, which is what distinguishes it
+/// from `addComment`: that starts a new top-level conversation, and using
+/// it to answer an inline review comment would strand the reply away from
+/// the code it is about.
+const REPLY_TO_THREAD_DOC: &str = "mutation($id: ID!, $body: String!) { \
+     addPullRequestReviewThreadReply(\
+       input: { pullRequestReviewThreadId: $id, body: $body }) \
+     { clientMutationId } }";
+
 const UPDATE_BRANCH_DOC: &str = "mutation($id: ID!, $oid: GitObjectID!) { \
      updatePullRequestBranch(input: { pullRequestId: $id, expectedHeadOid: $oid }) \
      { clientMutationId } }";
@@ -267,6 +287,36 @@ impl GitHubClient {
         .await
     }
 
+    /// Resolve a review conversation.
+    ///
+    /// Takes the THREAD id from `ReviewThread.id`, not the pull request's.
+    pub async fn resolve_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": RESOLVE_THREAD_DOC,
+            "variables": { "id": thread_id }
+        }))
+        .await
+    }
+
+    /// Reopen a review conversation that was resolved.
+    pub async fn unresolve_thread(&self, thread_id: &str) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": UNRESOLVE_THREAD_DOC,
+            "variables": { "id": thread_id }
+        }))
+        .await
+    }
+
+    /// Reply within a review conversation, keeping the answer attached to
+    /// the code it is about rather than starting a new top-level comment.
+    pub async fn reply_to_thread(&self, thread_id: &str, body: &str) -> Result<(), ClientError> {
+        self.graphql_mutation(&json!({
+            "query": REPLY_TO_THREAD_DOC,
+            "variables": { "id": thread_id, "body": body }
+        }))
+        .await
+    }
+
     /// Merge the base branch into a pull request's head -- GitHub's
     /// "Update branch" button.
     ///
@@ -402,6 +452,23 @@ mod tests {
         ] {
             assert_ne!(v.event(), "DISMISS");
         }
+    }
+
+    /// The thread mutations take `threadId`/`pullRequestReviewThreadId`,
+    /// NOT the pull request id every other mutation here uses. Sending a
+    /// PR id to these is the mistake this pins: GitHub answers with a type
+    /// error, and the reply lands nowhere.
+    #[test]
+    fn thread_mutations_address_the_thread_not_the_pull_request() {
+        assert!(RESOLVE_THREAD_DOC.contains("resolveReviewThread"));
+        assert!(RESOLVE_THREAD_DOC.contains("threadId"));
+        assert!(UNRESOLVE_THREAD_DOC.contains("unresolveReviewThread"));
+        assert!(UNRESOLVE_THREAD_DOC.contains("threadId"));
+        assert!(REPLY_TO_THREAD_DOC.contains("addPullRequestReviewThreadReply"));
+        assert!(REPLY_TO_THREAD_DOC.contains("pullRequestReviewThreadId"));
+        // A reply must not be routed through addComment, which would post
+        // a top-level comment detached from the code under discussion.
+        assert!(!REPLY_TO_THREAD_DOC.contains("addComment"));
     }
 
     /// Only Close destroys work. Merging is recoverable and is the action

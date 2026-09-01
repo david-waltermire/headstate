@@ -137,6 +137,23 @@ export const reviewPr = (
 export const commentOnPr = (id: string, repo: string, number: number, body: string) =>
   invoke<void>("comment_on_pr", { id, repo, number, body });
 
+/// Resolve a review conversation. Takes the THREAD's id, not the PR's.
+export const resolveThread = (threadId: string, repo: string, number: number) =>
+  invoke<void>("resolve_thread", { threadId, repo, number });
+
+/// Reopen a resolved conversation -- the undo for `resolveThread`.
+export const unresolveThread = (threadId: string, repo: string, number: number) =>
+  invoke<void>("unresolve_thread", { threadId, repo, number });
+
+/// Reply inside a conversation, keeping the answer attached to the code
+/// it is about rather than starting a new top-level comment.
+export const replyToThread = (
+  threadId: string,
+  repo: string,
+  number: number,
+  body: string,
+) => invoke<void>("reply_to_thread", { threadId, repo, number, body });
+
 /// `Stats.merged_week`/`merged_month` are real; the other five fields
 /// always come back zero today. Does not persist to SQLite.
 export const getStats = () => invoke<Stats>("get_stats");

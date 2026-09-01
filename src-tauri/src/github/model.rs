@@ -282,6 +282,45 @@ pub struct PrComment {
     pub body: String,
 }
 
+/// One review conversation: an inline comment thread anchored to a line.
+///
+/// A DIFFERENT object from `PrComment`, which is a flat top-level comment
+/// on the pull request itself. Only threads can be resolved -- GitHub has
+/// no such concept for issue comments -- which is why the two are modelled
+/// separately rather than merged into one list.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ReviewThread {
+    /// The thread's node id, which the resolve and reply mutations take.
+    pub id: String,
+    pub is_resolved: bool,
+    /// Whether the line this thread was anchored to still exists.
+    ///
+    /// NOT the same as resolved: a force-push can strand a thread whose
+    /// question is still open and still unanswered. The two are reported
+    /// separately so the UI never presents "the code moved" as "this was
+    /// dealt with".
+    pub is_outdated: bool,
+    /// The file the thread hangs off. Empty when GitHub gives none.
+    pub path: String,
+    /// The line, or None once the anchor is gone -- which is exactly when
+    /// `is_outdated` is true. Optional rather than 0 so the UI can render
+    /// the path alone instead of a `file.ts:0` that points nowhere.
+    pub line: Option<u64>,
+    /// What the VIEWER may do, asked per thread rather than assumed.
+    ///
+    /// Three separate permissions because GitHub grants them separately:
+    /// replying to a thread and resolving it are different rights, and
+    /// unresolving is a third. Without these the UI shows buttons that
+    /// 403 on click.
+    pub viewer_can_reply: bool,
+    pub viewer_can_resolve: bool,
+    pub viewer_can_unresolve: bool,
+    pub comments: Vec<PrComment>,
+    /// How many comments the thread really has, which can exceed
+    /// `comments.len()` -- the query pages at 10.
+    pub comment_count: u64,
+}
+
 /// One reviewer's latest review on a pull request.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewerVerdict {
@@ -360,6 +399,14 @@ pub struct PrDetail {
     pub unresolved_threads: u64,
     pub comment_count: u64,
     pub comments: Vec<PrComment>,
+    /// The review conversations, resolved and unresolved alike.
+    ///
+    /// `unresolved_threads` above stays the single source of the COUNT
+    /// (it is what the list view and the header already read), and is
+    /// still derived by the same function -- storing the number twice
+    /// would let the header disagree with the list beneath it.
+    #[serde(default)]
+    pub review_threads: Vec<ReviewThread>,
     pub checks: Vec<CheckRun>,
 }
 

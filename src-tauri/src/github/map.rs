@@ -2,7 +2,8 @@
 
 use super::model::{
     CheckRun, CiState, CycleTrend, HistoryPoint, Label, MergeState, MergeStateStatus, MergedDetail,
-    MergedPr, PrComment, PrDetail, PullRequest, RepoCount, ReviewState, ReviewerVerdict,
+    MergedPr, PrComment, PrDetail, PullRequest, RepoCount, ReviewState, ReviewThread,
+    ReviewerVerdict,
 };
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
@@ -172,6 +173,7 @@ pub fn map_detail(v: &Value, repo: &str) -> PrDetail {
         unresolved_threads: unresolved_threads(pr),
         comment_count: pr["comments"]["totalCount"].as_u64().unwrap_or(0),
         comments,
+        review_threads: map_review_threads(pr),
         checks,
     }
 }
@@ -259,6 +261,47 @@ fn unresolved_threads(node: &Value) -> u64 {
                 .count() as u64
         })
         .unwrap_or(0)
+}
+
+/// The review conversations in full, for the detail view.
+///
+/// `unresolved_threads` above counts the same node and stays the source of
+/// the NUMBER. This maps the threads themselves, resolved and outdated
+/// included: the detail view shows resolved ones collapsed so they remain
+/// findable, and an outdated thread can still hold an unanswered question.
+fn map_review_threads(node: &Value) -> Vec<ReviewThread> {
+    let empty = vec![];
+    node["reviewThreads"]["nodes"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .map(|t| ReviewThread {
+            id: t["id"].as_str().unwrap_or_default().to_string(),
+            is_resolved: t["isResolved"].as_bool().unwrap_or(false),
+            is_outdated: t["isOutdated"].as_bool().unwrap_or(false),
+            path: t["path"].as_str().unwrap_or_default().to_string(),
+            // `as_u64` already yields None for JSON null, which is what
+            // GitHub sends once the anchor line is gone. No default: a
+            // missing line must stay missing rather than become line 0.
+            line: t["line"].as_u64(),
+            // Default FALSE on a missing field, so a response we could not
+            // read hides the button rather than offering one that 403s.
+            viewer_can_reply: t["viewerCanReply"].as_bool().unwrap_or(false),
+            viewer_can_resolve: t["viewerCanResolve"].as_bool().unwrap_or(false),
+            viewer_can_unresolve: t["viewerCanUnresolve"].as_bool().unwrap_or(false),
+            comments: t["comments"]["nodes"]
+                .as_array()
+                .unwrap_or(&empty)
+                .iter()
+                .map(|c| PrComment {
+                    author: c["author"]["login"].as_str().unwrap_or("ghost").to_string(),
+                    created_at: c["createdAt"].as_str().unwrap_or_default().to_string(),
+                    body: c["body"].as_str().unwrap_or_default().to_string(),
+                })
+                .collect(),
+            comment_count: t["comments"]["totalCount"].as_u64().unwrap_or(0),
+        })
+        .collect()
 }
 
 /// GitHub's merge-readiness summary.
@@ -801,6 +844,104 @@ mod tests {
             check_state(&json!({"conclusion": "ACTION_REQUIRED"})),
             "ACTION_REQUIRED"
         );
+    }
+
+    /// The detail view needs the threads themselves, not just the count
+    /// the header shows.
+    #[test]
+    fn maps_review_threads_in_full() {
+        let v = json!({"repository": {"pullRequest": {
+            "reviewThreads": {"nodes": [{
+                "id": "RT_1", "isResolved": false, "isOutdated": false,
+                "path": "src/api/hooks.ts", "line": 412,
+                "viewerCanReply": true, "viewerCanResolve": true,
+                "viewerCanUnresolve": false,
+                "comments": {"totalCount": 2, "nodes": [
+                    {"author": {"login": "carol"}, "createdAt": "2026-08-20T10:00:00Z",
+                     "body": "This leaks the subscription"}
+                ]}
+            }]}
+        }}});
+        let t = &map_detail(&v, "o/r").review_threads[0];
+        assert_eq!(t.id, "RT_1");
+        assert!(!t.is_resolved);
+        assert_eq!(t.path, "src/api/hooks.ts");
+        assert_eq!(t.line, Some(412));
+        assert!(t.viewer_can_reply);
+        assert!(t.viewer_can_resolve);
+        assert!(!t.viewer_can_unresolve);
+        assert_eq!(t.comments[0].author, "carol");
+        assert_eq!(
+            t.comment_count, 2,
+            "the total, not the page: the query caps thread comments at 10"
+        );
+    }
+
+    /// A force-push strands a thread and GitHub sends `line: null`. Zero
+    /// would render as `file.ts:0`, pointing at a line that never existed.
+    #[test]
+    fn an_outdated_thread_keeps_a_missing_line_missing() {
+        let v = json!({"repository": {"pullRequest": {
+            "reviewThreads": {"nodes": [{
+                "id": "RT_2", "isResolved": false, "isOutdated": true,
+                "path": "src/poll.rs", "line": null,
+                "comments": {"totalCount": 0, "nodes": []}
+            }]}
+        }}});
+        let t = &map_detail(&v, "o/r").review_threads[0];
+        assert_eq!(t.line, None);
+        assert!(t.is_outdated);
+        assert!(
+            !t.is_resolved,
+            "outdated is not resolved: the question can still be open"
+        );
+    }
+
+    /// Absent permission fields must not read as permission granted --
+    /// the button would render and then fail with a 403 on click.
+    #[test]
+    fn missing_viewer_permissions_default_to_denied() {
+        let v = json!({"repository": {"pullRequest": {
+            "reviewThreads": {"nodes": [{
+                "id": "RT_3", "isResolved": false, "isOutdated": false,
+                "comments": {"totalCount": 0, "nodes": []}
+            }]}
+        }}});
+        let t = &map_detail(&v, "o/r").review_threads[0];
+        assert!(!t.viewer_can_reply);
+        assert!(!t.viewer_can_resolve);
+        assert!(!t.viewer_can_unresolve);
+    }
+
+    /// The header count and the thread list are two renderings of one
+    /// truth. This pins them to the same payload so they cannot drift.
+    #[test]
+    fn the_count_and_the_list_agree_on_one_payload() {
+        let v = json!({"repository": {"pullRequest": {
+            "reviewThreads": {"nodes": [
+                {"id": "a", "isResolved": false, "isOutdated": false,
+                 "comments": {"totalCount": 0, "nodes": []}},
+                {"id": "b", "isResolved": true, "isOutdated": false,
+                 "comments": {"totalCount": 0, "nodes": []}},
+                {"id": "c", "isResolved": false, "isOutdated": true,
+                 "comments": {"totalCount": 0, "nodes": []}}
+            ]}
+        }}});
+        let d = map_detail(&v, "o/r");
+        assert_eq!(d.review_threads.len(), 3, "every thread is carried");
+        assert_eq!(
+            d.unresolved_threads, 1,
+            "but only the actionable one is counted"
+        );
+        // The exact rule the count uses, restated over the list the UI
+        // renders: if these ever disagree the header contradicts the
+        // section beneath it.
+        let actionable = d
+            .review_threads
+            .iter()
+            .filter(|t| !t.is_resolved && !t.is_outdated)
+            .count() as u64;
+        assert_eq!(actionable, d.unresolved_threads);
     }
 
     #[test]

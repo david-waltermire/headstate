@@ -231,6 +231,34 @@ export interface WorktreeRepo {
 /// Separate from `PullRequest`, which is a list row fetched 100 at a time
 /// on a poll loop -- carrying a body and comments there would make every
 /// tick haul data almost no row needs.
+/// One review conversation on a pull request.
+export interface ReviewThread {
+  /// The thread's node id, which the resolve and reply commands take --
+  /// NOT the pull request's id.
+  id: string;
+  is_resolved: boolean;
+  /// Whether the anchored line still exists after a force-push.
+  ///
+  /// Not the same question as resolved: an outdated thread can still hold
+  /// an unanswered question, so the UI must never present "the code moved"
+  /// as "this was dealt with".
+  is_outdated: boolean;
+  path: string;
+  /// Null once the anchor is gone, which is when `is_outdated` is true.
+  /// Render the path alone rather than `file.ts:null`.
+  line: number | null;
+  /// What THIS viewer may do, per thread. Separate permissions because
+  /// GitHub grants them separately; a button shown without its permission
+  /// fails with a 403 on click.
+  viewer_can_reply: boolean;
+  viewer_can_resolve: boolean;
+  viewer_can_unresolve: boolean;
+  comments: { author: string; created_at: string; body: string }[];
+  /// The true total, which can exceed `comments.length` -- the query
+  /// pages thread comments at 10.
+  comment_count: number;
+}
+
 export interface PrDetail {
   /// GraphQL node ID. Every mutation takes this rather than a number, so
   /// a write can only follow a read of the thing being written.
@@ -271,6 +299,12 @@ export interface PrDetail {
   unresolved_threads: number;
   comment_count: number;
   comments: { author: string; created_at: string; body: string }[];
+  /// The review conversations -- inline threads anchored to a file and
+  /// line. A DIFFERENT object from `comments` above, which are flat
+  /// top-level comments: only threads can be resolved, so merging the two
+  /// into one list would imply a Resolve button on comments that have no
+  /// such concept.
+  review_threads: ReviewThread[];
   /// `state` is `success`, `failure`, `pending`, `skipped`, or a raw
   /// GitHub value when unmodelled -- never coerced to success. Inlined
   /// rather than exported types, since nothing imports the names.

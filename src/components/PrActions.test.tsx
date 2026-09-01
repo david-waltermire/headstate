@@ -33,6 +33,7 @@ const pr = (over: Partial<PrDetail> = {}): PrDetail => ({
   unresolved_threads: 0,
   comment_count: 0,
   comments: [],
+  review_threads: [],
   latest_reviews: [],
   merge_queue_enabled: false,
   in_merge_queue: false,

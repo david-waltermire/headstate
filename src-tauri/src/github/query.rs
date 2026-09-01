@@ -342,7 +342,24 @@ query($owner: String!, $repo: String!, $number: Int!) {
         totalCount
         nodes { author { login } createdAt body }
       }
-      reviewThreads(first: 20) { nodes { isResolved isOutdated } }
+      # The DETAIL query carries the whole thread; the list query above
+      # keeps its two-field shape and only counts. MEASURED against the
+      # live API: this query still costs 1 point with the comments and
+      # the three viewer-permission fields, so the detail view can afford
+      # what `PRS_QUERY` cannot -- the same reasoning as #312.
+      #
+      # `viewerCan*` are three separate questions and all three are
+      # asked: on a repository where the viewer lacks write access,
+      # Resolve renders and then fails with a 403. A button that cannot
+      # work must not be shown, and only GitHub can answer that.
+      reviewThreads(first: 20) { nodes {
+        id isResolved isOutdated path line
+        viewerCanReply viewerCanResolve viewerCanUnresolve
+        comments(first: 10) {
+          totalCount
+          nodes { author { login } createdAt body }
+        }
+      } }
       # Does the BASE branch of this pull request use a merge queue?
       #
       # `mergeQueue(branch:)` is branch-scoped because the setting is:

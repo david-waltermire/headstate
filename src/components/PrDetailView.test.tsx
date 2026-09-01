@@ -31,6 +31,9 @@ vi.mock("../api/hooks", () => ({
   useReviewPr: () => reviewPr,
   useRerunChecks: () => rerunChecks,
   useCommentOnPr: () => commentOnPr,
+  useResolveThread: () => vi.fn(() => Promise.resolve()),
+  useUnresolveThread: () => vi.fn(() => Promise.resolve()),
+  useReplyToThread: () => vi.fn(() => Promise.resolve()),
   // The detail view treats undefined as "we could not ask", which is
   // deliberately NOT the same as "this is mine" -- see ReviewBox.
   // Controllable so the pinned Approve button, which is hidden on your
@@ -62,6 +65,7 @@ const detail = (over: Partial<PrDetail> = {}): PrDetail => ({
   unresolved_threads: 0,
   comment_count: 0,
   comments: [],
+  review_threads: [],
   latest_reviews: [],
   merge_queue_enabled: false,
   in_merge_queue: false,
@@ -162,7 +166,12 @@ describe("PrDetailView", () => {
       ],
     });
     expect(screen.getByText(/hubot/)).toBeTruthy();
-    expect(screen.getByText(/looks good/)).toBeTruthy();
+    // The body, not the collapsed row's screen-reader preview -- a single
+    // comment opens by default, so both carry this text.
+    const visible = screen
+      .getAllByText(/looks good/)
+      .filter((el) => !el.classList.contains("sr-only"));
+    expect(visible).toHaveLength(1);
   });
 
   // The query caps comments at 50; claiming to show all of them would
@@ -204,23 +213,89 @@ describe("PrDetailView", () => {
     expect(screen.getByText("lint")).toBeTruthy();
   });
 
-  it("collapses a long comment thread and leaves a short one open", () => {
+  /// Each comment collapses on its own now, rather than the block
+  /// collapsing as a unit. The previous behaviour was all-or-nothing:
+  /// six comments meant expanding every one of them to read any one.
+  it("collapses each comment individually, with its own toggle", () => {
     const comment = (i: number) => ({
       author: "octocat",
       created_at: "2026-08-20T10:00:00Z",
       body: `comment ${i}`,
     });
-    view({ comments: [comment(1), comment(2)], comment_count: 2 });
-    expect(screen.getByText("comment 1")).toBeTruthy();
-
-    cleanup();
     view({
       comments: [1, 2, 3, 4, 5, 6].map(comment),
       comment_count: 6,
     });
-    expect(screen.queryByText("comment 1")).toBeNull();
-    // Collapsed, but the count still says what is hidden.
+
+    // One toggle per comment, each independently operable -- that is what
+    // "collapsed individually" MEANS, and a single shared toggle would
+    // still satisfy a test that only looked at visible text.
+    const toggles = screen
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-expanded") !== null);
+    expect(toggles.length).toBeGreaterThanOrEqual(6);
+
+    // The count still says what is hidden.
     expect(screen.getByText("6")).toBeTruthy();
+
+    // Opening the third leaves the others shut: independence, not a
+    // single control wired to every row.
+    const third = screen.getByRole("button", { name: /comment 3/ });
+    fireEvent.click(third);
+    expect(third.getAttribute("aria-expanded")).toBe("true");
+    expect(
+      screen.getByRole("button", { name: /comment 4/ }).getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  /// A lone comment has nothing to scan past, so collapsing it only adds
+  /// a click between the reader and the only thing there is to read.
+  it("opens a single comment by default", () => {
+    view({
+      comments: [
+        {
+          author: "octocat",
+          created_at: "2026-08-20T10:00:00Z",
+          body: "the only comment",
+        },
+      ],
+      comment_count: 1,
+    });
+    expect(
+      screen.getByRole("button", { name: /the only comment/ }).getAttribute("aria-expanded"),
+    ).toBe("true");
+  });
+
+  /// The threads have to REACH the view, not merely exist in the model:
+  /// this is the wiring between PrDetail and the Conversations section.
+  it("shows review conversations from the detail payload", () => {
+    view({
+      review_threads: [
+        {
+          id: "RT_1",
+          is_resolved: false,
+          is_outdated: false,
+          path: "src/api/hooks.ts",
+          line: 412,
+          viewer_can_reply: true,
+          viewer_can_resolve: true,
+          viewer_can_unresolve: false,
+          comments: [
+            {
+              author: "carol",
+              created_at: "2026-08-20T10:00:00Z",
+              body: "This leaks the subscription",
+            },
+          ],
+          comment_count: 1,
+        },
+      ],
+    });
+    expect(screen.getByText("src/api/hooks.ts:412")).toBeTruthy();
+    // Unresolved, so it is open and its content is on screen without a
+    // click -- the reason the section exists.
+    expect(screen.getByText(/This leaks the subscription/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Resolve conversation" })).toBeTruthy();
   });
 
   /// The description is what the pull request IS -- collapsing it by

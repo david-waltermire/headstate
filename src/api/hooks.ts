@@ -46,6 +46,9 @@ import {
   setWorktreeDirs,
   reviewPr,
   commentOnPr,
+  replyToThread,
+  resolveThread,
+  unresolveThread,
   getViewer,
   rerunChecks,
   getUiPrefs,
@@ -422,6 +425,41 @@ export function useCommentOnPr() {
   const qc = useQueryClient();
   return (id: string, repo: string, number: number, body: string) =>
     commentOnPr(id, repo, number, body).then(() => {
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+    });
+}
+
+/// Resolve, reopen, and reply on a review conversation.
+///
+/// All three invalidate the detail query, because all three change the
+/// unresolved COUNT the header renders beside the thread list. Leaving it
+/// stale would put "2 unresolved conversations" above a list showing one
+/// -- the header contradicting the section beneath it.
+///
+/// The list queries are deliberately untouched: `unresolved_threads` is
+/// on the list model too, but a poll refreshes it within the minute and
+/// invalidating a 6-second query for a number nobody is looking at is the
+/// cost #328 measured and rejected.
+export function useResolveThread() {
+  const qc = useQueryClient();
+  return (threadId: string, repo: string, number: number) =>
+    resolveThread(threadId, repo, number).then(() => {
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+    });
+}
+
+export function useUnresolveThread() {
+  const qc = useQueryClient();
+  return (threadId: string, repo: string, number: number) =>
+    unresolveThread(threadId, repo, number).then(() => {
+      void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
+    });
+}
+
+export function useReplyToThread() {
+  const qc = useQueryClient();
+  return (threadId: string, repo: string, number: number, body: string) =>
+    replyToThread(threadId, repo, number, body).then(() => {
       void qc.invalidateQueries({ queryKey: ["pr-detail", repo, number] });
     });
 }
