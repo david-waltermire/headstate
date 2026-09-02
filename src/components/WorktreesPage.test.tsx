@@ -70,6 +70,7 @@ vi.mock("../api/hooks", () => ({
   useRemoveWorktrees: () => removeManyFn,
   useRemoveWorktreeForced: () => forceFn,
   useAssessed: () => ({ data: state.assessed }),
+  useMarkAssessed: () => markAssessedFn,
   usePullRequests: () => ({ data: state.prs }),
   // Mirrors the real hook: a DISABLED query reports `isLoading: true`
   // forever, so the page reads `isFetching` instead -- and a mock that
@@ -90,6 +91,7 @@ const removeManyFn = vi.hoisted(() =>
   ),
 );
 
+const markAssessedFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const claudify = vi.hoisted(() =>
   vi.fn(() =>
     Promise.resolve({ command: "cd '/code/proj-a' && claude 'assess'", claude_installed: true }),
@@ -112,7 +114,7 @@ const wt = (over: Partial<Worktree>): Worktree => ({
   ...over,
 });
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } as const;
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} } as const;
 
 describe("WorktreesPage", () => {
   beforeEach(() => {
@@ -355,7 +357,7 @@ describe("WorktreesPage", () => {
       sizesTotal: 2,
     });
     useFilters.setState({
-      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} },
       view: "worktrees",
     } as never);
     render(<WorktreesPage />);
@@ -373,7 +375,7 @@ describe("WorktreesPage", () => {
       sizesTotal: 1,
     });
     useFilters.setState({
-      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} },
       view: "worktrees",
     } as never);
     render(<WorktreesPage />);
@@ -517,6 +519,54 @@ describe("WorktreesPage", () => {
       expect(toastSuccess).toHaveBeenCalled();
       const [, opts] = toastSuccess.mock.calls[0] as [string, { description: string }];
       expect(opts.description).toMatch(/paste it in your terminal/i);
+    });
+
+    /// #393: the toast must SAY the clipboard, not just "copied".
+    it("names the clipboard in the confirmation", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+      Object.assign(navigator, { clipboard: { writeText } });
+      state.classified = [wt({ safety: { kind: "never_pushed" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /claudify/i }));
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+      expect(toastSuccess.mock.calls[0][0]).toMatch(/clipboard/i);
+    });
+
+    /// #393: copying a prompt must not unlock the force-remove path.
+    ///
+    /// It used to mark the worktree assessed as a side effect, which
+    /// armed "Remove anyway…" on a worktree nobody had read a verdict
+    /// for -- and swapped a narrow button for a wide one seconds later,
+    /// re-flowing every column in the table.
+    it("does not mark the worktree assessed just for copying", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+      Object.assign(navigator, { clipboard: { writeText } });
+      state.classified = [wt({ safety: { kind: "never_pushed" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /claudify/i }));
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+      expect(markAssessedFn).not.toHaveBeenCalled();
+    });
+
+    /// ...and the toast offers the deliberate way to record it.
+    it("offers an explicit way to say the assessment was read", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+      Object.assign(navigator, { clipboard: { writeText } });
+      state.classified = [wt({ safety: { kind: "never_pushed" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /claudify/i }));
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+      const [, opts] = toastSuccess.mock.calls[0] as [
+        string,
+        { action?: { label: string; onClick: () => void } },
+      ];
+      expect(opts.action?.label).toMatch(/read the assessment/i);
+
+      opts.action?.onClick();
+      await waitFor(() => expect(markAssessedFn).toHaveBeenCalled());
     });
 
     /// #347: reported as "no indication it copied anything". The

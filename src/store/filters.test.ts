@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { useFilters } from "./filters";
+import { ALL_VIEWS, useFilters } from "./filters";
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } as const;
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} } as const;
 const active = () => {
   const s = useFilters.getState();
   return s.filtersByView[s.view];
@@ -100,11 +100,12 @@ describe("persisted state migration", () => {
     const out = migrate({ filters: { staleOnly: true }, view: "list" }, 1);
     // Every view must get an entry, or a v1 store rehydrated into the
     // current shape throws on first access -- the crash #145 shipped.
-    expect(Object.keys(out.filtersByView).sort()).toEqual([
-      "docker",
-      "my-prs",
-      "to-review",
-      "worktrees",
-    ]);
+    //
+    // Derived from the CURRENT view list rather than a hardcoded one, so
+    // adding a view cannot leave this test passing against a stale
+    // expectation. A literal list here would have to be edited by hand
+    // every time, which is exactly when someone edits it to match
+    // whatever the code now does and stops checking anything.
+    expect(Object.keys(out.filtersByView).sort()).toEqual([...ALL_VIEWS].sort());
   });
 });

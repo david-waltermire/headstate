@@ -406,3 +406,69 @@ export interface Assessment {
   subjects: string[];
   subjects_elided: number;
 }
+
+/// What kind of build output a directory holds.
+///
+/// Mirrors `ArtifactKind` in Rust. The membership rule is that a
+/// documented command rebuilds it -- which is what makes removal cost a
+/// rebuild rather than work, and why this is a closed set rather than a
+/// user-supplied pattern.
+export type ArtifactKind = "cargo_target" | "node_modules" | "terraform" | "build_output";
+
+/// One directory of regenerable build output.
+export interface Artifact {
+  /// Absolute path. Removal takes this, never a name matched by pattern.
+  path: string;
+  kind: ArtifactKind;
+  /// The checkout it belongs to, for grouping.
+  repo_path: string;
+  /// Bytes on disk, or null until measured.
+  ///
+  /// Discovery and sizing differ by three orders of magnitude (measured:
+  /// ~1.5s to find 178 directories, ~56s to size them), so the list
+  /// renders before this is known. Null rather than 0: "not measured
+  /// yet" and "empty" are different facts, and showing 0 B for the
+  /// former is a lie the user would act on.
+  size_bytes: number | null;
+  /// Seconds since anything under it was written, or null if unknown.
+  ///
+  /// A running build does not make git dirty -- build output is
+  /// gitignored -- so this is the only signal that a directory is in
+  /// active use.
+  modified_secs_ago: number | null;
+}
+
+/// The outcome of removing one artifact directory.
+///
+/// Per-directory rather than one verdict for the batch: a directory that
+/// went active since the scan is refused while the rest succeed.
+export interface ArtifactRemoval {
+  path: string;
+  /// Null on success. Shown verbatim -- it names WHY, and "could not
+  /// remove" alone is not something a user can act on.
+  error: string | null;
+}
+
+/// Why a Poetry virtualenv is reclaimable.
+export type VenvState = "orphaned" | "stale" | "live";
+
+/// One Poetry virtualenv.
+export interface Venv {
+  path: string;
+  /// The project name Poetry encoded, e.g. `mls-delivery-service`.
+  project: string;
+  state: VenvState;
+  /// The directory that produced it. Null for an orphan -- that IS the
+  /// finding, not missing data.
+  source: string | null;
+  size_bytes: number | null;
+  /// Seconds since the newest file INSIDE was written. Poetry touches a
+  /// venv's root without writing inside, so its own mtime reports a
+  /// year-old venv as days old.
+  idle_secs: number | null;
+}
+
+export interface VenvRemoval {
+  path: string;
+  error: string | null;
+}

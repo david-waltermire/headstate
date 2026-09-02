@@ -1,4 +1,4 @@
-import { Container, ChevronDown, Eye, FolderGit2, GitPullRequest } from "lucide-react";
+import { Container, ChevronDown, Eye, FolderGit2, GitPullRequest, HardDrive } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type View, useFilters } from "../store/filters";
 import { useUiPrefs } from "../api/hooks";
@@ -8,11 +8,12 @@ const VIEWS: { id: View; label: string; Icon: typeof GitPullRequest }[] = [
   { id: "to-review", label: "To review", Icon: Eye },
   { id: "worktrees", label: "Worktrees", Icon: FolderGit2 },
   { id: "docker", label: "Docker", Icon: Container },
+  { id: "artifacts", label: "Artifacts", Icon: HardDrive },
 ];
 
 /// The top-level view control, at the head of the sidebar.
 ///
-/// Collapsed it names the CURRENT view; expanded it lists all three. It
+/// Collapsed it names the CURRENT view; expanded it lists them all. It
 /// replaces the "Awaiting your review" entry that was pinned to the
 /// sidebar's bottom, which was a flat list masquerading as a peer of the
 /// repo rows.

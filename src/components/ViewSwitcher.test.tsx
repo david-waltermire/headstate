@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useFilters } from "../store/filters";
 import { ViewSwitcher } from "./ViewSwitcher";
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } as const;
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} } as const;
 
 describe("ViewSwitcher", () => {
   beforeEach(() =>
@@ -71,7 +71,7 @@ describe("ViewSwitcher", () => {
   // another, which has an entirely different repo list.
   it("does not leak filters between views", () => {
     useFilters.setState({
-      filtersByView: { "my-prs": { repo: "octocat/hello-world" }, "to-review": {}, worktrees: {}, docker: {} },
+      filtersByView: { "my-prs": { repo: "octocat/hello-world" }, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} },
       view: "my-prs",
       panel: "list",
     });

@@ -41,7 +41,7 @@ const orphanRepo = (name: string) => ({
 beforeEach(() => {
   repos.mockReturnValue([]);
   useFilters.setState({
-    filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+    filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} },
     view: "worktrees",
   } as never);
 });

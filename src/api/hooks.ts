@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { safeUnlisten } from "./unlisten";
 import { timed } from "./diag";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { DockerImage, PrDetail, PullRequest, Worktree } from "../types/pr";
+import type { Artifact, DockerImage, PrDetail, PullRequest, Venv, Worktree } from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
   getCached,
@@ -35,6 +35,13 @@ import {
   removeWorktreeForced,
   setAutoMerge,
   removeWorktrees,
+  removeArtifacts,
+  markAssessed,
+  removeVenvs,
+  scanVenvs,
+  sizeVenvs,
+  scanArtifacts,
+  sizeArtifacts,
   sizeWorktrees,
   getReviewing,
   getCachedReviewing,
@@ -520,6 +527,133 @@ export function useReplyToThread() {
     });
 }
 
+/// Regenerable build output under the configured scan roots.
+///
+/// Discovery only. Sizes come from `useArtifactSizes`, because the two
+/// passes differ by three orders of magnitude and blocking the list on
+/// the slow one would leave the view empty for a minute -- the exact
+/// complaint that shaped the worktree page.
+export function useArtifacts(enabled: boolean) {
+  return useQuery({
+    queryKey: ["artifacts"],
+    queryFn: scanArtifacts,
+    enabled,
+    // The set changes when someone builds or clones, not on a timer.
+    staleTime: 60 * 1000,
+  });
+}
+
+/// Sizes for artifact directories, measured in per-repository batches.
+///
+/// Batched by repo rather than one query for everything, so the page
+/// fills in progressively instead of staying blank until the slowest
+/// directory finishes. A 61 GB `target/` can take tens of seconds on its
+/// own; the other 177 rows should not wait behind it.
+///
+/// `staleTime` is long for the same reason as the worktree equivalent: a
+/// directory's size does not change unless its contents do.
+export function useArtifactSizes(artifacts: Artifact[], enabled: boolean) {
+  // Grouped OUTSIDE the query so the key set is stable across renders --
+  // a fresh grouping each render would remount every query and restart
+  // the measurement.
+  const byRepo = new Map<string, string[]>();
+  for (const a of artifacts) {
+    const list = byRepo.get(a.repo_path) ?? [];
+    list.push(a.path);
+    byRepo.set(a.repo_path, list);
+  }
+  const groups = [...byRepo.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+  const results = useQueries({
+    queries: groups.map(([repo, paths]) => ({
+      queryKey: ["artifact-sizes", repo, paths.length],
+      queryFn: () => sizeArtifacts(paths),
+      enabled,
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
+
+  const sizes = new Map<string, number>();
+  const ages = new Map<string, number>();
+  for (const r of results) {
+    for (const [path, bytes, age] of r.data ?? []) {
+      sizes.set(path, bytes);
+      if (age !== null) ages.set(path, age);
+    }
+  }
+  return {
+    sizes,
+    ages,
+    /// How many repositories have not answered yet -- the number that
+    /// makes a partially-filled page legible rather than broken.
+    pending: results.filter((r) => r.isFetching).length,
+    total: results.length,
+  };
+}
+
+/// Remove artifact directories.
+///
+/// Invalidates the scan AND the sizes: a removed directory must leave
+/// the list, and a stale size row would otherwise keep counting bytes
+/// that are no longer there.
+export function useRemoveArtifacts() {
+  const qc = useQueryClient();
+  return async (paths: string[]) => {
+    const out = await removeArtifacts(paths);
+    await qc.invalidateQueries({ queryKey: ["artifacts"] });
+    await qc.invalidateQueries({ queryKey: ["artifact-sizes"] });
+    return out;
+  };
+}
+
+/// Poetry virtualenvs, classified.
+///
+/// Discovery only. Sizes and idle times come from `useVenvSizes`,
+/// because deciding staleness needs a full walk of each venv.
+export function useVenvs(enabled: boolean) {
+  return useQuery({
+    queryKey: ["venvs"],
+    queryFn: scanVenvs,
+    enabled,
+    staleTime: 60 * 1000,
+  });
+}
+
+/// Sizes and idle times for virtualenvs.
+///
+/// One batch rather than per-project groups: unlike artifacts, venvs are
+/// individually small (under a gigabyte each on a real cache), so no
+/// single one holds up the rest and the added query keys would only
+/// fragment the cache.
+export function useVenvSizes(venvs: Venv[], enabled: boolean) {
+  const paths = venvs.map((v) => v.path);
+  const q = useQuery({
+    queryKey: ["venv-sizes", paths.length],
+    queryFn: () => sizeVenvs(paths),
+    enabled: enabled && paths.length > 0,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const sizes = new Map<string, number>();
+  const idle = new Map<string, number>();
+  for (const [path, bytes, secs] of q.data ?? []) {
+    sizes.set(path, bytes);
+    if (secs !== null) idle.set(path, secs);
+  }
+  return { sizes, idle, measuring: q.isFetching };
+}
+
+/// Remove virtualenvs, then refresh what is left.
+export function useRemoveVenvs() {
+  const qc = useQueryClient();
+  return async (paths: string[]) => {
+    const out = await removeVenvs(paths);
+    await qc.invalidateQueries({ queryKey: ["venvs"] });
+    await qc.invalidateQueries({ queryKey: ["venv-sizes"] });
+    return out;
+  };
+}
+
 /// Merge the base branch into a pull request's head.
 ///
 /// Invalidates the same keys as `useActOnPr`: the update changes CI
@@ -773,6 +907,20 @@ export function useAssessed() {
     queryFn: assessedWorktrees,
     staleTime: 5_000,
   });
+}
+
+/// Record that a human read an assessment.
+///
+/// Invalidates the assessed list so the row's action updates -- which is
+/// the point: the change is now the deliberate result of the user saying
+/// they read the verdict, rather than a delayed side effect of copying a
+/// command.
+export function useMarkAssessed() {
+  const qc = useQueryClient();
+  return async (worktreePath: string) => {
+    await markAssessed(worktreePath);
+    await qc.invalidateQueries({ queryKey: ["assessed-worktrees"] });
+  };
 }
 
 /// Remove a worktree past the safety gate.

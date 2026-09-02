@@ -107,6 +107,88 @@ that, a measurement on a real machine found ancestry alone recognised
 10 of 157 merged worktrees.`,
   },
 
+  "poetry-venvs": {
+    title: "Poetry virtualenvs, and why there are so many",
+    body: `Poetry names each virtualenv after **the absolute path of the project
+that created it** — so every worktree gets its own, and deleting the
+worktree leaves the virtualenv behind forever.
+
+That is why this list is long. On the machine this feature was built for,
+one project that no longer exists on disk at all accounted for 70 of the
+90 virtualenvs and 55 GB.
+
+### The three states
+
+**Orphaned** — no directory on this machine hashes to this virtualenv's
+name. The path that created it is gone, so nothing can ever use it again.
+This is a *fact*, not an estimate, and it is the only state offered for
+removal.
+
+**Stale** — the project directory still exists, but nothing inside the
+virtualenv has been written to in over 90 days. Shown so you can see it;
+never removed automatically, because a project you have not touched since
+spring is not the same as one you have abandoned.
+
+**Live** — everything else, including anything that could not be
+measured.
+
+### Why "stale" is not offered for removal
+
+Orphaned is provable. Stale is a guess about your intentions, and this
+view will not act on a guess. If a stale virtualenv really is finished
+with, deleting its project directory makes it an orphan, and then it can
+go.
+
+### What is re-checked when you remove
+
+The verdict is re-derived from the filesystem, not taken from the row you
+clicked. If a project directory reappeared since the list was built, that
+virtualenv is live again and the removal is refused.`,
+  },
+  "build-artifacts": {
+    title: "Build output, and what puts it back",
+    body: `Directories a **tool regenerates**: \`target\`, \`node_modules\`,
+\`.terraform\`, and gitignored \`dist\`/\`build\` folders.
+
+That is the whole membership rule, and it is what makes this view safe in
+a way the Worktrees view is not. Deleting build output costs a rebuild.
+Deleting a worktree with unpushed commits costs the work. Every row here
+names the command that restores it.
+
+### Why these are not on the Worktrees page
+
+Build output lives beside your **checkouts**, not inside your worktrees.
+On the machine this feature was built for, 108 GB of Rust build output
+sat next to main checkouts and only 0.28 GB inside worktrees — so
+removing every worktree would not have touched 99.7% of it.
+
+### Sizes arrive after the list
+
+Finding these directories takes about a second; measuring them takes
+around a minute. So the list appears first and fills in, and the total
+reads "at least" until every repository has answered. A total over a
+partial set is not the total.
+
+### "Written recently"
+
+A build writing into a directory does not show up in \`git status\` —
+build output is gitignored, so git cannot see it at all. The only
+available signal is when the directory was last written, and a row marked
+this way may have a build running in it right now.
+
+Removal **refuses** anything written to in the last few minutes, rather
+than trusting the list you clicked. Deleting a \`target\` out from under a
+running build is the one way this can cost real time instead of a rebuild.
+
+### What is re-checked when you remove
+
+Everything, and from the filesystem rather than from the row. The list
+may be minutes old, so before anything is deleted it must still be inside
+a scanned folder, still a real directory rather than a symlink, still
+recognised as build output, and still idle. A directory that fails any of
+those is refused and named in the result — a refusal is the guard
+working, not a malfunction.`,
+  },
   "bulk-removal": {
     title: "Bulk cleanup, and leaving the page",
     body: `Removals run **on the backend, in one batch** — not one request per

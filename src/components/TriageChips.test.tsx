@@ -22,7 +22,7 @@ const PRS: PullRequest[] = [
 
 describe("TriageChips", () => {
   beforeEach(() => {
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} }, view: "my-prs", panel: "list" } as never);
   });
 
   it("shows a count for each non-empty triage state", () => {
@@ -58,7 +58,7 @@ describe("TriageChips", () => {
       filtersByView: {
         "my-prs": { repo: "octocat/hello-world" },
         "to-review": {},
-        worktrees: {}, docker: {},
+        worktrees: {}, docker: {}, artifacts: {},
       },
       view: "my-prs",
       panel: "list",
@@ -81,7 +81,7 @@ describe("TriageChips", () => {
       const listed = applyFilters(PRS, useFilters.getState().filtersByView[useFilters.getState().view], NOW).length;
       expect(listed).toBe(shown);
       // Reset for the next chip.
-      useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
+      useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} }, view: "my-prs", panel: "list" } as never);
     }
   });
 

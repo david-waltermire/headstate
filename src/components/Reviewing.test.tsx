@@ -41,7 +41,7 @@ function renderApp() {
 
 describe("PRs to review", () => {
   it("shows the incoming count on the view switcher", () => {
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
     // The switcher heads the sidebar and badges the count; the old
     // bottom-pinned entry is gone.
@@ -49,7 +49,7 @@ describe("PRs to review", () => {
   });
 
   it("lists the incoming PRs on its own view", () => {
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "to-review", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} }, view: "to-review", panel: "list" } as never);
     renderApp();
     expect(screen.getByText("Someone else's PR")).toBeTruthy();
   });
@@ -58,7 +58,7 @@ describe("PRs to review", () => {
   // status rendering, driven by the reviewing list rather than my own.
   it("scopes the repo sidebar to the reviewing list", () => {
     useFilters.setState({
-      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} },
       view: "to-review",
       panel: "list",
     } as never);
@@ -70,7 +70,7 @@ describe("PRs to review", () => {
 
   it("offers filters on the review view, not just a flat list", () => {
     useFilters.setState({
-      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} },
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} },
       view: "to-review",
       panel: "list",
     } as never);
@@ -83,7 +83,7 @@ describe("PRs to review", () => {
   // problem to fix, and must not inflate the strip, the chips, or the
   // tray badge.
   it("does not let another author's red CI reach the priorities strip", () => {
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} }, view: "my-prs", panel: "list" } as never);
     renderApp();
     expect(screen.queryByText("Someone else's PR")).toBeNull();
   });

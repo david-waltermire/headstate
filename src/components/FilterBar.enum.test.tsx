@@ -7,7 +7,7 @@ import { PR_FIXTURES } from "../fixtures/prs";
 afterEach(() => {
   cleanup();
   useFilters.getState().reset();
-  useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} } });
+  useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} } });
 });
 
 /// The Reviews trigger rendered `${filters.review}` directly, so choosing
@@ -22,7 +22,7 @@ describe("FilterBar review trigger", () => {
         "my-prs": { review: "changes_requested" },
         "to-review": {},
         worktrees: {},
-        docker: {},
+        docker: {}, artifacts: {},
       },
     });
     render(<FilterBar prs={PR_FIXTURES} />);
@@ -36,7 +36,7 @@ describe("FilterBar review trigger", () => {
         "my-prs": { review: "review_required" },
         "to-review": {},
         worktrees: {},
-        docker: {},
+        docker: {}, artifacts: {},
       },
     });
     render(<FilterBar prs={PR_FIXTURES} />);

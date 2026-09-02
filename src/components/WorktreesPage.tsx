@@ -2,6 +2,7 @@ import { ExternalLink } from "./ExternalLink";
 import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import {
+  useMarkAssessed,
   useRemoveWorktree,
   useAssessed,
   usePullRequests,
@@ -211,6 +212,12 @@ function Row({
           which answers the question that actually applies to them --
           "is there anything in here worth keeping?" -- rather than
           showing a dead button that says the app will not help. */}
+      {/* A FIXED-WIDTH action cell. The button in it changes label --
+          "Claudify" becomes the wider "Remove anyway…" once assessed --
+          and without a reserved width that swap re-flowed every column
+          in the table. A row's layout should not depend on which action
+          it currently offers. */}
+      <span className="flex w-32 shrink-0 justify-end">
       {claudifiable && assessed ? (
         // Only after an assessment of THIS worktree. Otherwise this is a
         // "delete anything" button with extra steps.
@@ -260,6 +267,7 @@ function Row({
           {removing ? "Removing…" : orphaned ? "Delete" : "Remove"}
         </button>
       )}
+      </span>
       {/* The disclosure, not a second action: the row keeps its
           one-action rule and this only reveals what the app already
           knows. */}
@@ -415,18 +423,36 @@ export function WorktreesPage() {
   /// Copy rather than spawn. The command lands in the user's own shell,
   /// where their config applies and `claude` resolves -- and there is no
   /// portable way to open "the user's terminal" anyway.
+  const markRead = useMarkAssessed();
+
   const claudify = (wt: Worktree) => {
     claudifyCommand(selected?.path ?? "", wt.path, wt.branch).then(
       ({ command, claude_installed }) =>
         navigator.clipboard.writeText(command).then(
           () =>
-            toast.success("Command copied", {
+            toast.success("Command copied to the clipboard", {
               // The user has to switch apps; this is the only place to
               // say so. And if Claude Code is missing, better to learn it
               // here than as a `command not found` after pasting.
               description: claude_installed
                 ? "Paste it in your terminal to start the assessment."
                 : "Paste it in your terminal. Claude Code was not found on this machine.",
+              // The ONLY way to reach "Remove anyway…", and it is here
+              // rather than automatic because that button removes a
+              // worktree past its safety gate. Copying a prompt is not
+              // evidence anyone read the answer; clicking this is.
+              action: {
+                label: "I read the assessment",
+                onClick: () => {
+                  void markRead(wt.path).then(
+                    () => toast.success(`${pathBasename(wt.path)} can now be removed`),
+                    (e: unknown) =>
+                      toast.error("Could not record the assessment", {
+                        description: typeof e === "string" ? e : undefined,
+                      }),
+                  );
+                },
+              },
             }),
           // WITH the reason. `navigator.clipboard` rejects when the
           // document is not focused, which is a real case in a desktop

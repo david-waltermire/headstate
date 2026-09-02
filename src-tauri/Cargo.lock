@@ -1717,12 +1717,14 @@ dependencies = [
 name = "headstate"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "log",
  "octocrab",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",

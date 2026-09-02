@@ -10,7 +10,7 @@ const repos = [
 
 describe("RepoTable", () => {
   beforeEach(() => {
-    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {} }, view: "my-prs", panel: "list" } as never);
+    useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {} }, view: "my-prs", panel: "list" } as never);
   });
 
   it("lists repos with counts", () => {

@@ -10,7 +10,15 @@ import type { Filters } from "../lib/derive";
 /// the list or the stats" were previously one enum, which is what made the
 /// sidebar highlight logic awkward -- `reviewing` and `dashboard` were
 /// peers of `list` despite being different kinds of thing.
-export type View = "my-prs" | "to-review" | "worktrees" | "docker";
+/// Every top-level view, in sidebar order.
+///
+/// The single source of truth: `View` is derived from it, and the
+/// migration's completeness test iterates it rather than repeating the
+/// names. A hardcoded second list is one that gets edited to match
+/// whatever the code does and stops checking anything.
+export const ALL_VIEWS = ["my-prs", "to-review", "worktrees", "docker", "artifacts"] as const;
+
+export type View = (typeof ALL_VIEWS)[number];
 
 interface FilterStore {
   /// Filters are PER VIEW: a repo selected in My PRs must not leak into
@@ -77,6 +85,7 @@ const EMPTY_FILTERS: Record<View, Filters> = {
   "to-review": {},
   worktrees: {},
   docker: {},
+  artifacts: {},
 };
 
 /// Filters and view survive a relaunch.

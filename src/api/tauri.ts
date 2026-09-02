@@ -8,6 +8,10 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  Artifact,
+  Venv,
+  VenvRemoval,
+  ArtifactRemoval,
   Assessment,
   CycleTrend,
   DanglingVolume,
@@ -384,3 +388,39 @@ export const getMergedDetail = () => invoke<MergedDetail>("get_merged_detail");
 /// Computed once at startup from the `gh` CLI token. `ok: false` means the
 /// user needs to run `gh auth login`; `message` is ready-to-display prose.
 export const getAuthState = () => invoke<AuthState>("get_auth_state");
+
+/// Regenerable build output under the configured scan roots.
+///
+/// Discovery only: every `size_bytes` comes back null. See
+/// `sizeArtifacts` for the second pass.
+export const scanArtifacts = () => invoke<Artifact[]>("scan_artifacts");
+
+/// Sizes for specific artifact directories, as
+/// `[path, bytes, secsSinceWrite]`.
+export const sizeArtifacts = (paths: string[]) =>
+  invoke<[string, number, number | null][]>("size_artifacts", { paths });
+
+/// Remove artifact directories. Each is re-verified at delete time, so a
+/// stale row is refused rather than acted on.
+export const removeArtifacts = (paths: string[]) =>
+  invoke<ArtifactRemoval[]>("remove_artifacts", { paths });
+
+/// Poetry virtualenvs, classified. Discovery only: sizes and idle times
+/// come from `sizeVenvs`.
+export const scanVenvs = () => invoke<Venv[]>("scan_venvs");
+
+/// Sizes and idle times, as `[path, bytes, idleSecs]`.
+export const sizeVenvs = (paths: string[]) =>
+  invoke<[string, number, number | null][]>("size_venvs", { paths });
+
+/// Remove virtualenvs. Each is re-verified at delete time.
+export const removeVenvs = (paths: string[]) =>
+  invoke<VenvRemoval[]>("remove_venvs", { paths });
+
+/// Record that a human read an assessment for this worktree.
+///
+/// Deliberately NOT done by `claudifyCommand`: copying a prompt is the
+/// start of an assessment, and the flag this sets unlocks removing a
+/// worktree past its safety gate.
+export const markAssessed = (worktreePath: string) =>
+  invoke<void>("mark_assessed", { worktreePath });

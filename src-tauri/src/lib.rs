@@ -1,4 +1,6 @@
+pub mod artifacts;
 pub mod auth;
+pub mod caches;
 pub mod commands;
 pub mod diag;
 pub mod docker;
@@ -93,6 +95,13 @@ pub fn run() {
             commands::set_notify_prefs,
             commands::review_pr,
             commands::comment_on_pr,
+            commands::scan_artifacts,
+            commands::remove_artifacts,
+            commands::size_artifacts,
+            commands::mark_assessed,
+            commands::scan_venvs,
+            commands::size_venvs,
+            commands::remove_venvs,
             commands::resolve_thread,
             commands::unresolve_thread,
             commands::reply_to_thread,

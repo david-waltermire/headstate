@@ -651,6 +651,167 @@ pub async fn size_worktrees(repo_path: String) -> Result<Vec<(String, u64)>, Str
         .map_err(|e| e.to_string())?
 }
 
+/// Regenerable build output under the configured scan roots.
+///
+/// Discovery only -- every `size_bytes` comes back None. The two passes
+/// are separate because they differ by three orders of magnitude:
+/// measured on a real 221 GB code tree, finding 178 directories takes
+/// ~1.5s where sizing them takes ~56s. Blocking the view on the second
+/// would repeat the "All repositories never populates" complaint that
+/// shaped the worktree view.
+#[tauri::command]
+pub async fn scan_artifacts(app: AppHandle) -> Result<Vec<crate::artifacts::Artifact>, String> {
+    // The SAME roots the worktree view scans. A second directory setting
+    // would be one more thing to keep in sync, and a user who has told
+    // the app where their code lives has already answered this question.
+    let dirs = get_worktree_dirs(app);
+    tauri::async_runtime::spawn_blocking(move || crate::artifacts::scan(&dirs))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Sizes for artifact directories, as `(path, bytes, secs_since_write)`.
+///
+/// Takes explicit paths rather than rescanning, so the caller measures
+/// exactly what it is showing -- a rescan here could return a directory
+/// the list does not have a row for.
+///
+/// `secs_since_write` rides along because the walk already stats every
+/// entry: asking a second question of the same `metadata()` call is
+/// free, and it is the ONLY signal that a build is currently writing
+/// there. Build output is gitignored, so no git check can see it.
+#[tauri::command]
+pub async fn size_artifacts(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u64>)>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|p| {
+                let (bytes, age) = crate::artifacts::measure(std::path::Path::new(&p));
+                (p, bytes, age)
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Remove artifact directories, re-verifying each at delete time.
+///
+/// The scan roots are passed to the backend rather than trusted from the
+/// caller: containment is the only thing between a bad path and
+/// `remove_dir_all` on an arbitrary directory, so the boundary it checks
+/// against must come from settings, not from the request.
+#[tauri::command]
+pub async fn remove_artifacts(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<Vec<crate::artifacts::ArtifactRemoval>, String> {
+    let roots = get_worktree_dirs(app);
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        crate::artifacts::remove_artifacts(&paths, &roots)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let failed = out.iter().filter(|o| o.error.is_some()).count();
+    log::info!(
+        "artifact removal: {} of {} removed",
+        out.len() - failed,
+        out.len()
+    );
+    Ok(out)
+}
+
+/// Poetry virtualenvs, classified against every directory we can see.
+///
+/// Discovery only: sizes and idle times come from `size_venvs`, because
+/// deciding staleness needs a full walk of each venv and the list should
+/// paint before that finishes.
+#[tauri::command]
+pub async fn scan_venvs(app: AppHandle) -> Result<Vec<crate::caches::Venv>, String> {
+    let roots = get_worktree_dirs(app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let dirs = crate::caches::project_dirs(&roots);
+        log::info!("venv scan: {} candidate project directories", dirs.len());
+        crate::caches::scan_poetry(&dirs)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Sizes and idle times, as `(path, bytes, idle_secs)`.
+///
+/// The idle time is the whole reason this is a second pass: it comes
+/// from the DEEPEST file mtime, which needs the same walk as the size.
+/// Poetry touches a venv's root without writing inside, so the
+/// directory's own mtime reports a year-old venv as days old.
+#[tauri::command]
+pub async fn size_venvs(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u64>)>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|p| {
+                let (bytes, idle) = crate::caches::measure(std::path::Path::new(&p));
+                (p, bytes, idle)
+            })
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Remove Poetry virtualenvs, re-verifying each at delete time.
+///
+/// The project directories are re-walked HERE rather than taken from the
+/// request: whether a venv is orphaned depends entirely on that set, and
+/// a caller supplying a short one could turn any live venv into a
+/// deletion candidate.
+#[tauri::command]
+pub async fn remove_venvs(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<Vec<crate::caches::VenvRemoval>, String> {
+    let roots = get_worktree_dirs(app);
+    let out = tauri::async_runtime::spawn_blocking(move || {
+        let dirs = crate::caches::project_dirs(&roots);
+        crate::caches::remove_venvs(&paths, &dirs)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let failed = out.iter().filter(|o| o.error.is_some()).count();
+    log::info!(
+        "venv removal: {} of {} removed",
+        out.len() - failed,
+        out.len()
+    );
+    Ok(out)
+}
+
+/// Record that a human read an assessment for this worktree.
+///
+/// Split out of `claudify_command`, which used to do it as a side effect
+/// of copying the prompt. That conflated "I asked for an assessment"
+/// with "I read one" -- and the flag it sets is what unlocks removing a
+/// worktree past the safety gate, which `remove_worktree_forced`
+/// describes as needing "the record that a human looked at what would be
+/// lost".
+///
+/// Keyed by the head OID it was assessed AT, so the mark expires the
+/// moment the branch moves: a verdict about different commits is not a
+/// verdict about these ones.
+#[tauri::command]
+pub fn mark_assessed(app: AppHandle, worktree_path: String) -> Result<(), String> {
+    let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
+    let mut seen: std::collections::BTreeMap<String, String> =
+        settings::get(&conn, settings::keys::ASSESSED_WORKTREES)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+    let head = crate::worktrees::head_oid(&worktree_path)
+        .map_err(|e| format!("could not read the worktree's head: {e}"))?;
+    seen.insert(worktree_path, head);
+    settings::set(&conn, settings::keys::ASSESSED_WORKTREES, &seen).map_err(|e| e.to_string())
+}
+
 /// Remove a worktree, refusing anything not provably safe.
 ///
 /// The safety gate is re-evaluated inside `remove_worktree` rather than
@@ -968,7 +1129,6 @@ pub async fn assess_worktree(
 /// GUI app's PATH, but the pasted command runs in a login shell where it
 /// resolves fine.
 pub fn claudify_command(
-    app: AppHandle,
     repo_path: String,
     worktree_path: String,
     branch: String,
@@ -982,20 +1142,20 @@ pub fn claudify_command(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "claude".to_string());
 
-    // Record what was assessed, keyed by the head it was assessed AT.
-    // Without this the user comes back from a "safe to discard" verdict
-    // and has to find the row again among 124 candidates.
-    if let Ok(conn) = open_db(&db_path(&app)) {
-        let mut seen: std::collections::BTreeMap<String, String> =
-            settings::get(&conn, settings::keys::ASSESSED_WORKTREES)
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-        if let Ok(head) = crate::worktrees::head_oid(&worktree_path) {
-            seen.insert(worktree_path.clone(), head);
-            let _ = settings::set(&conn, settings::keys::ASSESSED_WORKTREES, &seen);
-        }
-    }
+    // NOTE: copying the command deliberately does NOT record an
+    // assessment.
+    //
+    // It used to. The mark gates "Remove anyway…", and `commands.rs`
+    // describes that flag as "the record that a human looked at what
+    // would be lost" -- but copying a prompt is the START of an
+    // assessment, not the end of one. Marking here armed a force-remove
+    // button on a worktree nobody had actually read a verdict for, and
+    // it did so seconds later when the query refetched, swapping a
+    // narrow "Claudify" for a wide "Remove anyway…" and re-flowing every
+    // column in the table.
+    //
+    // `mark_assessed` is what records it, called once the user says they
+    // have read the result.
 
     ClaudifyCommand {
         command: facts.command(&bin),

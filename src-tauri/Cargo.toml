@@ -42,6 +42,11 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 tokio = { version = "1.53", features = ["full"] }
 thiserror = "2"
 chrono = { version = "0.4", features = ["serde"] }
+# Both are ALREADY in the tree transitively, at these versions -- declaring
+# them adds no new code to the supply chain. Needed to reconstruct Poetry's
+# venv naming, which is base64(sha256(project path))[:8].
+sha2 = "0.10"
+base64 = "0.22"
 tauri-plugin-log = "2.9.0"
 # Auto-update. Verifies an Ed25519 signature over each bundle with the
 # public key in `tauri.conf.json` -- separate from Apple code signing
