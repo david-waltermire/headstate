@@ -770,10 +770,18 @@ pub async fn remove_venvs(
     app: AppHandle,
     paths: Vec<String>,
 ) -> Result<Vec<crate::caches::VenvRemoval>, String> {
+    // The policy is read from SETTINGS, never from the request. Whether
+    // a stale venv may be removed is the user's standing decision, and a
+    // caller that could pass its own would make the opt-in decorative.
+    let prefs = get_ui_prefs(app.clone());
+    let policy = crate::caches::RemovalPolicy {
+        allow_stale: prefs.remove_stale_venvs,
+        stale_days: crate::poll::stale_venv_days(&prefs),
+    };
     let roots = get_worktree_dirs(app);
     let out = tauri::async_runtime::spawn_blocking(move || {
         let dirs = crate::caches::project_dirs(&roots);
-        crate::caches::remove_venvs(&paths, &dirs)
+        crate::caches::remove_venvs(&paths, &dirs, policy)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -810,6 +818,63 @@ pub fn mark_assessed(app: AppHandle, worktree_path: String) -> Result<(), String
         .map_err(|e| format!("could not read the worktree's head: {e}"))?;
     seen.insert(worktree_path, head);
     settings::set(&conn, settings::keys::ASSESSED_WORKTREES, &seen).map_err(|e| e.to_string())
+}
+
+/// What automatic cleanup would remove, run now.
+///
+/// PREVIEW ONLY: `cleanup::propose` has no removal path, so this command
+/// cannot delete regardless of what it is passed. That is the property
+/// making Phase 1 reviewable on the predicate's merits alone.
+///
+/// Writes the result to the ledger before returning it, so the record
+/// exists whether or not anyone is looking at the window when the pass
+/// runs.
+#[tauri::command]
+pub async fn preview_cleanup(app: AppHandle) -> Result<Vec<crate::cleanup::LedgerEntry>, String> {
+    let roots = get_worktree_dirs(app.clone());
+    let db = db_path(&app);
+    let now = chrono::Utc::now().to_rfc3339();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_db(&db).map_err(|e| e.to_string())?;
+        let prefs = crate::cleanup::prefs(&conn);
+        let entries = crate::cleanup::propose(&prefs, &roots, &now);
+        crate::cleanup::record(&conn, &entries);
+        log::info!("cleanup preview: {} entries", entries.len());
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// The cleanup ledger, newest first.
+#[tauri::command]
+pub fn cleanup_log(app: AppHandle) -> Result<Vec<crate::cleanup::LedgerEntry>, String> {
+    let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
+    crate::cleanup::recent(&conn, 200).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_cleanup_prefs(app: AppHandle) -> crate::cleanup::CleanupPrefs {
+    open_db(&db_path(&app))
+        .ok()
+        .map(|c| crate::cleanup::prefs(&c))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn set_cleanup_prefs(
+    app: AppHandle,
+    prefs: crate::cleanup::CleanupPrefs,
+) -> Result<(), String> {
+    // Remove mode is NOT accepted. The type carries the variant so the
+    // ledger and settings shapes do not change in Phase 2, but nothing
+    // in Phase 1 may store it -- a setting that does nothing is worse
+    // than one that does not exist, because the user believes it.
+    if prefs.mode == crate::cleanup::CleanupMode::Remove {
+        return Err("automatic removal is not available yet; this build previews only".into());
+    }
+    let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
+    settings::set(&conn, settings::keys::CLEANUP_PREFS, &prefs).map_err(|e| e.to_string())
 }
 
 /// Remove a worktree, refusing anything not provably safe.

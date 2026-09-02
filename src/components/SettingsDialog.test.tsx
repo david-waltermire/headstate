@@ -5,12 +5,24 @@ const setDirs = vi.hoisted(() => vi.fn((d: string[]) => Promise.resolve(d)));
 const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
 const dirs = vi.hoisted(() => ({ current: ["/Users/x/code"] as string[] }));
 
+const setCleanup = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const cleanupPrefs = vi.hoisted(() => ({
+  current: {
+    enabled: false,
+    mode: "preview" as const,
+    artifacts: false,
+    venvs: false,
+    max_per_run: 0,
+  },
+}));
+
 vi.mock("../api/hooks", () => ({
   // Defaults, matching the Rust side: nothing hidden, close hides.
   useUiPrefs: () => ({
     prefs: { hidden_views: [], close_hides_to_tray: true },
     set: () => Promise.resolve(),
   }),
+  useCleanupPrefs: () => ({ prefs: cleanupPrefs.current, set: setCleanup }),
   useAutostart: () => ({ enabled: false, set: () => Promise.resolve() }),
   usePollInterval: () => ({ seconds: 120, set: setInterval_ }),
   useWorktreeDirs: () => ({ dirs: dirs.current, set: setDirs }),
@@ -84,5 +96,36 @@ describe("SettingsDialog", () => {
     for (const label of Array.from(document.querySelectorAll("label"))) {
       expect(label.querySelector("button")).toBeNull();
     }
+  });
+});
+
+describe("automatic cleanup settings", () => {
+  /// The feature must present itself as what it IS. A switch that
+  /// sounds like it might delete, in a build where it cannot, is the
+  /// one thing worth not understating.
+  it("says plainly that nothing is removed automatically", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.getByText(/never removes anything automatically/i)).toBeTruthy();
+  });
+
+  it("hides the per-kind options until the feature is on", () => {
+    cleanupPrefs.current = { ...cleanupPrefs.current, enabled: false };
+    const r = render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.queryByLabelText(/Build output/)).toBeNull();
+    r.unmount();
+
+    cleanupPrefs.current = { ...cleanupPrefs.current, enabled: true };
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.getByLabelText(/Build output/)).toBeTruthy();
+    expect(screen.getByLabelText(/Orphaned virtualenvs/)).toBeTruthy();
+  });
+
+  /// #394: the opt-in must say what turning it on ASSERTS, since the
+  /// distinction between orphaned and stale is the whole reason it
+  /// exists as a separate switch.
+  it("explains what the stale opt-in asserts", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.getByLabelText(/Also allow removing stale/)).toBeTruthy();
+    expect(screen.getByText(/asserts you are done with them/i)).toBeTruthy();
   });
 });

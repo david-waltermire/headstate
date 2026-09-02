@@ -228,6 +228,39 @@ pub struct UiPrefs {
     /// almost none of them need.
     #[serde(default)]
     pub diagnostic_logging: bool,
+    /// Whether STALE virtualenvs may be selected for removal.
+    ///
+    /// Orphans need no opt-in: nothing on the machine hashes to them, so
+    /// the path that made them is gone and the verdict is a fact. Stale
+    /// is a judgement about a project that still EXISTS -- the threshold
+    /// is a guess about intent, and the app should not act on a guess
+    /// unless the user has supplied the intent themselves.
+    ///
+    /// Defaults OFF, so an upgrade never widens what a click can delete.
+    #[serde(default)]
+    pub remove_stale_venvs: bool,
+    /// How many days idle before a virtualenv counts as stale.
+    ///
+    /// Adjustable because 90 is a default, not a fact: someone with
+    /// seasonal projects should be able to move it rather than work
+    /// around it. Zero means "use the default" rather than "everything
+    /// is stale" -- a stored 0 from a bad write must not reclassify the
+    /// whole cache.
+    #[serde(default)]
+    pub stale_venv_days: u32,
+}
+
+/// Days idle before a virtualenv is called stale, honouring the setting.
+///
+/// Clamped rather than trusted. A very small value would call an active
+/// project stale, and this number gates a delete once the opt-in above
+/// is on -- so the floor is what stops a typo in Settings from making
+/// live work selectable.
+pub fn stale_venv_days(prefs: &UiPrefs) -> u32 {
+    match prefs.stale_venv_days {
+        0 => 90,
+        d => d.clamp(30, 3650),
+    }
 }
 
 /// Serde needs a function, not a literal, for a defaulted bool.
@@ -248,6 +281,10 @@ impl Default for UiPrefs {
             // finds the dialog intrusive can turn it off, which is what
             // the setting is for.
             announce_updates: true,
+            // OFF: an upgrade must never widen what a click can delete.
+            remove_stale_venvs: false,
+            // 0 means "use the default", resolved by `stale_venv_days`.
+            stale_venv_days: 0,
             // OFF. Verbose per-request logging is a cost every user
             // pays for a diagnosis almost none of them need -- it is
             // turned on when someone is chasing a problem.

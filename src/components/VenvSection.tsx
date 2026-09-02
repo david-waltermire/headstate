@@ -77,6 +77,27 @@ export function VenvSection() {
           </span>
         ) : null}
         <HelpButton topic="poetry-venvs" />
+
+        {/* One click for the whole provable set. With 78 orphans across
+            one deleted project, ticking them individually is 78 clicks
+            for a decision the user makes once -- and every one of them
+            is a fact rather than a judgement, so there is nothing to
+            weigh row by row. */}
+        {orphans.length > 1 && checked.size === 0 ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setChecked(new Set(orphans.map((r) => r.v.path)));
+              setConfirming(true);
+            }}
+            className="ml-auto rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10 disabled:opacity-50"
+          >
+            Remove all {orphans.length} orphaned
+            {measuring ? "" : ` · ${formatSize(orphanBytes)}`}
+          </button>
+        ) : null}
+
         {checked.size > 0 ? (
           <button
             type="button"

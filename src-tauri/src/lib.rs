@@ -1,6 +1,7 @@
 pub mod artifacts;
 pub mod auth;
 pub mod caches;
+pub mod cleanup;
 pub mod commands;
 pub mod diag;
 pub mod docker;
@@ -99,6 +100,10 @@ pub fn run() {
             commands::remove_artifacts,
             commands::size_artifacts,
             commands::mark_assessed,
+            commands::preview_cleanup,
+            commands::cleanup_log,
+            commands::get_cleanup_prefs,
+            commands::set_cleanup_prefs,
             commands::scan_venvs,
             commands::size_venvs,
             commands::remove_venvs,

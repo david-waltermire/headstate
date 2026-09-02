@@ -14,6 +14,7 @@ import type { ReviewVerdictName } from "../api/tauri";
 import { agentPrompt, toAgentContext } from "../lib/agentPrompt";
 import { rerunnableRun } from "../lib/rerun";
 import { Markdown } from "./Markdown";
+import { copyText } from "../lib/clipboard";
 import { CommentRow } from "./CommentRow";
 import { ReviewThreads } from "./ReviewThreads";
 import { Section } from "./Section";
@@ -430,9 +431,14 @@ export function PrDetailView({
         <button
           type="button"
           onClick={() =>
-            navigator.clipboard.writeText(agentPrompt(toAgentContext(pr))).then(
-              () => toast.success("Prompt copied — paste it to an agent"),
-              () => toast.error("Could not copy"),
+            void copyText(agentPrompt(toAgentContext(pr))).then((failure) =>
+              failure === null
+                ? toast.success("Prompt copied — paste it to an agent")
+                : // The REASON, which the previous version discarded.
+                  // "Could not copy" alone leaves the user with nothing
+                  // to act on, and an absent clipboard did not even
+                  // reach this handler.
+                  toast.error("Could not copy the prompt", { description: failure }),
             )
           }
           className="flex w-fit items-center gap-1.5 rounded border border-[#30363d] px-3 py-1.5 text-sm hover:bg-[#161b22]"

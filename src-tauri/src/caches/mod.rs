@@ -283,7 +283,37 @@ pub struct VenvRemoval {
 ///
 /// `project_dirs` is passed in rather than re-walked here so the caller
 /// controls the completeness that the orphan verdict depends on.
-pub fn remove_venv(path: &str, project_dirs: &[String]) -> Result<(), String> {
+/// What a removal is permitted to touch.
+///
+/// Passed rather than read from settings here, so the rule is decided in
+/// one place (the command) and this function stays pure enough to test
+/// both policies without a database.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RemovalPolicy {
+    /// Whether a venv whose project still exists may be removed on the
+    /// strength of its idle time alone.
+    pub allow_stale: bool,
+    /// Days idle before that is permitted. Ignored when `allow_stale`
+    /// is false.
+    pub stale_days: u32,
+}
+
+impl Default for RemovalPolicy {
+    /// Orphans only. The conservative policy is the default so a caller
+    /// that forgets to pass one cannot widen what a click deletes.
+    fn default() -> Self {
+        Self {
+            allow_stale: false,
+            stale_days: 90,
+        }
+    }
+}
+
+pub fn remove_venv(
+    path: &str,
+    project_dirs: &[String],
+    policy: RemovalPolicy,
+) -> Result<(), String> {
     let p = Path::new(path);
 
     // 1. Never a symlink, checked BEFORE canonicalising -- which
@@ -319,11 +349,33 @@ pub fn remove_venv(path: &str, project_dirs: &[String]) -> Result<(), String> {
     //    project directory came back since the scan, this is no longer
     //    an orphan and must not be removed on the strength of a stale
     //    verdict.
-    if project_dirs
+    let owned_by_a_live_project = project_dirs
         .iter()
-        .any(|d| poetry::venv_token(Path::new(d)) == hash)
-    {
-        return Err("its project directory exists again; this is no longer orphaned".into());
+        .any(|d| poetry::venv_token(Path::new(d)) == hash);
+
+    if owned_by_a_live_project {
+        // The project exists, so this is not an orphan. It may still be
+        // removable -- but only if the user has opted in AND it is
+        // genuinely idle, both re-checked HERE rather than trusted from
+        // whatever the UI believed when the row was drawn.
+        if !policy.allow_stale {
+            return Err("its project directory exists; this is not an orphan".into());
+        }
+        let (_, idle) = measure(&canon);
+        let threshold = u64::from(policy.stale_days) * 24 * 60 * 60;
+        match idle {
+            // An idle time we could not read is not evidence that
+            // anything is disposable -- the direction every other check
+            // in this codebase fails in.
+            None => return Err("could not tell how long that has been idle".into()),
+            Some(secs) if secs < threshold => {
+                return Err(format!(
+                    "its project exists and it was used {} days ago",
+                    secs / 86_400
+                ))
+            }
+            Some(_) => {}
+        }
     }
 
     std::fs::remove_dir_all(&canon).map_err(|e| format!("could not remove it: {e}"))
@@ -349,12 +401,16 @@ fn is_inside_cache(canon: &Path, cache: &Path) -> Result<(), String> {
 }
 
 /// Remove several, reporting each independently.
-pub fn remove_venvs(paths: &[String], project_dirs: &[String]) -> Vec<VenvRemoval> {
+pub fn remove_venvs(
+    paths: &[String],
+    project_dirs: &[String],
+    policy: RemovalPolicy,
+) -> Vec<VenvRemoval> {
     paths
         .iter()
         .map(|p| VenvRemoval {
             path: p.clone(),
-            error: remove_venv(p, project_dirs).err(),
+            error: remove_venv(p, project_dirs, policy).err(),
         })
         .collect()
 }
@@ -395,7 +451,7 @@ mod removal_tests {
         let Some(v) = TempVenv::new(ORPHAN) else {
             return; // no Poetry cache on this machine
         };
-        remove_venv(&v.path.to_string_lossy(), &[]).unwrap();
+        remove_venv(&v.path.to_string_lossy(), &[], RemovalPolicy::default()).unwrap();
         assert!(!v.path.exists());
     }
 
@@ -412,13 +468,119 @@ mod removal_tests {
         let Some(v) = TempVenv::new(&name) else {
             return;
         };
-        let err = remove_venv(&v.path.to_string_lossy(), &[project]).unwrap_err();
-        assert!(err.contains("no longer orphaned"), "{err}");
+        let err = remove_venv(
+            &v.path.to_string_lossy(),
+            &[project],
+            RemovalPolicy::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("not an orphan"), "{err}");
         assert!(v.path.exists(), "and it must still be there");
     }
 
     /// The containment boundary. Without it a bad path is
     /// `remove_dir_all` on anything at all.
+    /// #394: a stale venv is removable ONLY under the opt-in.
+    ///
+    /// The default policy refuses it even though the venv is ancient,
+    /// because whether "old enough" means "unwanted" is the user's
+    /// judgement and not the app's.
+    #[test]
+    fn a_stale_venv_needs_the_opt_in() {
+        let t = tempfile::TempDir::new().unwrap();
+        let project = t.path().to_string_lossy().to_string();
+        let hash = poetry::venv_token(t.path());
+        let name = format!("headstate-test-stale-{hash}-py3.99");
+        let Some(v) = TempVenv::new(&name) else {
+            return;
+        };
+
+        let err = remove_venv(
+            &v.path.to_string_lossy(),
+            &[project],
+            RemovalPolicy::default(),
+        )
+        .unwrap_err();
+        assert!(err.contains("not an orphan"), "{err}");
+        assert!(v.path.exists());
+    }
+
+    /// ...and even WITH the opt-in, a venv used recently is refused.
+    /// The opt-in widens what may be considered, never what counts as
+    /// idle.
+    #[test]
+    fn the_opt_in_still_refuses_a_recently_used_venv() {
+        let t = tempfile::TempDir::new().unwrap();
+        let project = t.path().to_string_lossy().to_string();
+        let hash = poetry::venv_token(t.path());
+        let name = format!("headstate-test-fresh-{hash}-py3.99");
+        let Some(v) = TempVenv::new(&name) else {
+            return;
+        };
+
+        // Files were written moments ago by TempVenv::new.
+        let err = remove_venv(
+            &v.path.to_string_lossy(),
+            &[project],
+            RemovalPolicy {
+                allow_stale: true,
+                stale_days: 90,
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("was used"), "{err}");
+        assert!(v.path.exists());
+    }
+
+    /// An idle time we could not read is not evidence that anything is
+    /// disposable. An EMPTY directory has no files to date, so `measure`
+    /// returns None -- and under the opt-in that must refuse rather than
+    /// fall through to "old enough".
+    #[test]
+    fn an_unreadable_idle_time_refuses_under_the_opt_in() {
+        let t = tempfile::TempDir::new().unwrap();
+        let project = t.path().to_string_lossy().to_string();
+        let hash = poetry::venv_token(t.path());
+        let name = format!("headstate-test-noidle-{hash}-py3.99");
+
+        let Some(cache) = poetry::cache_dir() else {
+            return;
+        };
+        let path = cache.join(&name);
+        // No files inside: `measure` cannot date it.
+        std::fs::create_dir_all(&path).unwrap();
+
+        let err = remove_venv(
+            &path.to_string_lossy(),
+            &[project],
+            RemovalPolicy {
+                allow_stale: true,
+                stale_days: 90,
+            },
+        )
+        .unwrap_err();
+        let _ = std::fs::remove_dir_all(&path);
+        assert!(err.contains("could not tell"), "{err}");
+    }
+
+    /// An orphan needs no opt-in, because it is not a judgement: nothing
+    /// on the machine hashes to it.
+    #[test]
+    fn an_orphan_needs_no_opt_in() {
+        let Some(v) = TempVenv::new("headstate-test-noopt-ZZZZZZZZ-py3.99") else {
+            return;
+        };
+        remove_venv(&v.path.to_string_lossy(), &[], RemovalPolicy::default()).unwrap();
+        assert!(!v.path.exists());
+    }
+
+    /// The conservative policy is the DEFAULT, so a caller that forgets
+    /// to pass one cannot widen what a click deletes.
+    #[test]
+    fn the_default_policy_is_orphans_only() {
+        assert!(!RemovalPolicy::default().allow_stale);
+    }
+
     /// The containment boundary, tested against a SYNTHETIC cache
     /// directory rather than the real one.
     ///
@@ -465,7 +627,8 @@ mod removal_tests {
         let Some(v) = TempVenv::new("headstate-test-plain-directory") else {
             return;
         };
-        let err = remove_venv(&v.path.to_string_lossy(), &[]).unwrap_err();
+        let err =
+            remove_venv(&v.path.to_string_lossy(), &[], RemovalPolicy::default()).unwrap_err();
         assert!(err.contains("not a Poetry virtualenv"), "{err}");
         assert!(v.path.exists());
     }
@@ -483,7 +646,7 @@ mod removal_tests {
         let _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(real.path(), &link).unwrap();
 
-        let err = remove_venv(&link.to_string_lossy(), &[]).unwrap_err();
+        let err = remove_venv(&link.to_string_lossy(), &[], RemovalPolicy::default()).unwrap_err();
         let _ = std::fs::remove_file(&link);
         assert!(err.contains("symlink"), "{err}");
         assert!(real.path().join("keep.txt").exists(), "target untouched");
@@ -500,6 +663,7 @@ mod removal_tests {
                 "/nowhere/at/all".to_string(),
             ],
             &[],
+            RemovalPolicy::default(),
         );
         assert_eq!(out.len(), 2);
         assert!(out[0].error.is_none(), "{:?}", out[0].error);

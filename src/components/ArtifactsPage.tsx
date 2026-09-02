@@ -1,12 +1,15 @@
 import { useMemo, useState } from "react";
 import { HardDrive } from "lucide-react";
 import type { Artifact, ArtifactKind } from "@/types/pr";
-import { useArtifacts, useArtifactSizes, useRemoveArtifacts } from "@/api/hooks";
+import { useArtifacts, useArtifactSizes, useRemoveArtifacts, useVenvs } from "@/api/hooks";
+import { useActiveFilters } from "@/store/filters";
+import { GROUP_LABEL, VENV_GROUP } from "./ArtifactSidebar";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { formatSize } from "@/lib/worktrees";
 import { HelpButton } from "./HelpButton";
 import { VenvSection } from "./VenvSection";
+import { CleanupLog } from "./CleanupLog";
 
 /// A placeholder holding the same footprint as the number it stands in
 /// for, so rows do not jump as each measurement lands. Matches the one
@@ -61,7 +64,21 @@ const ACTIVE_SECS = 60 * 60;
 /// against 108 GB beside main checkouts -- so the worktree view
 /// structurally could not reach 99.7% of the largest thing on the disk.
 export function ArtifactsPage() {
-  const { data: artifacts = [], isLoading } = useArtifacts(true);
+  const filters = useActiveFilters();
+  // `repo` is the sidebar's selection key across every view; here it
+  // holds an artifact KIND rather than a path. Reusing it keeps one
+  // selection mechanism instead of a second parallel one.
+  const group = filters.repo;
+  const { data: allArtifacts = [], isLoading } = useArtifacts(true);
+  // Read here only to decide the empty state; VenvSection owns the rest.
+  const { data: venvList = [] } = useVenvs(true);
+  const venvCount = venvList.length;
+  // Filtered BEFORE sizing, so a group page measures only what it shows
+  // rather than paying for the whole machine to render one section.
+  const artifacts =
+    group === undefined || group === VENV_GROUP
+      ? allArtifacts
+      : allArtifacts.filter((a) => a.kind === group);
   const { sizes, ages, pending, total } = useArtifactSizes(artifacts, artifacts.length > 0);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
@@ -97,23 +114,48 @@ export function ArtifactsPage() {
     return age !== undefined && age < ACTIVE_SECS;
   }).length;
 
+  // Everything a build is NOT currently writing to. The same rule the
+  // backend enforces at delete time, applied here so the button's count
+  // matches what the click will actually remove.
+  const removable = rows.filter((r) => {
+    const age = ages.get(r.path);
+    return age === undefined || age >= ACTIVE_SECS;
+  });
+  const removableBytes = removable.reduce((n, r) => n + (sizes.get(r.path) ?? 0), 0);
+
   const measured = rows.filter((r) => sizes.has(r.path));
   const totalBytes = measured.reduce((n, r) => n + (sizes.get(r.path) ?? 0), 0);
 
-  if (isLoading) {
+  // On the virtualenv page the build-artifact list is not the subject.
+  const showArtifacts = group !== VENV_GROUP;
+  const showVenvs = group === undefined || group === VENV_GROUP;
+
+  if (isLoading && showArtifacts) {
     return <p className="p-4 text-sm text-[#8b949e]">Looking for build output…</p>;
   }
 
-  if (artifacts.length === 0) {
+  // Named by the group the user chose, so an empty Terraform page does
+  // not claim there is no build output at all.
+  const label =
+    group !== undefined && group in GROUP_LABEL
+      ? GROUP_LABEL[group as keyof typeof GROUP_LABEL].toLowerCase()
+      : "build output";
+
+  // Only when there is genuinely nothing on the page. On "Everything"
+  // that means no artifacts AND no virtualenvs -- an empty artifact list
+  // beside 78 virtualenvs is not an empty page, and saying so would be
+  // wrong in the one place the user is looking for the total.
+  if (artifacts.length === 0 && (!showVenvs || venvCount === 0)) {
     return (
       <p className="p-4 text-sm text-[#8b949e]">
-        No build output found in the scanned directories.
+        No {label} found in the scanned directories.
       </p>
     );
   }
 
   return (
     <div className="p-4">
+      {showArtifacts ? (
       <div className="mb-3 flex items-center gap-2 text-sm">
         <HardDrive className="h-4 w-4 shrink-0 text-[#8b949e]" aria-hidden="true" />
         <span className="font-semibold text-[#e6edf3]">
@@ -137,6 +179,26 @@ export function ArtifactsPage() {
         ) : null}
         <HelpButton topic="build-artifacts" />
 
+        {/* One click for the group, EXCLUDING anything a build may be
+            writing to. Those are refused at delete time anyway, so
+            selecting them would only produce a failure report the user
+            did not ask for -- and the count in the label would promise
+            more than the click delivers. */}
+        {removable.length > 1 && checked.size === 0 ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setChecked(new Set(removable.map((r) => r.path)));
+              setConfirming(true);
+            }}
+            className="ml-auto rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10 disabled:opacity-50"
+          >
+            Remove all {removable.length}
+            {pending > 0 ? "" : ` · ${formatSize(removableBytes)}`}
+          </button>
+        ) : null}
+
         {checked.size > 0 ? (
           <button
             type="button"
@@ -152,6 +214,7 @@ export function ArtifactsPage() {
           </button>
         ) : null}
       </div>
+      ) : null}
 
       {confirming ? (
         <Dialog open onOpenChange={(o) => !o && setConfirming(false)}>
@@ -222,6 +285,7 @@ export function ArtifactsPage() {
         </Dialog>
       ) : null}
 
+      {showArtifacts ? (
       <ul className="flex flex-col gap-1">
         {rows.map((a) => (
           <ArtifactRow
@@ -234,11 +298,17 @@ export function ArtifactsPage() {
           />
         ))}
       </ul>
+      ) : null}
 
-      {/* Tool caches on the SAME page: both answer "where did the disk
-          go", and splitting them across two views would make a user
-          check two places for one answer. */}
-      <VenvSection />
+      {/* Shown on "Everything" and on the virtualenv page, hidden when a
+          build-artifact group is selected -- the sidebar's whole point is
+          that choosing a group narrows the page to it. */}
+      {showVenvs ? <VenvSection /> : null}
+
+      {/* The ledger, on "Everything" only: it spans both kinds, so it
+          belongs where the whole picture is rather than repeated under
+          each group. */}
+      {group === undefined ? <CleanupLog /> : null}
     </div>
   );
 }

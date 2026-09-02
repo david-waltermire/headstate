@@ -5,6 +5,7 @@ import type { Artifact } from "@/types/pr";
 const state = vi.hoisted(() => ({
   artifacts: [] as Artifact[],
   loading: false,
+  venvs: [] as unknown[],
   sizes: new Map<string, number>(),
   ages: new Map<string, number>(),
   pending: 0,
@@ -20,9 +21,12 @@ vi.mock("../api/hooks", () => ({
   // The page renders VenvSection, which has its own hooks. Stubbed to
   // empty here rather than exercised: that component has its own test
   // file, and duplicating its fixtures would make both harder to change.
-  useVenvs: () => ({ data: [] }),
+  useVenvs: () => ({ data: state.venvs ?? [] }),
   useVenvSizes: () => ({ sizes: new Map(), idle: new Map(), measuring: false }),
   useRemoveVenvs: () => vi.fn(),
+  // The page renders CleanupLog on "Everything"; it has its own test
+  // file, so this is stubbed empty rather than exercised here.
+  useCleanupLog: () => ({ entries: [], isLoading: false, run: () => Promise.resolve([]) }),
   useArtifacts: () => ({ data: state.artifacts, isLoading: state.loading }),
   useArtifactSizes: () => ({
     sizes: state.sizes,
@@ -237,5 +241,34 @@ describe("ArtifactsPage removal", () => {
     render(<ArtifactsPage />);
     expect(screen.getByRole("checkbox", { name: "Select /code/a/target" })).toBeTruthy();
     expect(screen.getByRole("checkbox", { name: "Select /code/b/target" })).toBeTruthy();
+  });
+});
+
+describe("ArtifactsPage bulk removal and grouping", () => {
+  /// The bulk button must EXCLUDE anything a build may be writing to.
+  /// Those are refused at delete time anyway, so including them would
+  /// only produce a failure report nobody asked for -- and the count in
+  /// the label would promise more than the click delivers.
+  it("leaves recently-written directories out of the bulk selection", () => {
+    state.artifacts = [
+      art({ path: "/code/a/target" }),
+      art({ path: "/code/b/target" }),
+      art({ path: "/code/busy/target" }),
+    ];
+    state.sizes = new Map();
+    state.ages = new Map([["/code/busy/target", 30]]);
+    state.pending = 0;
+    render(<ArtifactsPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Remove all 2/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(removeFn).toHaveBeenCalledWith(["/code/a/target", "/code/b/target"]);
+  });
+
+  it("does not offer bulk removal for a single directory", () => {
+    state.artifacts = [art()];
+    state.ages = new Map();
+    render(<ArtifactsPage />);
+    expect(screen.queryByRole("button", { name: /Remove all/ })).toBeNull();
   });
 });

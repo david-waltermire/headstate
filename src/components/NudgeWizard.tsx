@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { copyText } from "../lib/clipboard";
 import type { PullRequest } from "@/types/pr";
 import { applyFilters, type Filters } from "@/lib/derive";
 import { formatNudge, GROUP_THRESHOLD, type NudgeOptions } from "@/lib/nudge";
@@ -112,16 +113,14 @@ export function NudgeWizard({
   /// clipboard that still holds whatever was there before -- the user pastes
   /// the wrong thing into a team channel and has no reason to suspect it.
   const handleCopy = () => {
-    navigator.clipboard.writeText(text).then(
-      () => {
-        setCopied(true);
-        setCopyFailed(false);
-      },
-      () => {
-        setCopyFailed(true);
-        setCopied(false);
-      },
-    );
+    // Via `copyText`, because an ABSENT clipboard throws synchronously
+    // on property access -- so the rejection handler below never ran and
+    // the button silently stayed on "Copy", with the textarea fallback
+    // right there unmentioned.
+    void copyText(text).then((failure) => {
+      setCopied(failure === null);
+      setCopyFailed(failure !== null);
+    });
   };
 
   return (

@@ -472,3 +472,30 @@ export interface VenvRemoval {
   path: string;
   error: string | null;
 }
+
+/// One thing the automatic cleanup pass considered.
+export interface LedgerEntry {
+  at: string;
+  /// `artifact` or `venv`.
+  kind: string;
+  target: string;
+  /// An artifact's rebuild command, or a virtualenv's project.
+  detail: string | null;
+  bytes: number | null;
+  /// `proposed`, `removed`, `refused`, or `skipped`.
+  action: string;
+  error: string | null;
+}
+
+/// Preferences for the automatic pass.
+///
+/// `mode` carries a `remove` variant so the stored shape does not change
+/// in Phase 2, but this build refuses to store it: a setting that can be
+/// turned on and does nothing is worse than one that does not exist.
+export interface CleanupPrefs {
+  enabled: boolean;
+  mode: "preview" | "remove";
+  artifacts: boolean;
+  venvs: boolean;
+  max_per_run: number;
+}

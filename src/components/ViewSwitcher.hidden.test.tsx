@@ -7,6 +7,7 @@ const prefsState: { prefs: { hidden_views: string[]; close_hides_to_tray: boolea
 
 vi.mock("../api/hooks", () => ({
   useUiPrefs: () => ({ prefs: prefsState.prefs, set: vi.fn() }),
+  useCleanupPrefs: () => ({ prefs: undefined, set: () => Promise.resolve() }),
 }));
 
 import { ViewSwitcher } from "./ViewSwitcher";

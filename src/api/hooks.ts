@@ -3,7 +3,15 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { safeUnlisten } from "./unlisten";
 import { timed } from "./diag";
 import { useEffect, useState, useSyncExternalStore } from "react";
-import type { Artifact, DockerImage, PrDetail, PullRequest, Venv, Worktree } from "../types/pr";
+import type {
+  Artifact,
+  CleanupPrefs,
+  DockerImage,
+  PrDetail,
+  PullRequest,
+  Venv,
+  Worktree,
+} from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
   getCached,
@@ -37,7 +45,11 @@ import {
   removeWorktrees,
   removeArtifacts,
   markAssessed,
+  cleanupLog,
+  getCleanupPrefs,
+  previewCleanup,
   removeVenvs,
+  setCleanupPrefs,
   scanVenvs,
   sizeVenvs,
   scanArtifacts,
@@ -651,6 +663,48 @@ export function useRemoveVenvs() {
     await qc.invalidateQueries({ queryKey: ["venvs"] });
     await qc.invalidateQueries({ queryKey: ["venv-sizes"] });
     return out;
+  };
+}
+
+/// Automatic cleanup preferences.
+export function useCleanupPrefs() {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ["cleanup-prefs"],
+    queryFn: getCleanupPrefs,
+    staleTime: Infinity,
+  });
+  return {
+    prefs: data,
+    set: async (prefs: CleanupPrefs) => {
+      await setCleanupPrefs(prefs);
+      await qc.invalidateQueries({ queryKey: ["cleanup-prefs"] });
+    },
+  };
+}
+
+/// The cleanup ledger, and a way to run a pass now.
+///
+/// Running it on demand is the whole of Phase 1's value: the user turns
+/// the feature on, clicks once, and reads what it WOULD have removed on
+/// their own machine -- rather than being asked to trust a rule they
+/// have never seen applied.
+export function useCleanupLog(enabled: boolean) {
+  const qc = useQueryClient();
+  const { data = [], isLoading } = useQuery({
+    queryKey: ["cleanup-log"],
+    queryFn: cleanupLog,
+    enabled,
+    staleTime: 30_000,
+  });
+  return {
+    entries: data,
+    isLoading,
+    run: async () => {
+      const out = await previewCleanup();
+      await qc.invalidateQueries({ queryKey: ["cleanup-log"] });
+      return out;
+    },
   };
 }
 

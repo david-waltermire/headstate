@@ -170,3 +170,53 @@ describe("VenvSection", () => {
     ).toBeTruthy();
   });
 });
+
+describe("VenvSection bulk removal", () => {
+  /// The reported case: 78 orphans from ONE deleted project. Ticking
+  /// them individually is 78 clicks for a decision made once -- and
+  /// every one is a fact rather than a judgement, so there is nothing to
+  /// weigh row by row.
+  it("offers one click for every orphan", () => {
+    state.venvs = [
+      venv({ path: "/cache/a-AAAAAAAA-py3.13" }),
+      venv({ path: "/cache/b-BBBBBBBB-py3.13" }),
+      venv({ path: "/cache/c-CCCCCCCC-py3.13" }),
+    ];
+    state.sizes = new Map([
+      ["/cache/a-AAAAAAAA-py3.13", 1_000_000_000],
+      ["/cache/b-BBBBBBBB-py3.13", 2_000_000_000],
+      ["/cache/c-CCCCCCCC-py3.13", 3_000_000_000],
+    ]);
+    render(<VenvSection />);
+    expect(screen.getByRole("button", { name: /Remove all 3 orphaned/ })).toBeTruthy();
+  });
+
+  /// It must select ONLY orphans. A live venv swept into a bulk action
+  /// is the one outcome that would make the button untrustworthy.
+  it("never sweeps a live venv into the bulk selection", () => {
+    state.venvs = [
+      venv({ path: "/cache/a-AAAAAAAA-py3.13" }),
+      venv({
+        path: "/cache/live-BBBBBBBB-py3.13",
+        state: "live",
+        source: "/code/live",
+      }),
+      venv({ path: "/cache/c-CCCCCCCC-py3.13" }),
+    ];
+    render(<VenvSection />);
+    fireEvent.click(screen.getByRole("button", { name: /Remove all 2 orphaned/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    expect(removeFn).toHaveBeenCalledWith([
+      "/cache/a-AAAAAAAA-py3.13",
+      "/cache/c-CCCCCCCC-py3.13",
+    ]);
+  });
+
+  /// A single orphan needs no bulk affordance -- its own checkbox is
+  /// already one click.
+  it("does not offer bulk removal for a single orphan", () => {
+    state.venvs = [venv()];
+    render(<VenvSection />);
+    expect(screen.queryByRole("button", { name: /Remove all/ })).toBeNull();
+  });
+});

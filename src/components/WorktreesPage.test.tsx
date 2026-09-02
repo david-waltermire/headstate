@@ -569,6 +569,25 @@ describe("WorktreesPage", () => {
       await waitFor(() => expect(markAssessedFn).toHaveBeenCalled());
     });
 
+    /// #396: an ABSENT clipboard produced NO toast at all.
+    ///
+    /// `navigator.clipboard.writeText(...)` throws synchronously on
+    /// property access when the object is missing, so `.then(ok, err)`
+    /// attached neither handler and the click looked inert -- which is
+    /// exactly what was reported against v4.0.0, after #393 had already
+    /// fixed the assessment mark and the toast wording.
+    it("says so when the window has no clipboard at all", async () => {
+      Object.assign(navigator, { clipboard: undefined });
+      state.classified = [wt({ safety: { kind: "never_pushed" } })];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /claudify/i }));
+      await waitFor(() => expect(toastError).toHaveBeenCalled());
+      expect(toastError.mock.calls[0][0]).toMatch(/could not copy/i);
+      const [, opts] = toastError.mock.calls[0] as [string, { description: string }];
+      expect(opts.description).toMatch(/no clipboard access/i);
+    });
+
     /// #347: reported as "no indication it copied anything". The
     /// success toast is asserted above, so the visible gap is the
     /// FAILURE path -- `navigator.clipboard` rejects when the document

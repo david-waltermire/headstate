@@ -1,4 +1,5 @@
 import { ExternalLink } from "./ExternalLink";
+import { copyText } from "../lib/clipboard";
 import { Bot, Copy, ExternalLink as ExternalLinkIcon, MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -234,12 +235,11 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
             role="menuitem"
             onClick={() => {
               setOpen(false);
-              navigator.clipboard
-                .writeText(agentPrompt(toAgentContext(pr)))
-                .then(
-                  () => toast.success("Prompt copied — paste it to an agent"),
-                  () => toast.error("Could not copy"),
-                );
+              void copyText(agentPrompt(toAgentContext(pr))).then((failure) =>
+                failure === null
+                  ? toast.success("Prompt copied — paste it to an agent")
+                  : toast.error("Could not copy the prompt", { description: failure }),
+              );
             }}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-[#e6edf3] hover:bg-[#21262d]"
           >
@@ -251,9 +251,12 @@ export function PrKebab({ pr, canWrite = true }: { pr: PullRequest; canWrite?: b
             role="menuitem"
             onClick={() => {
               setOpen(false);
-              navigator.clipboard.writeText(pr.head_ref).then(
-                () => toast.success("Branch name copied"),
-                () => toast.error("Could not copy"),
+              void copyText(pr.head_ref).then((failure) =>
+                failure === null
+                  ? toast.success("Branch name copied")
+                  : toast.error("Could not copy the branch name", {
+                      description: failure,
+                    }),
               );
             }}
             className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-[#e6edf3] hover:bg-[#21262d]"

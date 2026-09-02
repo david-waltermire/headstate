@@ -29,6 +29,7 @@ vi.mock("../api/hooks", () => ({
     prefs: { hidden_views: [], close_hides_to_tray: true },
     set: () => Promise.resolve(),
   }),
+  useCleanupPrefs: () => ({ prefs: undefined, set: () => Promise.resolve() }),
   useAutostart: () => ({ enabled: false, set: () => Promise.resolve() }),
   usePollState: () => state.current,
   useRemovalProgress: () => state.removal,

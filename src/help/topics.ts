@@ -107,6 +107,60 @@ that, a measurement on a real machine found ancestry alone recognised
 10 of 157 merged worktrees.`,
   },
 
+  "auto-cleanup": {
+    title: "Automatic cleanup reports",
+    body: `Runs the same rules the Artifacts view uses and **writes down what it
+would have removed** — then stops.
+
+### It cannot delete
+
+There is no removal path in this build. Turning it on gets you a list,
+not an action. That is deliberate: enabling a cleanup feature asks you to
+trust a rule you have never seen run against your own machine, and no
+description substitutes for seeing what it actually picked.
+
+Read a few reports against your real directories. If the list is right,
+acting on it is one click in the Artifacts view. If it is wrong, nothing
+was lost finding out.
+
+### What it considers
+
+Build output, and **orphaned** virtualenvs only — never stale ones. An
+orphan is a fact; a stale virtualenv is a judgement about a project that
+still exists, and an unattended pass is the last place to act on a
+judgement.
+
+Directories written to in the last few minutes are recorded as
+**skipped**, not silently omitted. A build writing into a \`target\` does
+not show up in \`git status\`, so this is the only signal there is — and a
+directory that keeps being passed over is something you should be able to
+see.
+
+### Why the run is capped
+
+A report listing every directory on the machine is one nobody reads,
+which is the same as no report.`,
+  },
+  "stale-venvs": {
+    title: "Stale virtualenvs",
+    body: `A virtualenv whose project **still exists on disk** but which nothing
+has written to in a long time.
+
+Different from an orphan, and the difference is why this is a separate
+setting. An orphan is provable: no directory on this machine produces its
+name, so nothing can ever use it again. Stale is an inference about what
+you intend to do next, and the threshold is a guess.
+
+### What turning this on means
+
+That you are asserting the guess is right for you. Each row shows how
+long it has been idle, so the assertion is informed rather than blind.
+
+Removal still re-checks at the moment you act: a virtualenv used since
+the list was drawn is refused, and so is one whose age cannot be read.
+Being unable to tell how old something is never counts as evidence that
+it is disposable.`,
+  },
   "poetry-venvs": {
     title: "Poetry virtualenvs, and why there are so many",
     body: `Poetry names each virtualenv after **the absolute path of the project

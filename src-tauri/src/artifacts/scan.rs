@@ -387,12 +387,16 @@ mod tests {
             return;
         }
         let t = tempfile::TempDir::new().unwrap();
-        // A git repo whose index is unreadable: `check-ignore` fails
-        // rather than answering.
-        git_init(t.path());
         fs::create_dir(t.path().join("dist")).unwrap();
-        fs::remove_dir_all(t.path().join(".git")).unwrap();
-        fs::write(t.path().join(".git"), "not a git dir").unwrap();
+        // A BROKEN gitfile, written directly rather than by initialising
+        // a repository and deleting it. The earlier version raced git's
+        // own processes -- `remove_dir_all` on a `.git` it may still
+        // hold open failed intermittently, about one run in four.
+        //
+        // `.git` as a FILE containing garbage is what a corrupt worktree
+        // link looks like, and `check-ignore` answers it with exit 128:
+        // a failure to answer rather than an answer.
+        fs::write(t.path().join(".git"), "gitdir: /nonexistent").unwrap();
 
         assert!(
             scan(&[t.path().to_string_lossy().to_string()]).is_empty(),

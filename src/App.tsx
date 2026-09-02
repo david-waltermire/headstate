@@ -25,8 +25,8 @@ import { PrList } from "./components/PrList";
 import { ReviewChips } from "./components/ReviewChips";
 import { TriageChips } from "./components/TriageChips";
 import { WorktreeSidebar } from "./components/WorktreeSidebar";
-import { ViewSwitcher } from "./components/ViewSwitcher";
 import { ArtifactsPage } from "./components/ArtifactsPage";
+import { ArtifactSidebar } from "./components/ArtifactSidebar";
 import { DockerPage } from "./components/DockerPage";
 import { DockerSidebar } from "./components/DockerSidebar";
 import { WorktreesPage } from "./components/WorktreesPage";
@@ -206,12 +206,7 @@ export default function App() {
     <div className="flex h-screen flex-col bg-[#0d1117] text-[#e6edf3]">
       <div className="flex min-h-0 flex-1">
       {view === "artifacts" ? (
-        // No sidebar of its own: artifacts are grouped by repository in
-        // the list itself, and a second repo list beside it would be two
-        // controls for one axis.
-        <nav className="flex w-64 shrink-0 flex-col border-r border-[#30363d] p-3">
-          <ViewSwitcher counts={{ "to-review": reviewingCount }} />
-        </nav>
+        <ArtifactSidebar reviewingCount={reviewingCount} />
       ) : view === "docker" ? (
         <DockerSidebar viewCounts={{ "to-review": reviewingCount }} />
       ) : view === "worktrees" ? (

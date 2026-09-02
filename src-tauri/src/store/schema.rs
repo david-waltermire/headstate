@@ -70,6 +70,33 @@ const MIGRATIONS: &[&str] = &[
         SELECT id, payload, fetched_at FROM snapshot;
      DROP TABLE snapshot;
      ALTER TABLE snapshot_new RENAME TO snapshot;",
+    // 5: the cleanup ledger.
+    //
+    // A TABLE rather than a settings key because this is append-only
+    // history queried by time, where `settings` holds values read and
+    // written whole.
+    //
+    // Written on EVERY run including preview runs, which is what keeps
+    // it from becoming the second `merge_history` -- a permanently-empty
+    // table implying a feature that does not exist. It is also the only
+    // way a user can audit work the app did while nobody was watching,
+    // and that auditability is what makes an unattended feature
+    // trustworthy rather than merely convenient.
+    //
+    // `action` records refusals too: when the delete-time re-check
+    // declines something, that is the guard working and the user should
+    // be able to see it work.
+    "CREATE TABLE IF NOT EXISTS cleanup_log (
+        id INTEGER PRIMARY KEY,
+        at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        target TEXT NOT NULL,
+        detail TEXT,
+        bytes INTEGER,
+        action TEXT NOT NULL,
+        error TEXT
+     );
+     CREATE INDEX IF NOT EXISTS cleanup_log_at ON cleanup_log (at DESC);",
 ];
 
 pub fn migrate(conn: &Connection) -> Result<(), StoreError> {

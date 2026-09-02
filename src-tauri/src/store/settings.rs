@@ -57,6 +57,9 @@ pub mod keys {
     /// Interface preferences, as a JSON `UiPrefs`. Absent means the
     /// defaults, which are what the app did before this key existed.
     pub const UI_PREFS: &str = "ui_prefs";
+
+    /// Automatic cleanup preferences (#382).
+    pub const CLEANUP_PREFS: &str = "cleanup_prefs";
 }
 
 #[cfg(test)]

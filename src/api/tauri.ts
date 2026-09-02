@@ -9,6 +9,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Artifact,
+  CleanupPrefs,
+  LedgerEntry,
   Venv,
   VenvRemoval,
   ArtifactRemoval,
@@ -56,6 +58,15 @@ export interface UiPrefs {
   /// asking someone to install a special build to produce it is much
   /// worse than a checkbox.
   diagnostic_logging: boolean;
+  /// Whether STALE virtualenvs may be selected for removal (#394).
+  ///
+  /// Orphans never need this: nothing on the machine hashes to them, so
+  /// the verdict is a fact. Stale is a judgement about a project that
+  /// still exists, and the app should not act on a judgement unless the
+  /// user supplied the intent.
+  remove_stale_venvs: boolean;
+  /// Days idle before a virtualenv counts as stale. 0 means the default.
+  stale_venv_days: number;
 }
 
 export const getUiPrefs = () => invoke<UiPrefs>("get_ui_prefs");
@@ -424,3 +435,16 @@ export const removeVenvs = (paths: string[]) =>
 /// worktree past its safety gate.
 export const markAssessed = (worktreePath: string) =>
   invoke<void>("mark_assessed", { worktreePath });
+
+/// Run the cleanup pass now and return what it WOULD remove.
+///
+/// Preview only: the backend has no removal path for this, so it cannot
+/// delete regardless of what it is called with.
+export const previewCleanup = () => invoke<LedgerEntry[]>("preview_cleanup");
+
+/// The cleanup ledger, newest first.
+export const cleanupLog = () => invoke<LedgerEntry[]>("cleanup_log");
+
+export const getCleanupPrefs = () => invoke<CleanupPrefs>("get_cleanup_prefs");
+export const setCleanupPrefs = (prefs: CleanupPrefs) =>
+  invoke<void>("set_cleanup_prefs", { prefs });

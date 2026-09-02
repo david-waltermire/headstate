@@ -4,6 +4,7 @@ import {
   useAutostart,
   useNotifyPrefs,
   usePollInterval,
+  useCleanupPrefs,
   useUiPrefs,
   useWorktreeDirs,
 } from "../api/hooks";
@@ -37,6 +38,7 @@ export function SettingsDialog({
   const { dirs, set: setDirs } = useWorktreeDirs();
   const { prefs, set: setPrefs } = useNotifyPrefs();
   const { prefs: ui, set: setUi } = useUiPrefs();
+  const { prefs: cleanup, set: setCleanup } = useCleanupPrefs();
   const { enabled: autostart, set: setAutostart } = useAutostart();
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
@@ -288,6 +290,76 @@ export function SettingsDialog({
               {autostartError}
             </p>
           ) : null}
+        </div>
+
+        {/* Automatic cleanup, which in this build cannot remove
+            anything. Presented as what it IS -- a report of what would
+            be removed -- rather than as a feature with the acting half
+            greyed out, because a switch that suggests it might delete is
+            exactly the thing to avoid understating. */}
+        <div className="flex flex-col gap-2 border-t border-[#30363d] pt-4">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-[#e6edf3]">Automatic cleanup</h3>
+            <HelpButton topic="auto-cleanup" />
+          </div>
+          <p className="text-xs text-[#8b949e]">
+            Reports what it would reclaim. This build never removes anything
+            automatically — you review the list and act on it yourself.
+          </p>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={cleanup?.enabled ?? false}
+              onChange={() =>
+                cleanup && void setCleanup({ ...cleanup, enabled: !cleanup.enabled })
+              }
+            />
+            Report what could be reclaimed
+          </label>
+          {cleanup?.enabled ? (
+            <>
+              <label className="ml-6 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={cleanup.artifacts}
+                  onChange={() =>
+                    void setCleanup({ ...cleanup, artifacts: !cleanup.artifacts })
+                  }
+                />
+                Build output
+              </label>
+              <label className="ml-6 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={cleanup.venvs}
+                  onChange={() => void setCleanup({ ...cleanup, venvs: !cleanup.venvs })}
+                />
+                Orphaned virtualenvs
+              </label>
+            </>
+          ) : null}
+        </div>
+
+        {/* #394: stale virtualenvs, behind an explicit opt-in. */}
+        <div className="flex flex-col gap-2 border-t border-[#30363d] pt-4">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-[#e6edf3]">Virtualenv cleanup</h3>
+            <HelpButton topic="stale-venvs" />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={ui?.remove_stale_venvs ?? false}
+              onChange={() =>
+                ui && void setUi({ ...ui, remove_stale_venvs: !ui.remove_stale_venvs })
+              }
+            />
+            Also allow removing stale virtualenvs
+          </label>
+          <p className="text-xs text-[#8b949e]">
+            Their projects still exist. Turning this on asserts you are done with
+            them — orphans, whose projects are gone, never needed it.
+          </p>
         </div>
 
         {/* Every one of these already worked and none was mentioned

@@ -37,6 +37,7 @@ import {
 } from "../lib/worktrees";
 import { HelpButton } from "./HelpButton";
 import { claudifyCommand } from "../api/tauri";
+import { copyText } from "../lib/clipboard";
 import { relativeTime } from "../lib/time";
 import { assessmentSummary } from "../lib/assessment";
 import { rollupRepos } from "../lib/rollup";
@@ -427,42 +428,41 @@ export function WorktreesPage() {
 
   const claudify = (wt: Worktree) => {
     claudifyCommand(selected?.path ?? "", wt.path, wt.branch).then(
-      ({ command, claude_installed }) =>
-        navigator.clipboard.writeText(command).then(
-          () =>
-            toast.success("Command copied to the clipboard", {
-              // The user has to switch apps; this is the only place to
-              // say so. And if Claude Code is missing, better to learn it
-              // here than as a `command not found` after pasting.
-              description: claude_installed
-                ? "Paste it in your terminal to start the assessment."
-                : "Paste it in your terminal. Claude Code was not found on this machine.",
-              // The ONLY way to reach "Remove anyway…", and it is here
-              // rather than automatic because that button removes a
-              // worktree past its safety gate. Copying a prompt is not
-              // evidence anyone read the answer; clicking this is.
-              action: {
-                label: "I read the assessment",
-                onClick: () => {
-                  void markRead(wt.path).then(
-                    () => toast.success(`${pathBasename(wt.path)} can now be removed`),
-                    (e: unknown) =>
-                      toast.error("Could not record the assessment", {
-                        description: typeof e === "string" ? e : undefined,
-                      }),
-                  );
-                },
-              },
-            }),
-          // WITH the reason. `navigator.clipboard` rejects when the
-          // document is not focused, which is a real case in a desktop
-          // webview -- and "could not copy" alone leaves the user with
-          // nothing to do about it.
-          (e: unknown) =>
-            toast.error("Could not copy the command", {
-              description: e instanceof Error ? e.message : undefined,
-            }),
-        ),
+      async ({ command, claude_installed }) => {
+        // `copyText` rather than `navigator.clipboard` directly: an
+        // ABSENT clipboard throws synchronously on property access, so
+        // the old `.then(ok, err)` attached neither handler and the
+        // click produced no toast of either kind.
+        const failure = await copyText(command);
+        if (failure !== null) {
+          toast.error("Could not copy the command", { description: failure });
+          return;
+        }
+        toast.success("Command copied to the clipboard", {
+          // The user has to switch apps; this is the only place to say
+          // so. And if Claude Code is missing, better to learn it here
+          // than as a `command not found` after pasting.
+          description: claude_installed
+            ? "Paste it in your terminal to start the assessment."
+            : "Paste it in your terminal. Claude Code was not found on this machine.",
+          // The ONLY way to reach "Remove anyway…", and it is here
+          // rather than automatic because that button removes a worktree
+          // past its safety gate. Copying a prompt is not evidence
+          // anyone read the answer; clicking this is.
+          action: {
+            label: "I read the assessment",
+            onClick: () => {
+              void markRead(wt.path).then(
+                () => toast.success(`${pathBasename(wt.path)} can now be removed`),
+                (e: unknown) =>
+                  toast.error("Could not record the assessment", {
+                    description: typeof e === "string" ? e : undefined,
+                  }),
+              );
+            },
+          },
+        });
+      },
       (e: unknown) =>
         toast.error("Could not build the command", {
           description: typeof e === "string" ? e : undefined,
