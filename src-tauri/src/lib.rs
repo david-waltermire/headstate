@@ -106,6 +106,7 @@ pub fn run() {
             commands::cleanup_log,
             commands::get_cleanup_prefs,
             commands::set_cleanup_prefs,
+            commands::apply_package_updates,
             commands::scan_claude_md,
             commands::read_claude_md,
             commands::check_packages,

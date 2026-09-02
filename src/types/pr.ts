@@ -532,6 +532,49 @@ export interface Outdated {
   manifest: string;
 }
 
+/// One package the user asked to update.
+export interface UpdateRequest {
+  name: string;
+  version: string;
+  ecosystem: Ecosystem;
+}
+
+/// What happened to one requested update.
+///
+/// Per-package rather than one status for the run: updates apply in
+/// sequence, and a failure in the third must not erase the report of the
+/// two that worked.
+interface UpdateOutcome {
+  name: string;
+  /// The version ASKED FOR.
+  requested: string;
+  /// Files git reports as changed. Empty means the command succeeded and
+  /// changed nothing -- usually a manifest constraint pinning the
+  /// package below the requested version, which is worth showing.
+  changed_files: string[];
+  /// The tool's own output, kept on success too: resolvers warn about
+  /// peer conflicts while still succeeding.
+  output: string;
+  /// The constraint the manifest holds AFTERWARDS.
+  ///
+  /// Not the same as `requested`, and that is the point: npm rewrites a
+  /// pinned `4.17.21` request into `^4.17.21`, a range rather than a
+  /// pin. `null` when it could not be read, which is shown as unknown
+  /// rather than assumed to match.
+  resolved_constraint: string | null;
+  /// Set when this package failed; the others still report.
+  error: string | null;
+}
+
+/// The result of an update run.
+export interface RunReport {
+  /// The worktree holding the changes. Phase 1 does not push, so this
+  /// path IS the deliverable.
+  worktree: string;
+  branch: string;
+  results: UpdateOutcome[];
+}
+
 /// What one ecosystem reported for one repository.
 ///
 /// `error` exists because "no updates" and "the check did not run" are

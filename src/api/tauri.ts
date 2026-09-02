@@ -11,6 +11,8 @@ import type {
   Artifact,
   ClaudeFile,
   ProjectReport,
+  RunReport,
+  UpdateRequest,
   UpdateFilter,
   CleanupPrefs,
   LedgerEntry,
@@ -462,6 +464,12 @@ export const packagesMarkdown = (
   reports: ProjectReport[],
   filter: UpdateFilter,
 ) => invoke<string>("packages_markdown", { repoPath, reports, filter });
+
+/// Create a worktree and apply updates in it. Does NOT push.
+///
+/// Returns where the work landed and what each update actually did.
+export const applyPackageUpdates = (repoPath: string, requests: UpdateRequest[]) =>
+  invoke<RunReport>("apply_package_updates", { repoPath, requests });
 
 /// Every CLAUDE.md in a repository, with its import tree resolved.
 export const scanClaudeMd = (repoPath: string) =>

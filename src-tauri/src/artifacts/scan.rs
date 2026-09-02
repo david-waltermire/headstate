@@ -266,18 +266,40 @@ mod tests {
             .is_ok()
     }
 
+    /// Initialise a repository, RETRYING a failed spawn.
+    ///
+    /// macOS `posix_spawn` intermittently fails with ENOENT under the
+    /// process pressure of `--test-threads=8`, and this helper used to
+    /// discard the result. A failed `git init` then surfaced as an
+    /// unrelated assertion — `check-ignore` answering 128 in a directory
+    /// with no `.git`, which the scan correctly reads as "cannot prove
+    /// this is disposable" and skips. The test that failed was never
+    /// the test that was wrong.
+    ///
+    /// The two `git config` spawns this used to do are gone: no test
+    /// here commits, so an identity was never needed, and spawning is
+    /// the scarce resource.
     fn git_init(dir: &Path) {
-        for args in [
-            vec!["init", "-q"],
-            vec!["config", "user.email", "t@t"],
-            vec!["config", "user.name", "t"],
-        ] {
-            let _ = std::process::Command::new("git")
+        for attempt in 0..5 {
+            let out = std::process::Command::new("git")
                 .arg("-C")
                 .arg(dir)
-                .args(args)
-                .status();
+                .args(["init", "-q"])
+                .output();
+            if matches!(&out, Ok(o) if o.status.success()) {
+                return;
+            }
+            // Only a spawn failure is worth retrying; a git that ran and
+            // refused will refuse again.
+            if let Ok(o) = &out {
+                panic!(
+                    "git init failed: {}",
+                    String::from_utf8_lossy(&o.stderr).trim()
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10 << attempt));
         }
+        panic!("git init could not be spawned after 5 attempts");
     }
 
     /// The happy path: a `target/` beside a `Cargo.toml` is cargo's.

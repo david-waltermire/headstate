@@ -915,6 +915,43 @@ pub fn packages_markdown(
     crate::packages::markdown::render(&repo_path, &reports, filter)
 }
 
+/// Create a worktree and apply dependency updates in it.
+///
+/// Phase 1 of the update wizard: it does NOT push and does NOT open a
+/// pull request. The worktree is left in place and its path is returned,
+/// because what these package managers actually do to a checkout is the
+/// thing being found out.
+///
+/// The FIRST command in this app that runs a package manager in a mode
+/// that writes, which is why it carries the same care the destructive
+/// git paths do.
+#[tauri::command]
+pub async fn apply_package_updates(
+    repo_path: String,
+    requests: Vec<crate::packages::apply::UpdateRequest>,
+) -> Result<crate::packages::apply::RunReport, String> {
+    let repo = repo_path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        crate::packages::apply::run(std::path::Path::new(&repo), &requests)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Logged with the repository and branch, so "where did that
+    // worktree come from?" has an answer -- the same reason
+    // `remove_worktree` logs.
+    match &result {
+        Ok(r) => log::info!(
+            "applied {} update(s) in {} on branch {}",
+            r.results.len(),
+            r.worktree,
+            r.branch
+        ),
+        Err(e) => log::warn!("update run in {repo_path} refused: {e}"),
+    }
+    result
+}
+
 /// Every CLAUDE.md in a repository, with its import tree resolved.
 #[tauri::command]
 pub async fn scan_claude_md(repo_path: String) -> Result<Vec<crate::claudemd::ClaudeFile>, String> {

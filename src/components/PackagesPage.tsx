@@ -13,6 +13,7 @@ import { packagesMarkdown } from "@/api/tauri";
 import { copyText } from "@/lib/clipboard";
 import { useActiveFilters } from "@/store/filters";
 import { HelpButton } from "./HelpButton";
+import { UpdateWizard } from "./UpdateWizard";
 
 const ECOSYSTEM_LABEL: Record<Ecosystem, string> = {
   npm: "npm",
@@ -60,6 +61,7 @@ export function PackagesPage() {
   const [filter, setFilter] = useState<UpdateFilter>("minor");
   const [sort, setSort] = useState<Sort>("size");
   const [query, setQuery] = useState("");
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const admits = useMemo(
@@ -204,6 +206,19 @@ export function PackagesPage() {
           {/* Distinct from Copy markdown, which is a REPORT. This is an
               INSTRUCTION: what to do, where, and how to check it
               afterwards. */}
+          {/* Applies the updates HERE rather than handing them off.
+              Distinct from Claudify, which delegates the work to an
+              agent; this does it in a worktree and shows what actually
+              landed. */}
+          <button
+            type="button"
+            disabled={total === 0}
+            onClick={() => setWizardOpen(true)}
+            className="rounded border border-[#238636]/40 px-2 py-1 text-xs text-[#3fb950] hover:bg-[#238636]/10 disabled:opacity-50"
+          >
+            Update in worktree
+          </button>
+
           <button
             type="button"
             disabled={total === 0}
@@ -323,6 +338,13 @@ export function PackagesPage() {
           </section>
         );
       })}
+
+      <UpdateWizard
+        repo={repo}
+        packages={allOutdated}
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+      />
     </div>
   );
 }
