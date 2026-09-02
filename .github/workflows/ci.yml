@@ -104,6 +104,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: yarn tauri build --bundles app
 
+      # Asserted against the BUILT css, because this failure exists only
+      # in a production bundle: `yarn dev` does not extract Sonner's
+      # inlined styles and jsdom applies them, so every other gate passes
+      # while the shipped app renders toasts in document flow.
+      - name: Check the toast overlay's styles survived the build
+        shell: bash
+        run: ./scripts/check-toast-css.sh
+
       # The release ships a UNIVERSAL binary, but this job builds native
       # arm64 only -- so an arch-gated link failure (plausible with bundled
       # SQLite or octocrab's crypto backends) passed every PR and would
