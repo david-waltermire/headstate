@@ -1,0 +1,92 @@
+use serde::{Deserialize, Serialize};
+
+/// Which toolchain owns a project's dependencies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Ecosystem {
+    Npm,
+    Yarn,
+    Poetry,
+    Uv,
+    Dotnet,
+}
+
+impl Ecosystem {
+    /// The executable this ecosystem needs.
+    pub fn program(self) -> &'static str {
+        match self {
+            Ecosystem::Npm => "npm",
+            Ecosystem::Yarn => "yarn",
+            Ecosystem::Poetry => "poetry",
+            Ecosystem::Uv => "uv",
+            Ecosystem::Dotnet => "dotnet",
+        }
+    }
+
+    /// How a user updates one package here, for the markdown handoff.
+    pub fn update_hint(self) -> &'static str {
+        match self {
+            Ecosystem::Npm => "npm install <pkg>@<version>",
+            Ecosystem::Yarn => "yarn up <pkg>@<version>",
+            Ecosystem::Poetry => "poetry add <pkg>@<version>",
+            Ecosystem::Uv => "uv add <pkg>==<version>",
+            Ecosystem::Dotnet => "dotnet add package <pkg> --version <version>",
+        }
+    }
+
+    /// The manifest whose presence means this ecosystem is in use.
+    pub fn manifest(self) -> &'static str {
+        match self {
+            Ecosystem::Npm | Ecosystem::Yarn => "package.json",
+            Ecosystem::Poetry | Ecosystem::Uv => "pyproject.toml",
+            // .NET is a glob, handled by the detector rather than here.
+            Ecosystem::Dotnet => "",
+        }
+    }
+}
+
+/// How large a version jump is.
+///
+/// `Unknown` is a first-class answer rather than a fallback to `Major`.
+/// Version schemes here are NOT all semver: .NET routinely uses four
+/// parts, and PEP 440 has epochs and local versions that a semver parser
+/// rejects outright. A version we cannot compare must be shown as
+/// uncomparable, because silently calling it major would hide it from a
+/// "minors only" filter and silently calling it minor would offer it as
+/// safe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Bump {
+    Patch,
+    Minor,
+    Major,
+    Unknown,
+}
+
+/// One package with an update available.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Outdated {
+    pub name: String,
+    pub current: String,
+    pub latest: String,
+    pub bump: Bump,
+    pub ecosystem: Ecosystem,
+    /// The manifest to edit, relative to the repo. What a Claude session
+    /// needs in order to act without rediscovering it.
+    pub manifest: String,
+}
+
+/// What one ecosystem reported for one repository.
+///
+/// A result rather than a bare list, because "no updates" and "the tool
+/// is not installed" are completely different answers and rendering both
+/// as an empty list is the worst outcome available -- it looks like good
+/// news.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EcosystemReport {
+    pub ecosystem: Ecosystem,
+    pub outdated: Vec<Outdated>,
+    /// Set when the check could not run. The UI shows this instead of an
+    /// empty list.
+    pub error: Option<String>,
+}

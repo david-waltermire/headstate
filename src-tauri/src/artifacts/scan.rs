@@ -1,4 +1,4 @@
-use super::model::{Artifact, ArtifactKind};
+use super::model::{Artifact, ArtifactKind, ManifestProof};
 use std::path::Path;
 
 /// Directory names that MIGHT be build output, with the kind they imply.
@@ -7,6 +7,8 @@ use std::path::Path;
 /// a tool owns the directory before it is offered for removal.
 const CANDIDATES: &[(&str, ArtifactKind)] = &[
     ("target", ArtifactKind::CargoTarget),
+    ("bin", ArtifactKind::DotnetBuild),
+    ("obj", ArtifactKind::DotnetBuild),
     ("node_modules", ArtifactKind::NodeModules),
     (".terraform", ArtifactKind::Terraform),
     ("dist", ArtifactKind::BuildOutput),
@@ -107,14 +109,25 @@ pub(crate) fn is_artifact(path: &Path) -> bool {
 fn classify(path: &Path, kind: ArtifactKind, root: &Path) -> Option<Artifact> {
     let parent = path.parent()?;
 
-    if let Some(manifest) = kind.manifest() {
-        if !parent.join(manifest).is_file() {
-            return None;
+    match kind.proof() {
+        ManifestProof::Named(name) => {
+            if !parent.join(name).is_file() {
+                return None;
+            }
         }
-    } else if kind == ArtifactKind::BuildOutput && !is_disposable_build_dir(path) {
-        // Not gitignored means git is tracking it, or it is outside a
-        // repository entirely. Either way it is not ours to offer.
-        return None;
+        ManifestProof::AnyExtension(exts) => {
+            if !has_file_with_extension(parent, exts) {
+                return None;
+            }
+        }
+        ManifestProof::None => {
+            if kind == ArtifactKind::BuildOutput && !is_disposable_build_dir(path) {
+                // Not gitignored means git is tracking it, or it is
+                // outside a repository entirely. Either way it is not
+                // ours to offer.
+                return None;
+            }
+        }
     }
 
     Some(Artifact {
@@ -153,6 +166,24 @@ fn is_disposable_build_dir(path: &Path) -> bool {
         return false;
     }
     is_ignored(path)
+}
+
+/// Whether the directory holds any file with one of these extensions.
+///
+/// .NET names its project file after the project, so only the extension
+/// is fixed -- `Foo.csproj`, `Bar.fsproj`. Reads the directory once
+/// rather than globbing, and an unreadable directory answers NO: a proof
+/// that could not be gathered is not a proof.
+fn has_file_with_extension(dir: &Path, exts: &[&str]) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|e| {
+        e.path()
+            .extension()
+            .and_then(|x| x.to_str())
+            .is_some_and(|x| exts.iter().any(|want| x.eq_ignore_ascii_case(want)))
+    })
 }
 
 /// Whether git ignores this path.
@@ -465,6 +496,73 @@ dist/
             "a dist under node_modules belongs to that dependency: {:?}",
             found.iter().map(|a| &a.path).collect::<Vec<_>>()
         );
+    }
+
+    /// THE test for this feature, and it matters more than the happy
+    /// path.
+    ///
+    /// On a machine with no C# at all -- zero `.csproj`, `.sln`, or
+    /// `.fsproj` -- there were 813 `bin/` directories, nearly all of
+    /// them npm packages. In npm, `bin/` holds executables the package
+    /// SHIPS: not regenerable, and deleting one breaks the installed
+    /// package. A name-based rule would have offered every one.
+    #[test]
+    fn a_bin_beside_a_package_json_is_never_dotnet_output() {
+        let t = tempfile::TempDir::new().unwrap();
+        fs::write(t.path().join("package.json"), "{}").unwrap();
+        fs::create_dir(t.path().join("bin")).unwrap();
+
+        let found = scan(&[t.path().to_string_lossy().to_string()]);
+        assert!(
+            !found.iter().any(|a| a.kind == ArtifactKind::DotnetBuild),
+            "a bin/ with no project file beside it is not .NET output: {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_bare_bin_with_no_manifest_is_not_an_artifact() {
+        let t = tempfile::TempDir::new().unwrap();
+        fs::create_dir(t.path().join("bin")).unwrap();
+        assert!(scan(&[t.path().to_string_lossy().to_string()]).is_empty());
+    }
+
+    /// The proof is a GLOB, not a filename: .NET names the project file
+    /// after the project, so only the extension is fixed.
+    #[test]
+    fn a_bin_beside_any_project_file_is_dotnet_output() {
+        for ext in ["csproj", "fsproj", "vbproj"] {
+            let t = tempfile::TempDir::new().unwrap();
+            fs::write(t.path().join(format!("Whatever.{ext}")), "<Project/>").unwrap();
+            fs::create_dir(t.path().join("bin")).unwrap();
+            fs::create_dir(t.path().join("obj")).unwrap();
+
+            let found = scan(&[t.path().to_string_lossy().to_string()]);
+            assert_eq!(found.len(), 2, "{ext}: both bin and obj: {found:?}");
+            assert!(found.iter().all(|a| a.kind == ArtifactKind::DotnetBuild));
+        }
+    }
+
+    /// A proof that could not be GATHERED is not a proof.
+    ///
+    /// If the parent directory cannot be read, there is no evidence a
+    /// project file sits there -- and an unreadable directory must not
+    /// read as permission, the same rule the gitignore check follows.
+    #[test]
+    fn an_unreadable_parent_is_not_proof() {
+        assert!(
+            !has_file_with_extension(Path::new("/nonexistent/nowhere"), &["csproj"]),
+            "an unreadable directory cannot prove anything"
+        );
+    }
+
+    /// Windows and macOS write project files with any casing, and a
+    /// case-sensitive check would miss `Foo.CSPROJ` on Linux.
+    #[test]
+    fn the_project_extension_is_matched_case_insensitively() {
+        let t = tempfile::TempDir::new().unwrap();
+        fs::write(t.path().join("App.CSPROJ"), "<Project/>").unwrap();
+        fs::create_dir(t.path().join("obj")).unwrap();
+        assert_eq!(scan(&[t.path().to_string_lossy().to_string()]).len(), 1);
     }
 
     /// Every artifact must say what puts it back. "You can delete this"

@@ -45,6 +45,9 @@ import {
   removeWorktrees,
   removeArtifacts,
   markAssessed,
+  checkPackages,
+  readClaudeMd,
+  scanClaudeMd,
   cleanupLog,
   getCleanupPrefs,
   previewCleanup,
@@ -706,6 +709,44 @@ export function useCleanupLog(enabled: boolean) {
       return out;
     },
   };
+}
+
+/// Outdated packages for one repository.
+///
+/// `enabled` gates it on a repo actually being selected, and it never
+/// runs on a timer: these commands hit registries and take seconds.
+export function usePackages(repoPath: string | undefined) {
+  return useQuery({
+    queryKey: ["packages", repoPath],
+    queryFn: () => checkPackages(repoPath as string),
+    enabled: Boolean(repoPath),
+    // Long, because the answer changes when a registry publishes, not
+    // when the user clicks around. Refetching costs seconds and network.
+    staleTime: 10 * 60 * 1000,
+  });
+}
+
+/// CLAUDE.md files in one repository, with import trees resolved.
+export function useClaudeMd(repoPath: string | undefined) {
+  return useQuery({
+    queryKey: ["claude-md", repoPath],
+    queryFn: () => scanClaudeMd(repoPath as string),
+    enabled: Boolean(repoPath),
+    staleTime: 30_000,
+  });
+}
+
+/// The text of one file.
+///
+/// Fetched separately from the scan: holding every file's contents to
+/// display one is a lot of bytes across the bridge for nothing.
+export function useClaudeMdText(path: string | undefined) {
+  return useQuery({
+    queryKey: ["claude-md-text", path],
+    queryFn: () => readClaudeMd(path as string),
+    enabled: Boolean(path),
+    staleTime: 30_000,
+  });
 }
 
 /// Merge the base branch into a pull request's head.

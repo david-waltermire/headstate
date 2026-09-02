@@ -18,6 +18,7 @@ export const GROUP_LABEL: Record<ArtifactGroup, string> = {
   cargo_target: "Rust targets",
   node_modules: "Node modules",
   terraform: "Terraform providers",
+  dotnet_build: ".NET build output",
   build_output: "Build output",
   [VENV_GROUP]: "Poetry virtualenvs",
 };

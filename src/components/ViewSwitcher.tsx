@@ -1,4 +1,13 @@
-import { Container, ChevronDown, Eye, FolderGit2, GitPullRequest, HardDrive } from "lucide-react";
+import {
+  Container,
+  ChevronDown,
+  Eye,
+  FolderGit2,
+  GitPullRequest,
+  HardDrive,
+  Package,
+  FileText,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type View, useFilters } from "../store/filters";
 import { useUiPrefs } from "../api/hooks";
@@ -9,6 +18,8 @@ const VIEWS: { id: View; label: string; Icon: typeof GitPullRequest }[] = [
   { id: "worktrees", label: "Worktrees", Icon: FolderGit2 },
   { id: "docker", label: "Docker", Icon: Container },
   { id: "artifacts", label: "Artifacts", Icon: HardDrive },
+  { id: "packages", label: "Package updates", Icon: Package },
+  { id: "claude-md", label: "CLAUDE.md", Icon: FileText },
 ];
 
 /// The top-level view control, at the head of the sidebar.

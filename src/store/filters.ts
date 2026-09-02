@@ -16,7 +16,15 @@ import type { Filters } from "../lib/derive";
 /// migration's completeness test iterates it rather than repeating the
 /// names. A hardcoded second list is one that gets edited to match
 /// whatever the code does and stops checking anything.
-export const ALL_VIEWS = ["my-prs", "to-review", "worktrees", "docker", "artifacts"] as const;
+export const ALL_VIEWS = [
+  "my-prs",
+  "to-review",
+  "worktrees",
+  "docker",
+  "artifacts",
+  "packages",
+  "claude-md",
+] as const;
 
 export type View = (typeof ALL_VIEWS)[number];
 
@@ -86,6 +94,8 @@ const EMPTY_FILTERS: Record<View, Filters> = {
   worktrees: {},
   docker: {},
   artifacts: {},
+  packages: {},
+  "claude-md": {},
 };
 
 /// Filters and view survive a relaunch.

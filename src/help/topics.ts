@@ -199,15 +199,93 @@ The verdict is re-derived from the filesystem, not taken from the row you
 clicked. If a project directory reappeared since the list was built, that
 virtualenv is live again and the removal is refused.`,
   },
+  "package-updates": {
+    title: "What this list shows",
+    body: `Runs each package manager this repository uses and reports what is
+behind. **It does not apply anything** — the Copy markdown button is the
+deliverable, and it carries enough for a Claude session to do the work:
+every package, both versions, the manifest to edit, and that ecosystem's
+update command.
+
+### Why "Patch only" and not "Safe"
+
+Patch-only is a fact about the version numbers. *Safe* is a claim about
+consequences, and nothing here can check whether a patch release broke
+something for you. The filter says what it actually does.
+
+### "Could not compare"
+
+Version schemes are not all the same. .NET ships four-part versions,
+Python allows epochs and local versions, and some packages publish
+strings nothing can order. Those are shown as **unknown** rather than
+guessed at.
+
+That matters for the filters: a version wrongly called major would vanish
+from "patch and minor", and one wrongly called minor would be offered as
+a small change. So the filtered views say how many they are holding back,
+because a list that quietly omits them looks complete when it is not.
+
+### If an ecosystem reports an error
+
+That is a check which did **not run** — usually the tool is not on the
+PATH a desktop app inherits, which is different from your terminal's. It
+is stated rather than shown as an empty list, because "no updates" and
+"we could not look" are opposite answers.`,
+  },
+  "claude-md": {
+    title: "CLAUDE.md files and what they cost",
+    body: `Every CLAUDE.md in the repository, the files each one imports with
+\`@\`, and an estimate of what they cost in context.
+
+### The totals are estimates
+
+The count is characters divided by four. That is the usual rough figure
+for prose and it runs low for code blocks and file paths, which these
+files are full of. Every number here is labelled *est.* for that reason —
+it is a useful comparison between files, not a measurement.
+
+### Why the whole-tree number matters
+
+A 2 KB CLAUDE.md that imports 40 KB of other files costs the 40 KB. The
+file's own size tells you almost nothing, which is why the tree total is
+shown separately whenever imports add to it.
+
+### Broken and circular imports
+
+Both are **shown**, never dropped. An import pointing at a file that does
+not exist is listed as missing, and a file that imports itself through
+any chain is marked circular.
+
+Neither is something another tool will tell you about, and quietly
+omitting them would make the tree look complete when it is not.
+
+### Read-only
+
+This view does not edit. Seeing what is in these files, and what they
+pull in, is the whole of it for now.`,
+  },
   "build-artifacts": {
     title: "Build output, and what puts it back",
     body: `Directories a **tool regenerates**: \`target\`, \`node_modules\`,
-\`.terraform\`, and gitignored \`dist\`/\`build\` folders.
+\`.terraform\`, .NET's \`bin\`/\`obj\`, and gitignored \`dist\`/\`build\`
+folders.
 
 That is the whole membership rule, and it is what makes this view safe in
 a way the Worktrees view is not. Deleting build output costs a rebuild.
 Deleting a worktree with unpushed commits costs the work. Every row here
 names the command that restores it.
+
+### Why a folder named \`bin\` might not be listed
+
+Because the name alone proves nothing. A \`bin\` is .NET's build output
+only when a project file — \`.csproj\`, \`.fsproj\`, \`.vbproj\` — sits
+beside it. Everywhere else \`bin\` usually holds programs a package
+*ships*, which nothing regenerates: deleting one breaks the package.
+
+The same rule governs every kind here. A \`target\` needs a
+\`Cargo.toml\`, a \`node_modules\` needs a \`package.json\`, and a
+\`dist\` must be gitignored. A directory that cannot prove what made it
+is left alone.
 
 ### Why these are not on the Worktrees page
 

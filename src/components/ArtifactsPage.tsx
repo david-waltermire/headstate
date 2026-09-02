@@ -38,6 +38,7 @@ const REBUILD: Record<ArtifactKind, string> = {
   cargo_target: "cargo build",
   node_modules: "npm install",
   terraform: "terraform init",
+  dotnet_build: "dotnet build",
   build_output: "the project's build",
 };
 
@@ -45,6 +46,7 @@ const LABEL: Record<ArtifactKind, string> = {
   cargo_target: "target",
   node_modules: "node_modules",
   terraform: ".terraform",
+  dotnet_build: "bin / obj",
   build_output: "build output",
 };
 
