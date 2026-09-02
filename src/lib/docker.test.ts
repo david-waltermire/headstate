@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatDockerSize, imageState, isStale, isSuperseded } from "@/lib/docker";
+import {
+  formatDockerSize,
+  imageName,
+  imageState,
+  isStale,
+  isSuperseded,
+  shortRepository,
+} from "@/lib/docker";
 import type { DockerImage } from "@/types/pr";
 
 const img = (over: Partial<DockerImage> = {}): DockerImage => ({
@@ -18,6 +25,7 @@ const img = (over: Partial<DockerImage> = {}): DockerImage => ({
   },
   in_use: false,
   superseded: true,
+  has_siblings: true,
   ...over,
 });
 
@@ -127,5 +135,71 @@ describe("formatDockerSize", () => {
   // An unmeasured size is not a zero-byte one.
   it("renders an em dash for an absent size", () => {
     expect(formatDockerSize(null)).toBe("—");
+  });
+});
+
+describe("imageName", () => {
+  /// The reported bug: 31 rows all reading `latest`. Docker keeps
+  /// Repository and Tag apart, so the tag alone is not an identity.
+  it("names an image by repository AND tag, not the tag alone", () => {
+    expect(imageName(img({ repository: "registry/app", tags: ["latest"] }))).toBe(
+      "registry/app:latest",
+    );
+  });
+
+  it("tells apart two images that share the tag `latest`", () => {
+    const a = imageName(img({ repository: "registry/api", tags: ["latest"] }));
+    const b = imageName(img({ repository: "registry/web", tags: ["latest"] }));
+    expect(a).not.toBe(b);
+  });
+
+  /// ~50 characters identical on every ECR row, which pushes the part
+  /// that differs out of a truncated cell.
+  it("elides a registry host", () => {
+    expect(
+      imageName(
+        img({
+          repository: "469164977587.dkr.ecr.us-east-1.amazonaws.com/enclave-api",
+          tags: ["latest"],
+        }),
+      ),
+    ).toBe("enclave-api:latest");
+  });
+
+  /// A bare `postgres` or an org path has no host to drop.
+  it("keeps a repository that has no registry host", () => {
+    expect(shortRepository("postgres")).toBe("postgres");
+    expect(shortRepository("tufin/oasdiff")).toBe("tufin/oasdiff");
+    expect(shortRepository("localhost:5000/app")).toBe("app");
+  });
+
+  it("falls back to the id when there is no repository", () => {
+    expect(imageName(img({ repository: "<none>", tags: [] }))).toBe("abc123def456");
+    expect(imageName(img({ repository: "", tags: [] }))).toBe("abc123def456");
+  });
+
+  it("uses the id for an untagged image", () => {
+    expect(imageName(img({ repository: "registry/app", tags: [] }))).toBe(
+      "registry/app@abc123def456",
+    );
+  });
+});
+
+describe("imageState with siblings", () => {
+  /// `current` on a row with nothing to be current AGAINST is true and
+  /// useless -- a page of identical badges reads as a claim.
+  it("says nothing for the only image in its repository", () => {
+    expect(imageState(img({ superseded: false, has_siblings: false }))).toBe("");
+  });
+
+  it("still says current when there is a sibling to be newer than", () => {
+    expect(imageState(img({ superseded: false, has_siblings: true }))).toBe("current");
+  });
+
+  /// Superseded is a real finding either way.
+  it("reports superseded regardless of siblings", () => {
+    expect(
+      imageState(img({ superseded: true, has_siblings: true, origin: null })),
+    ).toBe("superseded");
   });
 });

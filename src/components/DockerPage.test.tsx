@@ -80,6 +80,7 @@ const img = (over: Partial<DockerImage> = {}): DockerImage => ({
   },
   in_use: false,
   superseded: true,
+  has_siblings: true,
   ...over,
 });
 

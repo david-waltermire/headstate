@@ -104,6 +104,53 @@ describe("ArtifactsPage", () => {
     expect(screen.getByText("written recently")).toBeTruthy();
   });
 
+  /// The reported gap: the list showed paths and sizes but never WHEN.
+  /// Size cannot rank these -- every node_modules is ~1.4 GB -- so age
+  /// is the only thing that says which are safe to remove.
+  it("shows how long ago each directory was written", () => {
+    state.artifacts = [art()];
+    state.ages = new Map([["/code/repo/target", 60 * 60 * 24 * 270]]);
+    state.sizes = new Map([["/code/repo/target", 1_400_000_000]]);
+    state.pending = 0;
+    render(<ArtifactsPage />);
+    expect(screen.getByText("9 months ago")).toBeTruthy();
+  });
+
+  /// An unknown age must render a placeholder, never "just now" -- the
+  /// same rule the size column follows for "not measured yet". Reading
+  /// unknown as brand-new would hide the oldest directories.
+  it("does not claim an unmeasured directory was written just now", () => {
+    state.artifacts = [art()];
+    state.ages = new Map();
+    state.sizes = new Map();
+    state.pending = 1;
+    render(<ArtifactsPage />);
+    expect(screen.queryByText("just now")).toBeNull();
+  });
+
+  it("can sort by age, oldest first", () => {
+    const old = { ...art(), path: "/code/repo/old" };
+    const fresh = { ...art(), path: "/code/repo/fresh" };
+    state.artifacts = [fresh, old];
+    state.ages = new Map([
+      ["/code/repo/fresh", 60 * 60 * 24],
+      ["/code/repo/old", 60 * 60 * 24 * 300],
+    ]);
+    // Equal sizes, so only the age ordering can produce a difference --
+    // which is the real case this exists for.
+    state.sizes = new Map([
+      ["/code/repo/fresh", 1_400_000_000],
+      ["/code/repo/old", 1_400_000_000],
+    ]);
+    state.pending = 0;
+    render(<ArtifactsPage />);
+    fireEvent.change(screen.getByLabelText("Sort artifacts"), {
+      target: { value: "age" },
+    });
+    const shown = screen.getAllByText(/\/code\/repo\/(old|fresh)/);
+    expect(shown[0].textContent).toContain("/code/repo/old");
+  });
+
   it("does not flag a directory nobody has touched", () => {
     state.artifacts = [art()];
     state.ages = new Map([["/code/repo/target", 60 * 60 * 24 * 30]]);

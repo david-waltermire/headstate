@@ -67,6 +67,16 @@ pub struct Image {
     pub in_use: Option<bool>,
     /// A newer image exists for the same repository.
     pub superseded: bool,
+    /// Another image shares this repository, whether newer or older.
+    ///
+    /// Separates "the newest of several" from "the only one there is".
+    /// Without it every single-image repository reads as `current`,
+    /// which is true and useless: with one image per repository nothing
+    /// can ever be superseded, so the badge appeared on every row and
+    /// discriminated nothing. A user reasonably read a page of
+    /// `current` as a claim that their images were all in use.
+    #[serde(default)]
+    pub has_siblings: bool,
 }
 
 impl Image {

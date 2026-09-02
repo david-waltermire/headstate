@@ -36,6 +36,7 @@ pub fn images(out: &str) -> Vec<Image> {
             origin: None,
             in_use: None,
             superseded: false,
+            has_siblings: false,
         });
         // `<none>` is Docker's placeholder for an untagged image; carrying
         // it as a tag would render a row labelled "<none>".
@@ -57,9 +58,21 @@ pub fn images(out: &str) -> Vec<Image> {
 /// Operates on a list already sorted newest-first, so the first image
 /// seen per repository is the current one.
 fn mark_superseded(images: &mut [Image]) {
+    // Counted first, because "has a sibling" needs the WHOLE list --
+    // the last image in a repository has to know about the first.
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for img in images.iter() {
+        *counts.entry(img.repository.as_str()).or_default() += 1;
+    }
+    let counts: BTreeMap<String, usize> = counts
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+
     let mut seen: BTreeMap<String, ()> = BTreeMap::new();
     for img in images.iter_mut() {
         img.superseded = seen.insert(img.repository.clone(), ()).is_some();
+        img.has_siblings = counts.get(&img.repository).copied().unwrap_or(0) > 1;
     }
 }
 
@@ -300,6 +313,58 @@ mod tests {
     /// "nothing is in use" -- un-gating removal on images a running
     /// container holds, AND defeating remove_image's delete-time
     /// re-check, since both called the same function.
+    /// The distinction the badge needs: "newest of several" is a real
+    /// standing, "the only one" is not.
+    #[test]
+    fn a_lone_image_has_no_siblings() {
+        let mut imgs = vec![
+            Image {
+                id: "a".into(),
+                repository: "solo".into(),
+                tags: vec![],
+                created: String::new(),
+                size_bytes: 0,
+                origin: None,
+                in_use: Some(false),
+                superseded: false,
+                has_siblings: false,
+            },
+            Image {
+                id: "b".into(),
+                repository: "shared".into(),
+                tags: vec![],
+                created: String::new(),
+                size_bytes: 0,
+                origin: None,
+                in_use: Some(false),
+                superseded: false,
+                has_siblings: false,
+            },
+            Image {
+                id: "c".into(),
+                repository: "shared".into(),
+                tags: vec![],
+                created: String::new(),
+                size_bytes: 0,
+                origin: None,
+                in_use: Some(false),
+                superseded: false,
+                has_siblings: false,
+            },
+        ];
+        mark_superseded(&mut imgs);
+
+        assert!(!imgs[0].has_siblings, "one image in its repository");
+        assert!(!imgs[0].superseded);
+
+        // BOTH images in the shared repository, including the first --
+        // counting has to see the whole list, not just what came before.
+        assert!(imgs[1].has_siblings, "the newer of two");
+        assert!(!imgs[1].superseded, "the newest is not superseded");
+        assert!(imgs[2].has_siblings, "the older of two");
+        assert!(imgs[2].superseded);
+    }
+
     #[test]
     fn an_unknown_in_use_state_is_never_stale() {
         use crate::docker::{Origin, OriginSource};
@@ -309,6 +374,8 @@ mod tests {
             tags: vec![],
             created: String::new(),
             size_bytes: 0,
+            // Not what this test exercises.
+            has_siblings: false,
             origin: Some(Origin {
                 repo_path: "/code/proj".into(),
                 context: None,
@@ -351,6 +418,8 @@ mod tests {
             origin: origin(merged),
             in_use,
             superseded,
+            // Not what these tests exercise.
+            has_siblings: false,
         };
 
         assert!(img(true, Some(false), true).is_stale());

@@ -26,6 +26,7 @@ const image = (over: Partial<DockerImage> = {}): DockerImage => ({
   origin: null,
   in_use: false,
   superseded: false,
+  has_siblings: true,
   ...over,
 });
 

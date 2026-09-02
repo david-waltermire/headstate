@@ -11,7 +11,14 @@ import {
   useRemoveVolume,
 } from "../api/hooks";
 import { dockerRestart, dockerRunningContainers, dockerStart } from "../api/tauri";
-import { formatDockerSize, imageState, imageTone, isStale, isSuperseded } from "../lib/docker";
+import {
+  formatDockerSize,
+  imageName,
+  imageState,
+  imageTone,
+  isStale,
+  isSuperseded,
+} from "../lib/docker";
 import { HelpButton } from "./HelpButton";
 import {
   buildForImage,
@@ -136,11 +143,15 @@ function ImageRow({
   // Only once the row is expanded: the join is cheap, but the builds
   // themselves are not fetched at all unless something needs them.
   const build = open ? buildForImage(img, builds) : null;
-  // An untagged image is exactly the one the user cannot identify, and
-  // it is what accumulates from repeated rebuilds. `repository` was on
-  // the type all along and never rendered -- so the row said `abc123`
-  // where it could have said `registry/app`.
-  const name = img.tags[0] ?? `${img.repository}@${img.id.slice(0, 12)}`;
+  // `repository:tag`, not the tag alone.
+  //
+  // Docker reports Repository and Tag separately and `tags` holds only
+  // the TAG, so a row for `<registry>/enclave-api:latest` used to render
+  // as `latest`. On a machine with 31 images that is 31 rows saying
+  // `latest` with nothing to tell them apart -- and the repository, the
+  // one part that says what the image IS, was on the type the whole
+  // time. This fix previously landed only on the untagged branch.
+  const name = imageName(img);
 
   return (
     <div className="border-b border-[#30363d] px-4 py-2.5 text-sm last:border-b-0">

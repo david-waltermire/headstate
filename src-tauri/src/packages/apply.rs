@@ -170,6 +170,9 @@ pub fn apply_one(dir: &Path, eco: Ecosystem, name: &str, version: &str) -> Resul
     let args = update_args(eco, name, version);
     let out = std::process::Command::new(&bin)
         .args(&args)
+        // Same reason as the update check: an interpreted tool starts a
+        // second lookup for its interpreter inside the child.
+        .env("PATH", tools::child_path(&bin))
         .current_dir(dir)
         .output()
         .map_err(|e| format!("could not run {}: {e}", eco.program()))?;

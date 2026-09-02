@@ -3,6 +3,7 @@ import { HardDrive } from "lucide-react";
 import type { Artifact, ArtifactKind } from "@/types/pr";
 import { useArtifacts, useArtifactSizes, useRemoveArtifacts, useVenvs } from "@/api/hooks";
 import { useActiveFilters } from "@/store/filters";
+import { relativeSeconds } from "@/lib/time";
 import { GROUP_LABEL, VENV_GROUP } from "./ArtifactSidebar";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -83,6 +84,7 @@ export function ArtifactsPage() {
       : allArtifacts.filter((a) => a.kind === group);
   const { sizes, ages, pending, total } = useArtifactSizes(artifacts, artifacts.length > 0);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [sort, setSort] = useState<"size" | "age">("size");
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const remove = useRemoveArtifacts();
@@ -95,20 +97,24 @@ export function ArtifactsPage() {
       return next;
     });
 
-  // Largest first, and UNMEASURED rows sort last rather than as zero.
-  // Sorting a null as 0 would bury the biggest directory on the machine
-  // at the bottom until its size happened to arrive -- the ordering bug
-  // #360 describes on the worktree page.
+  // Largest or oldest first, and UNMEASURED rows sort last rather than
+  // as zero. Sorting a null as 0 would bury the biggest directory on the
+  // machine at the bottom until its size happened to arrive -- the
+  // ordering bug #360 describes on the worktree page. The same rule
+  // applies to age, where an unknown must not read as "brand new".
   const rows = useMemo(() => {
+    const key = (p: string) => (sort === "size" ? sizes.get(p) : ages.get(p));
     return [...artifacts].sort((a, b) => {
-      const sa = sizes.get(a.path);
-      const sb = sizes.get(b.path);
-      if (sa === undefined && sb === undefined) return a.path.localeCompare(b.path);
-      if (sa === undefined) return 1;
-      if (sb === undefined) return -1;
-      return sb - sa;
+      const va = key(a.path);
+      const vb = key(b.path);
+      if (va === undefined && vb === undefined) return a.path.localeCompare(b.path);
+      if (va === undefined) return 1;
+      if (vb === undefined) return -1;
+      // Both descending: biggest first, and oldest first -- a larger
+      // seconds-ago IS older.
+      return vb - va;
     });
-  }, [artifacts, sizes]);
+  }, [artifacts, sizes, ages, sort]);
 
   const selectedBytes = [...checked].reduce((n, p) => n + (sizes.get(p) ?? 0), 0);
   const selectedActive = [...checked].filter((p) => {
@@ -179,6 +185,21 @@ export function ArtifactsPage() {
             measuring — {total - pending} of {total} repositories
           </span>
         ) : null}
+        {/* Age is the more useful ordering when every row is the same
+            size -- which is the normal case for node_modules. */}
+        <label className="flex items-center gap-1 text-xs text-[#8b949e]">
+          Sort
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as "size" | "age")}
+            aria-label="Sort artifacts"
+            className="rounded border border-[#30363d] bg-[#0d1117] px-1 py-0.5 text-xs text-[#e6edf3]"
+          >
+            <option value="size">Largest</option>
+            <option value="age">Oldest</option>
+          </select>
+        </label>
+
         <HelpButton topic="build-artifacts" />
 
         {/* One click for the group, EXCLUDING anything a build may be
@@ -353,6 +374,19 @@ function ArtifactRow({
         <span className="shrink-0 text-xs text-[#d29922]">written recently</span>
       ) : null}
       <span className="shrink-0 text-xs text-[#8b949e]">{REBUILD[artifact.kind]}</span>
+      {/* Age, not just the recently-written warning.
+          Size cannot rank these: every node_modules is ~1.4 GB, so the
+          list sorts identically and says nothing about which are safe to
+          delete. How long ago it was written is the discriminator.
+          Undefined renders as a skeleton, never as "just now" -- the
+          same rule the size column follows for "not measured yet". */}
+      <span className="w-24 shrink-0 text-right text-xs text-[#8b949e]">
+        {ageSecs === undefined ? (
+          <Skeleton className="ml-auto w-16" />
+        ) : (
+          relativeSeconds(ageSecs)
+        )}
+      </span>
       <span className="w-20 shrink-0 text-right tabular-nums">
         {bytes === undefined ? <Skeleton className="ml-auto w-14" /> : formatSize(bytes)}
       </span>

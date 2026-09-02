@@ -82,6 +82,12 @@ pub fn docker(args: &[&str]) -> Result<String, String> {
 fn run_bounded(bin: &Path, args: &[&str]) -> Result<String, String> {
     let mut child = Command::new(bin)
         .args(args)
+        // `docker` is a real binary in the installs seen here, but it is
+        // a wrapper SCRIPT in others (Docker Desktop's shim, Rancher,
+        // Colima), and a script has to find its own interpreter from the
+        // child's PATH. Applied for the same reason as the package
+        // tools, so this does not have to be rediscovered per installer.
+        .env("PATH", crate::packages::tools::child_path(bin))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()

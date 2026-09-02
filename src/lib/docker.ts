@@ -58,10 +58,49 @@ export function isSuperseded(img: DockerImage): boolean {
 }
 
 /// What the row says about an image's standing.
+/// What to call an image in a list.
+///
+/// `repository:tag`, because the tag alone is not an identity: `latest`
+/// is the tag on images from completely unrelated projects, and Docker
+/// keeps Repository and Tag in separate fields so `tags[0]` is only ever
+/// the second half.
+///
+/// A registry prefix is elided. `<account>.dkr.ecr.<region>.amazonaws.com`
+/// is ~50 characters of boilerplate identical on every ECR row, and it
+/// pushes the part that differs off the end of a truncated cell. The
+/// full value stays in the expanded detail.
+export function imageName(img: DockerImage): string {
+  const repo = shortRepository(img.repository);
+  const tag = img.tags[0];
+  if (!repo || repo === "<none>") {
+    // No repository to name it by: fall back to the ID, which at least
+    // identifies it uniquely. This is the dangling-image case.
+    return tag ? `${tag} @ ${img.id.slice(0, 12)}` : img.id.slice(0, 12);
+  }
+  return tag ? `${repo}:${tag}` : `${repo}@${img.id.slice(0, 12)}`;
+}
+
+/// Drop a registry host, keeping the path that identifies the image.
+///
+/// Only when there IS a host: a bare `postgres` or `tufin/oasdiff` has
+/// no prefix to drop, and a leading segment only counts as a registry
+/// when it looks like a hostname (contains a dot or a port).
+export function shortRepository(repository: string): string {
+  const slash = repository.indexOf("/");
+  if (slash === -1) return repository;
+  const head = repository.slice(0, slash);
+  const isHost = head.includes(".") || head.includes(":");
+  return isHost ? repository.slice(slash + 1) : repository;
+}
+
 export function imageState(img: DockerImage): string {
   if (img.in_use === true) return "in use by a running container";
   if (img.in_use === null) return "cannot tell if it is in use";
-  if (!img.superseded) return "current";
+  // Only where it discriminates. An image alone in its repository has
+  // nothing to be current AGAINST, and stamping every such row `current`
+  // reads as a claim that the images are all in use -- which is how a
+  // page of 31 identical `current` badges was reported.
+  if (!img.superseded) return img.has_siblings ? "current" : "";
   if (img.origin?.merged) return "superseded — branch merged";
   if (img.origin) return "superseded — branch still open";
   return "superseded";

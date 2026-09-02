@@ -346,6 +346,12 @@ export interface DockerImage {
   /// unknown answer renders as not-removable.
   in_use: boolean | null;
   superseded: boolean;
+  /// Another image shares this repository, newer or older.
+  ///
+  /// Separates "the newest of several" from "the only one there is" --
+  /// with one image per repository nothing can ever be superseded, so
+  /// `current` appeared on every row and discriminated nothing.
+  has_siblings: boolean;
 }
 
 export interface DockerDiskUsage {

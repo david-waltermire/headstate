@@ -51,6 +51,10 @@ pub fn check(repo: &Path, eco: Ecosystem) -> EcosystemReport {
 
     let out = match std::process::Command::new(&bin)
         .args(args)
+        // The tool's own directory goes on the child's PATH: `npm` and
+        // `yarn` are `#!/usr/bin/env node` scripts, so finding them is
+        // not enough -- the child has to find `node` too.
+        .env("PATH", tools::child_path(&bin))
         .current_dir(repo)
         .output()
     {
@@ -511,5 +515,39 @@ The following pod updates are available:
             msg.contains("PATH"),
             "and say why, since that is actionable"
         );
+    }
+}
+
+/// End-to-end against a REAL project under a GUI-like PATH.
+///
+/// Ignored by default: it needs npm and a project on this machine. The
+/// unit tests cover the mechanism; this proves the whole path, which is
+/// what the bug report was about.
+///
+/// `HEADSTATE_E2E_REPO=/path/to/project cargo test -- --ignored gui_like`
+#[cfg(test)]
+mod e2e {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs npm and a real project"]
+    fn a_gui_like_path_still_resolves_the_interpreter() {
+        let Ok(repo) = std::env::var("HEADSTATE_E2E_REPO") else {
+            eprintln!("set HEADSTATE_E2E_REPO to run this");
+            return;
+        };
+        // The PATH a GUI-launched .app actually gets: no version
+        // manager, no Homebrew.
+        temp_env::with_var("PATH", Some("/usr/bin:/bin:/usr/sbin:/sbin"), || {
+            let report = check(std::path::Path::new(&repo), Ecosystem::Npm);
+            eprintln!("error: {:?}", report.error);
+            eprintln!("outdated: {}", report.outdated.len());
+            if let Some(e) = &report.error {
+                assert!(
+                    !e.contains("No such file or directory"),
+                    "the interpreter must resolve: {e}"
+                );
+            }
+        });
     }
 }

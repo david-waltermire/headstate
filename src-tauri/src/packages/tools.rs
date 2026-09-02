@@ -132,6 +132,40 @@ pub fn fallback_dirs() -> Vec<String> {
     dirs
 }
 
+/// A `PATH` for running `bin`, with its own directory first.
+///
+/// Finding the tool is NOT enough. `npm` and `yarn` are JavaScript files
+/// whose shebang is `#!/usr/bin/env node`, so running one starts a
+/// SECOND lookup -- for `node` -- inside the child, against whatever
+/// `PATH` the child inherited. A GUI-launched `.app` inherits a `PATH`
+/// with no `node` on it, which is the same reason `find` needs its
+/// fallbacks in the first place.
+///
+/// The result was `npm: env: node: No such file or directory` for every
+/// project, reported as "no update data" once per repository.
+///
+/// Prepending the resolved binary's own directory fixes it because
+/// nvm, Homebrew, Volta and fnm all put `node` and `npm` in the SAME
+/// `bin`. Prepended rather than appended: a version manager's node must
+/// win over any system one, or the tool runs under an interpreter its
+/// installation did not choose.
+///
+/// Affects `npm` and `yarn` today. `uv` and `dotnet` are real binaries,
+/// and `poetry` and `pod` resolve their interpreters absolutely -- but
+/// this applies to every spawn regardless, because which tools are
+/// scripts is an implementation detail of someone else's installer.
+pub fn child_path(bin: &Path) -> std::ffi::OsString {
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let Some(dir) = bin.parent() else {
+        return existing;
+    };
+    let mut dirs = vec![dir.to_path_buf()];
+    dirs.extend(std::env::split_paths(&existing));
+    // `join_paths` fails only on a directory containing the separator,
+    // which cannot happen for a path that just produced a real file.
+    std::env::join_paths(dirs).unwrap_or(existing)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,6 +230,93 @@ mod tests {
             second.elapsed().as_millis() <= first_ms.max(50),
             "the second lookup must come from the cache"
         );
+    }
+
+    /// The regression test for `env: node: No such file or directory`.
+    ///
+    /// Runs a REAL script whose shebang names an interpreter that exists
+    /// only beside it, under a PATH that does not contain it. Without
+    /// `child_path` the exec fails exactly as npm did; with it the
+    /// script runs.
+    ///
+    /// Asserting on the child's behaviour rather than on the returned
+    /// string is the point: `find` returning a path is what made this
+    /// bug look fixed while every project still reported no data.
+    #[cfg(unix)]
+    #[test]
+    fn a_script_finds_its_interpreter_beside_itself() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let t = tempfile::TempDir::new().unwrap();
+        let bin = t.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+
+        // The "interpreter": a shell script that prints a marker. Stands
+        // in for `node`, which is what npm's shebang looks for.
+        let interp = bin.join("fake-node");
+        std::fs::write(&interp, "#!/bin/sh\necho INTERPRETER_RAN\n").unwrap();
+        std::fs::set_permissions(&interp, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // The "tool": resolved by `find`, but useless unless the child
+        // can also resolve `fake-node`. Exactly npm's shape.
+        let tool = bin.join("faketool");
+        std::fs::write(&tool, "#!/usr/bin/env fake-node\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let run = |path: std::ffi::OsString| {
+            std::process::Command::new(&tool)
+                .env("PATH", path)
+                .output()
+                .expect("spawn should not fail; the exec inside might")
+        };
+
+        // A PATH without the interpreter: the failure being fixed.
+        let bare = run(std::ffi::OsString::from("/usr/bin:/bin"));
+        let bare_err = String::from_utf8_lossy(&bare.stderr);
+        assert!(
+            !bare.status.success(),
+            "the fixture must fail without the interpreter on PATH, \
+             or this test proves nothing"
+        );
+        assert!(
+            bare_err.contains("fake-node"),
+            "expected an interpreter-not-found error, got: {bare_err}"
+        );
+
+        // And with `child_path`, which puts the tool's own directory
+        // first, the interpreter beside it is found.
+        let fixed = run(child_path(&tool));
+        assert!(
+            fixed.status.success(),
+            "child_path should make the interpreter resolvable: {}",
+            String::from_utf8_lossy(&fixed.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&fixed.stdout).contains("INTERPRETER_RAN"),
+            "the interpreter should have run"
+        );
+    }
+
+    /// The tool's directory must come FIRST, so a version manager's
+    /// interpreter beats a system one.
+    #[test]
+    fn the_tools_own_directory_is_first() {
+        let p = child_path(Path::new("/opt/versions/node/bin/npm"));
+        let first = std::env::split_paths(&p).next().unwrap();
+        assert_eq!(first, Path::new("/opt/versions/node/bin"));
+    }
+
+    /// The existing PATH is kept, not replaced: a tool may need other
+    /// things on it.
+    #[test]
+    fn the_existing_path_is_preserved() {
+        let before: Vec<_> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect();
+        let after: Vec<_> =
+            std::env::split_paths(&child_path(Path::new("/tmp/x/bin/tool"))).collect();
+        for dir in &before {
+            assert!(after.contains(dir), "{dir:?} was dropped from PATH");
+        }
     }
 
     /// `None` means "not installed", which the caller MUST report rather
