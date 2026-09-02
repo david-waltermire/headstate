@@ -30,3 +30,6 @@ src-tauri/icons/64x64.png
 
 # Scratch workspace for plan execution (briefs, reports, ledgers).
 .superpowers/
+
+# Git worktrees for parallel branches
+.worktrees/
