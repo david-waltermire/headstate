@@ -1,7 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClaudeFile, ImportNode } from "@/types/pr";
 
+const copyFn = vi.hoisted(() => vi.fn(() => Promise.resolve(null as string | null)));
 const state = vi.hoisted(() => ({
   repo: "/code/app" as string | undefined,
   files: [] as ClaudeFile[],
@@ -14,6 +15,8 @@ vi.mock("../api/hooks", () => ({
   useClaudeMdText: () => ({ data: state.text, isLoading: false }),
 }));
 vi.mock("../store/filters", () => ({ useActiveFilters: () => ({ repo: state.repo }) }));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("../lib/clipboard", () => ({ copyText: copyFn }));
 
 import { ClaudeMdPage } from "./ClaudeMdPage";
 
@@ -37,6 +40,8 @@ const file = (over: Partial<ClaudeFile> = {}): ClaudeFile => ({
 });
 
 beforeEach(() => {
+  copyFn.mockClear();
+  copyFn.mockResolvedValue(null);
   state.repo = "/code/app";
   state.files = [];
   state.loading = false;
@@ -112,5 +117,51 @@ describe("ClaudeMdPage", () => {
     state.text = "# The rules";
     render(<ClaudeMdPage />);
     expect(screen.getByText("The rules")).toBeTruthy();
+  });
+});
+
+describe("ClaudeMdPage browser", () => {
+  /// The reported problem: "the file paths now are so long that it is
+  /// impossible to tell what they are". A truncated absolute path eats
+  /// exactly the middle segment that distinguishes one file from
+  /// another.
+  it("shows the path relative to the repository, not the absolute one", () => {
+    state.repo = "/code/app";
+    state.files = [file({ path: "/code/app/services/api/CLAUDE.md" })];
+    render(<ClaudeMdPage />);
+    expect(screen.getByText("services/api/")).toBeTruthy();
+    expect(screen.getByText("CLAUDE.md")).toBeTruthy();
+    expect(screen.queryByText("/code/app/services/api/CLAUDE.md")).toBeNull();
+  });
+
+  it("copies the relative path from the context menu", async () => {
+    state.repo = "/code/app";
+    state.files = [file({ path: "/code/app/services/api/CLAUDE.md" })];
+    render(<ClaudeMdPage />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /CLAUDE.md/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy relative path" }));
+    await waitFor(() => expect(copyFn).toHaveBeenCalledWith("services/api/CLAUDE.md"));
+  });
+
+  it("copies the absolute path from the context menu", async () => {
+    state.repo = "/code/app";
+    state.files = [file({ path: "/code/app/CLAUDE.md" })];
+    render(<ClaudeMdPage />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /CLAUDE.md/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Copy absolute path" }));
+    await waitFor(() => expect(copyFn).toHaveBeenCalledWith("/code/app/CLAUDE.md"));
+  });
+
+  /// A menu that can only be closed by choosing something is a trap.
+  it("dismisses without copying", () => {
+    state.repo = "/code/app";
+    state.files = [file()];
+    render(<ClaudeMdPage />);
+    fireEvent.contextMenu(screen.getByRole("button", { name: /CLAUDE.md/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Close menu" }));
+    expect(screen.queryByRole("menuitem")).toBeNull();
+    expect(copyFn).not.toHaveBeenCalled();
   });
 });

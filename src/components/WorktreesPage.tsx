@@ -14,8 +14,6 @@ import {
   usePullCheckout,
   useRemoveOrphan,
   useAllWorktreeSizes,
-  useDockerImages,
-  useRemoveImages,
   useRemovalProgress,
   useAssessment,
 } from "../api/hooks";
@@ -41,7 +39,6 @@ import { copyText } from "../lib/clipboard";
 import { relativeTime } from "../lib/time";
 import { assessmentSummary } from "../lib/assessment";
 import { rollupRepos } from "../lib/rollup";
-import { cleanupBytes, cleanupManifest } from "../lib/cleanup";
 import { useActiveFilters, useFilters } from "../store/filters";
 import type { PullRequest, Worktree } from "../types/pr";
 import { toast } from "sonner";
@@ -484,8 +481,6 @@ export function WorktreesPage() {
   // and the Worktrees page has no business paying for it just to sit
   // there -- the manifest is needed at the moment of confirming, not
   // on every render of a list nobody is acting on.
-  const { data: dockerImages = [] } = useDockerImages(bulkOpen);
-  const removeImages = useRemoveImages();
   const assessed = new Set(assessedPaths ?? []);
   const [forcing, setForcing] = useState<Worktree | null>(null);
   const [pullingPath, setPullingPath] = useState<string | null>(null);
@@ -727,11 +722,6 @@ export function WorktreesPage() {
   const safeKnown = !classifying && !classifyFailed;
   const shownSafe = shown.filter((w) => isSafe(w.safety));
   const safeCount = shownSafe.length;
-  // The images those safe worktrees own -- the third system this page
-  // could never reach. Empty until the dialog opens, since that is the
-  // only time the Docker query runs.
-  const manifest = cleanupManifest(shownSafe, dockerImages, prs);
-  const manifestImages = manifest.flatMap((m) => m.images);
   // Same honesty rule as the all-repositories rollup: an unmeasured
   // size is null, and counting it as zero would report a confident
   // wrong total. Sizes arrive in their own pass after safety, so this
@@ -938,24 +928,11 @@ export function WorktreesPage() {
                 that used to perform one, and folding it in silently
                 would be exactly the unreviewed bulk delete the manifest
                 exists to prevent. */}
-            {manifestImages.length > 0 ? (
-              <p className="mt-2 text-sm text-[#d29922]">
-                Also removes {manifestImages.length} Docker image
-                {manifestImages.length === 1 ? "" : "s"} built from{" "}
-                {manifestImages.length === 1 ? "one of them" : "them"}, reclaiming a
-                further {formatSize(cleanupBytes(manifest) - shownSafe.reduce((n, w) => n + (w.size_bytes ?? 0), 0) || null)}.
-              </p>
-            ) : null}
             {/* Every path, not a count: these are directories on disk. */}
             <ul className="mt-3 max-h-64 overflow-y-auto font-mono text-xs text-[#8b949e]">
               {shownSafe.map((w) => (
                 <li key={w.path} className="py-0.5">
                   {w.path}
-                </li>
-              ))}
-              {manifestImages.map((i) => (
-                <li key={i.id} className="py-0.5 text-[#d29922]">
-                  image {i.repository}:{i.tags[0] ?? i.id.slice(0, 12)}
                 </li>
               ))}
             </ul>
@@ -971,32 +948,6 @@ export function WorktreesPage() {
                 type="button"
                 onClick={() => {
                   const targets = shownSafe.map((w) => w.path);
-                  const imageTargets = manifestImages.map((i) => i.id);
-                  setBulkOpen(false);
-                  setBulkBusy(true);
-                  // Images first, and independently. A worktree removal
-                  // that fails must not leave its image behind
-                  // unreported, and an image removal that fails must not
-                  // stop the worktrees -- docker refuses an image whose
-                  // layers another image depends on, which is ordinary
-                  // rather than a reason to abandon the whole cleanup.
-                  if (imageTargets.length > 0) {
-                    void removeImages(imageTargets).then(
-                      (outcomes) => {
-                        const bad = outcomes.filter((o) => o.error !== null);
-                        if (bad.length > 0) {
-                          toast.error(
-                            `${bad.length} of ${outcomes.length} images could not be removed`,
-                            { description: bad.map((b) => b.error).join("\n") },
-                          );
-                        }
-                      },
-                      (e: unknown) =>
-                        toast.error("The image removal could not run", {
-                          description: typeof e === "string" ? e : undefined,
-                        }),
-                    );
-                  }
                   removeMany(selected?.path ?? "", targets).then(
                     (outcomes) => {
                       setBulkBusy(false);

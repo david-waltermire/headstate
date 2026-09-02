@@ -9,6 +9,16 @@ pub enum Ecosystem {
     Poetry,
     Uv,
     Dotnet,
+    /// CocoaPods, detected from a `Podfile`.
+    Cocoapods,
+    /// Swift packages, whether a `Package.swift` or Xcode-managed.
+    ///
+    /// Xcode-managed dependencies have NO CLI that reports outdated
+    /// packages -- `xcodebuild -resolvePackageDependencies` resolves but
+    /// does not diff. So this reports the pinned versions from
+    /// `Package.resolved` and says plainly that it cannot check them,
+    /// rather than rendering an empty list that reads as "up to date".
+    Swift,
 }
 
 impl Ecosystem {
@@ -20,6 +30,8 @@ impl Ecosystem {
             Ecosystem::Poetry => "poetry",
             Ecosystem::Uv => "uv",
             Ecosystem::Dotnet => "dotnet",
+            Ecosystem::Cocoapods => "pod",
+            Ecosystem::Swift => "swift",
         }
     }
 
@@ -31,6 +43,8 @@ impl Ecosystem {
             Ecosystem::Poetry => "poetry add <pkg>@<version>",
             Ecosystem::Uv => "uv add <pkg>==<version>",
             Ecosystem::Dotnet => "dotnet add package <pkg> --version <version>",
+            Ecosystem::Cocoapods => "pod update <pkg>",
+            Ecosystem::Swift => "update the version rule in Xcode, or Package.swift",
         }
     }
 
@@ -39,6 +53,8 @@ impl Ecosystem {
         match self {
             Ecosystem::Npm | Ecosystem::Yarn => "package.json",
             Ecosystem::Poetry | Ecosystem::Uv => "pyproject.toml",
+            Ecosystem::Cocoapods => "Podfile",
+            Ecosystem::Swift => "Package.resolved",
             // .NET is a glob, handled by the detector rather than here.
             Ecosystem::Dotnet => "",
         }
@@ -89,4 +105,18 @@ pub struct EcosystemReport {
     /// Set when the check could not run. The UI shows this instead of an
     /// empty list.
     pub error: Option<String>,
+}
+
+/// One project's worth of reports.
+///
+/// The unit the UI groups by. A repository can hold several, and their
+/// updates are separate pieces of work: different manifests, and
+/// sometimes different ecosystems entirely.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectReport {
+    /// Absolute path to the project directory.
+    pub path: String,
+    /// Relative to the repository root. Empty at the root itself.
+    pub label: String,
+    pub reports: Vec<EcosystemReport>,
 }

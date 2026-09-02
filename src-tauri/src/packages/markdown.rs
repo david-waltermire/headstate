@@ -1,4 +1,4 @@
-use super::model::{Bump, EcosystemReport};
+use super::model::{Bump, EcosystemReport, ProjectReport};
 use serde::{Deserialize, Serialize};
 
 /// Which updates to include in the handoff.
@@ -37,8 +37,24 @@ impl Filter {
 ///
 /// Grouped by ecosystem, because the update commands differ and a flat
 /// list would force the reader to re-derive which is which.
-pub fn render(repo: &str, reports: &[EcosystemReport], filter: Filter) -> String {
+pub fn render(repo: &str, projects: &[ProjectReport], filter: Filter) -> String {
     let mut out = format!("# Dependency updates for `{repo}`\n");
+
+    for project in projects {
+        // The project heading only when there IS one. A single-project
+        // repository should not grow a level of nesting that says
+        // nothing.
+        if !project.label.is_empty() {
+            out.push_str(&format!("\n# {}\n", project.label));
+        }
+        out.push_str(&render_reports(&project.reports, filter));
+    }
+    out
+}
+
+/// One project's reports.
+fn render_reports(reports: &[EcosystemReport], filter: Filter) -> String {
+    let mut out = String::new();
 
     let mut held_back = 0usize;
     let mut any = false;
@@ -127,6 +143,16 @@ mod tests {
         }
     }
 
+    /// Wraps reports as ONE unnamed project, which is what a
+    /// single-project repository produces.
+    fn one_project(reports: Vec<EcosystemReport>) -> Vec<ProjectReport> {
+        vec![ProjectReport {
+            path: "/code/repo".into(),
+            label: String::new(),
+            reports,
+        }]
+    }
+
     fn report(outdated: Vec<Outdated>) -> EcosystemReport {
         EcosystemReport {
             ecosystem: Ecosystem::Npm,
@@ -142,7 +168,7 @@ mod tests {
             pkg("b", Bump::Minor),
             pkg("c", Bump::Major),
         ])];
-        let out = render("o/r", &r, Filter::Patch);
+        let out = render("o/r", &one_project(r.clone()), Filter::Patch);
         assert!(out.contains("`a`"));
         assert!(!out.contains("`b`"));
         assert!(!out.contains("`c`"));
@@ -155,7 +181,7 @@ mod tests {
             pkg("b", Bump::Minor),
             pkg("c", Bump::Major),
         ])];
-        let out = render("o/r", &r, Filter::Minor);
+        let out = render("o/r", &one_project(r.clone()), Filter::Minor);
         assert!(out.contains("`a`") && out.contains("`b`"));
         assert!(!out.contains("`c`"));
     }
@@ -170,7 +196,7 @@ mod tests {
             pkg("a", Bump::Patch),
             pkg("weird", Bump::Unknown),
         ])];
-        let out = render("o/r", &r, Filter::Patch);
+        let out = render("o/r", &one_project(r.clone()), Filter::Patch);
         assert!(!out.contains("`weird`"));
         assert!(out.contains("1 package(s) had versions this could not compare"));
     }
@@ -178,9 +204,45 @@ mod tests {
     #[test]
     fn the_all_filter_includes_the_unclassifiable() {
         let r = vec![report(vec![pkg("weird", Bump::Unknown)])];
-        let out = render("o/r", &r, Filter::All);
+        let out = render("o/r", &one_project(r.clone()), Filter::All);
         assert!(out.contains("`weird`"));
         assert!(!out.contains("could not compare"));
+    }
+
+    /// A repository with several projects must say WHICH each update
+    /// belongs to. Without the heading the same package at two versions
+    /// in two projects is two indistinguishable rows, and the update
+    /// command is ambiguous.
+    #[test]
+    fn each_project_is_labelled_in_a_multi_project_repo() {
+        let projects = vec![
+            ProjectReport {
+                path: "/code/repo/frontend".into(),
+                label: "frontend".into(),
+                reports: vec![report(vec![pkg("a", Bump::Patch)])],
+            },
+            ProjectReport {
+                path: "/code/repo/backend".into(),
+                label: "backend".into(),
+                reports: vec![report(vec![pkg("b", Bump::Patch)])],
+            },
+        ];
+        let out = render("o/r", &projects, Filter::All);
+        assert!(out.contains("# frontend"), "{out}");
+        assert!(out.contains("# backend"), "{out}");
+    }
+
+    /// ...and a single-project repository must NOT grow a heading that
+    /// says nothing.
+    #[test]
+    fn a_single_project_repo_has_no_project_heading() {
+        let out = render(
+            "o/r",
+            &one_project(vec![report(vec![pkg("a", Bump::Patch)])]),
+            Filter::All,
+        );
+        let headings = out.lines().filter(|l| l.starts_with("# ")).count();
+        assert_eq!(headings, 1, "only the title: {out}");
     }
 
     /// A tool that could not RUN must never render as "no updates".
@@ -191,7 +253,7 @@ mod tests {
             outdated: vec![],
             error: Some("npm was not found".into()),
         }];
-        let out = render("o/r", &r, Filter::All);
+        let out = render("o/r", &one_project(r.clone()), Filter::All);
         assert!(out.contains("Could not check: npm was not found"));
         assert!(
             !out.contains("Nothing matched"),
@@ -203,7 +265,11 @@ mod tests {
     /// rediscover both.
     #[test]
     fn carries_what_an_agent_needs_to_act() {
-        let out = render("o/r", &[report(vec![pkg("a", Bump::Patch)])], Filter::All);
+        let out = render(
+            "o/r",
+            &one_project(vec![report(vec![pkg("a", Bump::Patch)])]),
+            Filter::All,
+        );
         assert!(out.contains("`package.json`"), "the file to edit");
         assert!(out.contains("npm install"), "the command to run");
     }

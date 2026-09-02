@@ -885,15 +885,19 @@ pub fn set_cleanup_prefs(
 #[tauri::command]
 pub async fn check_packages(
     repo_path: String,
-) -> Result<Vec<crate::packages::EcosystemReport>, String> {
+) -> Result<Vec<crate::packages::ProjectReport>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let reports = crate::packages::run::check_repo(std::path::Path::new(&repo_path));
         // Counts only -- never package names, which would put a private
         // dependency list in a log meant to be shared.
         log::info!(
-            "package check: {} ecosystems, {} outdated",
+            "package check: {} projects, {} outdated",
             reports.len(),
-            reports.iter().map(|r| r.outdated.len()).sum::<usize>()
+            reports
+                .iter()
+                .flat_map(|p| &p.reports)
+                .map(|r| r.outdated.len())
+                .sum::<usize>()
         );
         reports
     })
@@ -905,7 +909,7 @@ pub async fn check_packages(
 #[tauri::command]
 pub fn packages_markdown(
     repo_path: String,
-    reports: Vec<crate::packages::EcosystemReport>,
+    reports: Vec<crate::packages::ProjectReport>,
     filter: crate::packages::markdown::Filter,
 ) -> String {
     crate::packages::markdown::render(&repo_path, &reports, filter)
@@ -1035,12 +1039,42 @@ pub fn default_worktree_dirs() -> Vec<String> {
 /// Build history: what was built, how long it took, and how much came
 /// from cache.
 ///
-/// The context and revision are NOT resolved here: `inspect` is a
-/// subprocess per build, and fetching it for fifty builds up front would
-/// make the page slow for data only the selected build needs.
+/// The context and revision ARE resolved here, in parallel.
+///
+/// They were not, and that was a silent bug: `parse_history` hardcodes
+/// `context: None, revision: None`, and `enrich` -- the only thing that
+/// fills them -- was called from exactly one place, an `#[ignore]`d
+/// test. `buildForImage` filters on `b.revision &&`, so with revision
+/// always null the build fold in the expanded image row NEVER rendered.
+/// The tests passed because the fixture injects a synthetic revision.
+///
+/// So the "half that mattered" kept from the retired Builds page (#365)
+/// was never actually delivered, which is why the Docker surface reads
+/// as having little to say.
+///
+/// Parallel because `inspect` is a subprocess: MEASURED at ~2s per
+/// record serially, which blew a two-minute timeout across fifty
+/// records. Eight workers mirrors `CLASSIFY_WORKERS` in the worktree
+/// scanner, whose author measured 12 and 16 as REGRESSIONS -- the number
+/// is empirical, not a core count.
 pub fn docker_builds() -> Result<Vec<crate::docker::Build>, String> {
-    crate::docker::docker(&["buildx", "history", "ls", "--format", "{{json .}}"])
-        .map(|out| crate::docker::parse_history(&out))
+    const ENRICH_WORKERS: usize = 8;
+
+    let mut builds = crate::docker::docker(&["buildx", "history", "ls", "--format", "{{json .}}"])
+        .map(|out| crate::docker::parse_history(&out))?;
+
+    let chunk = builds.len().div_ceil(ENRICH_WORKERS).max(1);
+    std::thread::scope(|scope| {
+        for part in builds.chunks_mut(chunk) {
+            scope.spawn(move || {
+                for b in part {
+                    crate::docker::enrich(b);
+                }
+            });
+        }
+    });
+
+    Ok(builds)
 }
 
 #[tauri::command]
@@ -1670,6 +1704,32 @@ pub fn get_auth_state(state: State<'_, AuthState>) -> AuthState {
 
 #[cfg(test)]
 mod tests {
+    /// #336: `docker_builds` must actually ENRICH.
+    ///
+    /// `parse_history` hardcodes `context: None, revision: None`, and
+    /// `buildForImage` filters on `b.revision &&`. So a `docker_builds`
+    /// that forgets to call `enrich` compiles, passes every other test,
+    /// and silently renders no build information at all -- which is
+    /// exactly what shipped.
+    ///
+    /// Asserted on the SOURCE because the behaviour needs a Docker
+    /// daemon with build records, which CI has neither of. A source
+    /// check is weak, but the alternative here was no check, and this
+    /// bug survived precisely because nothing looked.
+    #[test]
+    fn docker_builds_enriches_rather_than_returning_bare_history() {
+        let src = include_str!("commands.rs");
+        let start = src
+            .find("pub fn docker_builds()")
+            .expect("docker_builds not found");
+        let body = &src[start..start + 1200];
+        assert!(
+            body.contains("enrich"),
+            "docker_builds must enrich, or context and revision stay null \
+             and the build fold never renders"
+        );
+    }
+
     /// Every verdict the frontend can name must map, and nothing else
     /// may. A typo in the UI must fail loudly here rather than silently
     /// submitting the wrong verdict on someone else's pull request.

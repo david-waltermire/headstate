@@ -32,9 +32,13 @@ beforeEach(() => invoke.mockReset());
 /// with no indication that it is blocked", showing an empty panel the
 /// whole time.
 ///
-/// The measurements on #328 ruled out making the query faster -- a bare
-/// 25-item search already costs 6.2s and every field trim measured as
-/// noise -- so the fix is to stop BLOCKING on it.
+/// The cache still earns its place now that #328 has made the live query
+/// fast: painting from disk beats any network round-trip.
+///
+/// The claim this comment used to carry -- "a bare 25-item search already
+/// costs 6.2s", so the query could not be improved -- was a wrong
+/// measurement. A bare search is ~0.7s; the cost was `mergeStateStatus`
+/// at ~154ms per pull request.
 describe("useReviewing paints from cache while the live query runs", () => {
   it("shows the cached list without waiting for GitHub", async () => {
     const live = deferred<PullRequest[]>();

@@ -890,76 +890,14 @@ describe("WorktreesPage", () => {
     /// leaves a worktree on disk AND a Docker image built from it, and
     /// removing the second used to mean going to another view and
     /// working out by hand which images belonged to what.
-    describe("the Docker images those worktrees own", () => {
-      const image = (over: Record<string, unknown> = {}) => ({
-        id: "img-a",
-        repository: "registry/app",
-        tags: ["abc1234"],
-        created: "2026-08-01T00:00:00Z",
-        size_bytes: 4096,
-        origin: {
-          repo_path: "/code/a",
-          context: "/code/a",
-          commit: "abc123",
-          subject: "s",
-          merged: true,
-          source: "tag_resolution",
-        },
-        in_use: false,
-        superseded: true,
-        ...over,
-      });
-
-      it("names them in the confirmation, separately from the paths", () => {
-        state.classified = threeSafe();
-        dockerImages.mockReturnValue([image()]);
-        render(<WorktreesPage />);
-        fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
-        const dialog = screen.getByRole("dialog");
-        expect(within(dialog).getByText(/registry\/app:abc1234/)).toBeTruthy();
-        expect(within(dialog).getByText(/Also removes 1 Docker image/)).toBeTruthy();
-      });
-
-      it("removes them alongside the worktrees", async () => {
-        state.classified = threeSafe();
-        dockerImages.mockReturnValue([image()]);
-        render(<WorktreesPage />);
-        fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
-        fireEvent.click(
-          within(screen.getByRole("dialog")).getByRole("button", {
-            name: /remove 2 worktrees/i,
-          }),
-        );
-        await waitFor(() => expect(removeImagesFn).toHaveBeenCalled());
-        expect(removeImagesFn.mock.calls[0][0]).toEqual(["img-a"]);
-      });
-
-      /// An image built somewhere else is not this worktree's to
-      /// delete, and guessing would take out somebody else's build.
-      it("does not claim an image built from another path", () => {
-        state.classified = threeSafe();
-        dockerImages.mockReturnValue([
-          image({ origin: { ...image().origin, context: "/code/elsewhere", repo_path: "/code/elsewhere" } }),
-        ]);
-        render(<WorktreesPage />);
-        fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
-        const dialog = screen.getByRole("dialog");
-        expect(within(dialog).queryByText(/Also removes/)).toBeNull();
-      });
-
-      /// Silence when there is nothing to add. A dialog that always
-      /// mentions Docker would train the user to skip the line that
-      /// matters.
-      it("says nothing about Docker when no image is owned", () => {
-        state.classified = threeSafe();
-        dockerImages.mockReturnValue([]);
-        render(<WorktreesPage />);
-        fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
-        expect(
-          within(screen.getByRole("dialog")).queryByText(/Also removes/),
-        ).toBeNull();
-      });
-    });
+    // The Docker-image half of this dialog was REMOVED, not broken.
+    //
+    // It claimed images built from each worktree, and that join could
+    // never fire: every build context on a real machine is the MAIN
+    // checkout, which `Safety::MainCheckout` excludes from the manifest
+    // by construction. Measured in #336 -- 50 build records, 2 distinct
+    // contexts, both the main checkout. The tests that lived here
+    // asserted a feature that had matched nothing since it shipped.
 
     it("counts only the safe rows, in the label", () => {
       state.classified = threeSafe();

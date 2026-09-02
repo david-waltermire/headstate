@@ -13,4 +13,4 @@ pub mod run;
 pub mod tools;
 pub mod version;
 
-pub use model::{Bump, Ecosystem, EcosystemReport, Outdated};
+pub use model::{Bump, Ecosystem, EcosystemReport, Outdated, ProjectReport};

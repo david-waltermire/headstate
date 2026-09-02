@@ -1,14 +1,19 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EcosystemReport, Outdated } from "@/types/pr";
+import type { EcosystemReport, Outdated, ProjectReport } from "@/types/pr";
 
 const state = vi.hoisted(() => ({
   repo: "/code/app" as string | undefined,
-  reports: [] as EcosystemReport[],
+  reports: [] as ProjectReport[],
   loading: false,
 }));
 const markdownFn = vi.hoisted(() => vi.fn(() => Promise.resolve("# md")));
-const copyFn = vi.hoisted(() => vi.fn(() => Promise.resolve(null as string | null)));
+// Typed via the mock's signature rather than an unused parameter, so
+// `copyFn.mock.calls[0][0]` is a string without eslint objecting to an
+// argument nothing reads.
+const copyFn = vi.hoisted(() =>
+  vi.fn<(text: string) => Promise<string | null>>(() => Promise.resolve(null)),
+);
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("../api/hooks", () => ({
@@ -35,11 +40,12 @@ const pkg = (name: string, bump: Outdated["bump"]): Outdated => ({
   manifest: "package.json",
 });
 
-const report = (over: Partial<EcosystemReport> = {}): EcosystemReport => ({
-  ecosystem: "npm",
-  outdated: [],
-  error: null,
-  ...over,
+/// One ecosystem's report, wrapped as the single unnamed project a
+/// one-project repository produces.
+const report = (over: Partial<EcosystemReport> = {}): ProjectReport => ({
+  path: "/code/app",
+  label: "",
+  reports: [{ ecosystem: "npm", outdated: [], error: null, ...over }],
 });
 
 beforeEach(() => {
@@ -124,5 +130,86 @@ describe("PackagesPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Copy markdown" }));
     const { toast } = await import("sonner");
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
+  });
+});
+
+describe("PackagesPage grouping, sorting, and Claudify", () => {
+  const project = (label: string, names: string[]): ProjectReport => ({
+    path: `/code/app/${label}`,
+    label,
+    reports: [
+      {
+        ecosystem: "npm",
+        outdated: names.map((n) => pkg(n, "patch")),
+        error: null,
+      },
+    ],
+  });
+
+  /// A repository with several projects must say which is which: the
+  /// same package at two versions in two projects is otherwise two
+  /// indistinguishable rows.
+  it("groups a multi-project repository by project", () => {
+    state.reports = [project("frontend", ["a"]), project("backend", ["b"])];
+    render(<PackagesPage />);
+    expect(screen.getByRole("button", { name: /frontend/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /backend/ })).toBeTruthy();
+  });
+
+  /// ...and a single-project repo must NOT grow a heading that says
+  /// nothing.
+  it("adds no project heading to a single-project repository", () => {
+    state.reports = [report({ outdated: [pkg("a", "patch")] })];
+    render(<PackagesPage />);
+    expect(screen.queryByRole("button", { name: /repository root/ })).toBeNull();
+  });
+
+  it("collapses a project group", () => {
+    state.reports = [project("frontend", ["only-in-frontend"]), project("backend", ["b"])];
+    render(<PackagesPage />);
+    expect(screen.getByText("only-in-frontend")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /frontend/ }));
+    expect(screen.queryByText("only-in-frontend")).toBeNull();
+  });
+
+  it("filters by package name", () => {
+    state.reports = [report({ outdated: [pkg("react", "patch"), pkg("vite", "patch")] })];
+    render(<PackagesPage />);
+    fireEvent.change(screen.getByLabelText(/Filter packages by name/), {
+      target: { value: "rea" },
+    });
+    expect(screen.getByText("react")).toBeTruthy();
+    expect(screen.queryByText("vite")).toBeNull();
+  });
+
+  it("sorts by biggest jump by default, and by name on request", () => {
+    // Both within the DEFAULT filter, so the ordering is what the test
+    // observes rather than the filter. `zeta` is the bigger jump and
+    // sorts first by size; `alpha` sorts first by name.
+    state.reports = [
+      report({ outdated: [pkg("zeta", "minor"), pkg("alpha", "patch")] }),
+    ];
+    render(<PackagesPage />);
+    const names = () =>
+      screen.getAllByText(/^(zeta|alpha)$/).map((el) => el.textContent);
+    expect(names()[0]).toBe("zeta");
+
+    fireEvent.change(screen.getByLabelText(/Sort updates/), { target: { value: "name" } });
+    expect(names()[0]).toBe("alpha");
+  });
+
+  /// Claudify is an INSTRUCTION where Copy markdown is a REPORT. The
+  /// prompt has to say what to do and, critically, to verify rather than
+  /// assume -- an update applied without running the tests produces a
+  /// change nobody can trust.
+  it("builds a prompt that asks for verification", async () => {
+    state.reports = [report({ outdated: [pkg("a", "patch")] })];
+    render(<PackagesPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Claudify" }));
+    await waitFor(() => expect(copyFn).toHaveBeenCalled());
+    const prompt = copyFn.mock.calls[0][0];
+    expect(prompt).toMatch(/run that project's own tests/i);
+    expect(prompt).toMatch(/ACTUALLY chose/);
+    expect(prompt).toMatch(/Do not update anything that is not listed/i);
   });
 });

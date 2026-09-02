@@ -1309,11 +1309,16 @@ export function useReviewing(enabled = true) {
   // folding the cache into the live queryFn instead would let a cached
   // result satisfy `staleTime` and leave the list permanently stale.
   //
-  // The measurements on #328 are what make this the fix rather than a
-  // workaround: the live query cannot be made meaningfully faster (a
-  // bare 25-item search already costs 6.2s, and every field trim
-  // measured as noise), so the win has to come from not blocking the
-  // panel on it.
+  // The cache is still worth having even now that the live query is
+  // fast: it paints in milliseconds where a network round-trip cannot.
+  //
+  // CORRECTION to what this comment used to say. It claimed "the live
+  // query cannot be made meaningfully faster -- a bare 25-item search
+  // already costs 6.2s". That measurement was WRONG, and it sat here as
+  // a reason not to try. A bare 25-item search costs ~0.7s; the 6.2s was
+  // the FIELDS, and specifically `mergeStateStatus` at ~154ms per pull
+  // request. #328 pages at 25 concurrently now, which measured 62 pull
+  // requests in ~7s against ~21s-then-truncate.
   const cached = useQuery({
     queryKey: ["reviewing-cached"],
     queryFn: CACHED_REVIEWING_FN,

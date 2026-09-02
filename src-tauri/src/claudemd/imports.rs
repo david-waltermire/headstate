@@ -175,6 +175,28 @@ mod tests {
 
     /// The shape actually found in the wild: `@AGENTS.md` alone on the
     /// first line, resolving to a sibling.
+    /// The reported bug: a repository with worktrees showed the same
+    /// file over and over.
+    ///
+    /// Measured on a real repo -- 11 CLAUDE.md files found, 10 of them
+    /// worktree copies, 3 distinct contents. After this, 1.
+    #[test]
+    fn worktree_copies_are_not_scanned() {
+        let t = tempfile::TempDir::new().unwrap();
+        fs::write(t.path().join("CLAUDE.md"), "the real one").unwrap();
+
+        for dir in [".worktrees/branch-a", ".claude/worktrees/agent-1"] {
+            let d = t.path().join(dir);
+            fs::create_dir_all(&d).unwrap();
+            fs::write(d.join("CLAUDE.md"), "a copy of the real one").unwrap();
+        }
+
+        let found = super::super::scan_repo(t.path());
+        assert_eq!(found.len(), 1, "only the checkout's own file: {found:?}");
+        assert!(found[0].path.ends_with("CLAUDE.md"));
+        assert!(!found[0].path.contains("worktree"));
+    }
+
     #[test]
     fn finds_a_plain_import() {
         assert_eq!(parse_imports("@AGENTS.md\n"), vec!["AGENTS.md"]);

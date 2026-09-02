@@ -505,7 +505,14 @@ export interface CleanupPrefs {
   max_per_run: number;
 }
 
-export type Ecosystem = "npm" | "yarn" | "poetry" | "uv" | "dotnet";
+export type Ecosystem =
+  | "npm"
+  | "yarn"
+  | "poetry"
+  | "uv"
+  | "dotnet"
+  | "cocoapods"
+  | "swift";
 
 /// How large a version jump is.
 ///
@@ -565,4 +572,17 @@ export interface ClaudeFile {
   /// case this view exists to surface.
   total_tokens: number;
   imports: ImportNode[];
+}
+
+/// One project's worth of reports.
+///
+/// The unit the UI groups by. A repository can hold several -- a
+/// frontend and a backend are separate manifests and often separate
+/// ecosystems, so their updates are separate pieces of work.
+export interface ProjectReport {
+  /// Absolute path to the project directory.
+  path: string;
+  /// Relative to the repository root. Empty at the root itself.
+  label: string;
+  reports: EcosystemReport[];
 }

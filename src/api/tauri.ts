@@ -10,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   Artifact,
   ClaudeFile,
-  EcosystemReport,
+  ProjectReport,
   UpdateFilter,
   CleanupPrefs,
   LedgerEntry,
@@ -454,12 +454,12 @@ export const setCleanupPrefs = (prefs: CleanupPrefs) =>
 
 /// Which dependencies are out of date in one repository.
 export const checkPackages = (repoPath: string) =>
-  invoke<EcosystemReport[]>("check_packages", { repoPath });
+  invoke<ProjectReport[]>("check_packages", { repoPath });
 
 /// The updates as markdown, for handing to an agent.
 export const packagesMarkdown = (
   repoPath: string,
-  reports: EcosystemReport[],
+  reports: ProjectReport[],
   filter: UpdateFilter,
 ) => invoke<string>("packages_markdown", { repoPath, reports, filter });
 

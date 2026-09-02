@@ -30,10 +30,10 @@ use chrono::{DateTime, Duration, Utc};
 /// reads it by that name, and renaming it per caller would mean the
 /// query and the mapper could disagree.
 pub const PRS_QUERY: &str = r#"
-query($q: String!, $first: Int!) {
+query($q: String!, $first: Int!, $after: String) {
   rateLimit { cost remaining resetAt }
   viewer { login }
-  authored: search(query: $q, type: ISSUE, first: $first) {
+  authored: search(query: $q, type: ISSUE, first: $first, after: $after) {
     issueCount
     nodes {
       ... on PullRequest {

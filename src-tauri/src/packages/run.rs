@@ -1,4 +1,4 @@
-use super::model::{Ecosystem, EcosystemReport, Outdated};
+use super::model::{Ecosystem, EcosystemReport, Outdated, ProjectReport};
 use super::{detect, tools, version};
 use std::path::Path;
 
@@ -9,6 +9,28 @@ use std::path::Path;
 /// are opposite answers, and rendering both as nothing reports the second
 /// as good news.
 pub fn check(repo: &Path, eco: Ecosystem) -> EcosystemReport {
+    // Swift has no command that reports outdated packages.
+    //
+    // `swift package update --dry-run` exists for a `Package.swift`, but
+    // Xcode-managed dependencies -- which is what an iOS app actually
+    // has -- have nothing: `xcodebuild -resolvePackageDependencies`
+    // resolves and does not diff.
+    //
+    // Saying so is the point. An empty list would read as "up to date",
+    // which is the same inversion a missing tool would produce, and this
+    // module exists to refuse it.
+    if eco == Ecosystem::Swift {
+        return EcosystemReport {
+            ecosystem: eco,
+            outdated: Vec::new(),
+            error: Some(
+                "Swift packages are not checked yet: no command reports outdated \
+                 Xcode-managed dependencies."
+                    .into(),
+            ),
+        };
+    }
+
     let fallbacks = tools::fallback_dirs();
     let refs: Vec<&str> = fallbacks.iter().map(String::as_str).collect();
     let Some(bin) = tools::find(eco.program(), &refs) else {
@@ -21,6 +43,10 @@ pub fn check(repo: &Path, eco: Ecosystem) -> EcosystemReport {
         Ecosystem::Poetry => &["show", "--outdated"],
         Ecosystem::Uv => &["pip", "list", "--outdated", "--format", "json"],
         Ecosystem::Dotnet => &["list", "package", "--outdated"],
+        Ecosystem::Cocoapods => &["outdated"],
+        // Swift never reaches here -- `check` returns early for it,
+        // because there is no command that answers the question.
+        Ecosystem::Swift => &["--version"],
     };
 
     let out = match std::process::Command::new(&bin)
@@ -95,11 +121,24 @@ fn is_real_failure(nothing_parsed: bool, status_ok: bool, stdout: &str) -> bool 
     nothing_parsed && !status_ok && stdout.trim().is_empty()
 }
 
-/// Every ecosystem a repository uses.
-pub fn check_repo(repo: &Path) -> Vec<EcosystemReport> {
-    detect::ecosystems(repo)
+/// Every project in a repository, with its ecosystems checked.
+///
+/// Per PROJECT, not per repository: a repo with a frontend and a backend
+/// is two sets of dependencies in two manifests, and flattening them
+/// would produce a list where the same package at two versions is one
+/// row and the update command is ambiguous.
+pub fn check_repo(repo: &Path) -> Vec<ProjectReport> {
+    detect::projects(repo)
         .into_iter()
-        .map(|e| check(repo, e))
+        .map(|p| {
+            let dir = std::path::PathBuf::from(&p.path);
+            let reports = p.ecosystems.iter().map(|e| check(&dir, *e)).collect();
+            ProjectReport {
+                path: p.path,
+                label: p.label,
+                reports,
+            }
+        })
         .collect()
 }
 
@@ -115,6 +154,9 @@ pub fn parse(stdout: &str, eco: Ecosystem, repo: &Path) -> Vec<Outdated> {
         Ecosystem::Uv => parse_uv(stdout),
         Ecosystem::Poetry => parse_poetry(stdout),
         Ecosystem::Dotnet => parse_dotnet(stdout, repo),
+        Ecosystem::Cocoapods => parse_cocoapods(stdout),
+        // Handled before any command runs.
+        Ecosystem::Swift => Vec::new(),
     }
 }
 
@@ -194,6 +236,36 @@ fn parse_poetry(stdout: &str) -> Vec<Outdated> {
                 bump: version::bump(current, latest),
                 ecosystem: Ecosystem::Poetry,
                 manifest: "pyproject.toml".into(),
+            })
+        })
+        .collect()
+}
+
+/// `- Alamofire 5.6.1 -> 5.8.0 (latest version 5.8.0)`
+///
+/// `pod outdated` prints a bulleted list. Lines that do not carry two
+/// versions are headers or advice, and are skipped rather than
+/// half-parsed.
+fn parse_cocoapods(stdout: &str) -> Vec<Outdated> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("- ")?;
+            let mut parts = rest.split_whitespace();
+            let name = parts.next()?;
+            let current = parts.next()?;
+            // The arrow, then the target version.
+            let latest = parts.find(|p| p.starts_with(|c: char| c.is_ascii_digit()))?;
+            if !current.starts_with(|c: char| c.is_ascii_digit()) {
+                return None;
+            }
+            Some(Outdated {
+                name: name.to_string(),
+                current: current.to_string(),
+                latest: latest.to_string(),
+                bump: version::bump(current, latest),
+                ecosystem: Ecosystem::Cocoapods,
+                manifest: "Podfile".into(),
             })
         })
         .collect()
@@ -393,6 +465,34 @@ Project `Api` has the following updates
     #[test]
     fn a_clean_exit_is_never_a_failure() {
         assert!(!is_real_failure(true, true, ""));
+    }
+
+    /// Swift must say it cannot check, not report an empty list.
+    ///
+    /// An empty list reads as "up to date", which is the same inversion
+    /// a missing tool would produce -- and on an iOS repository that
+    /// would be a confident wrong answer about every dependency it has.
+    #[test]
+    fn swift_states_that_it_cannot_check_rather_than_reporting_nothing() {
+        let t = tempfile::TempDir::new().unwrap();
+        let r = check(t.path(), Ecosystem::Swift);
+        assert!(r.outdated.is_empty());
+        let msg = r.error.expect("Swift must not report an empty success");
+        assert!(msg.contains("not checked"), "{msg}");
+    }
+
+    #[test]
+    fn parses_cocoapods_output() {
+        let out = "\
+The following pod updates are available:
+- Alamofire 5.6.1 -> 5.8.0 (latest version 5.8.0)
+- SwiftyJSON 4.0.0 -> 5.0.0 (latest version 5.0.0)
+";
+        let rows = parse(out, Ecosystem::Cocoapods, nowhere());
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        assert_eq!(rows[0].name, "Alamofire");
+        assert_eq!(rows[0].bump, Bump::Minor);
+        assert_eq!(rows[1].bump, Bump::Major);
     }
 
     /// The not-installed path, without depending on what is installed.

@@ -40,6 +40,17 @@ pub struct ClaudeFile {
 /// thousands of directories and none of them holds a project's
 /// instructions.
 pub fn scan_repo(repo: &Path) -> Vec<ClaudeFile> {
+    // WORKTREES are the important entries here.
+    //
+    // Every worktree is a checkout of the same repository, so each holds
+    // its own copy of the same CLAUDE.md. Measured on a real repo: 11
+    // files found, 10 of them inside worktree directories, 3 distinct
+    // contents. The view was showing one file eleven times.
+    //
+    // A worktree's copy CAN differ, and on a branch that edits it that
+    // difference is real -- but near-duplicates at that ratio make the
+    // view unusable for the question it answers, and the checkout's own
+    // file is the one being asked about.
     const SKIP: &[&str] = &[
         ".git",
         "node_modules",
@@ -47,6 +58,8 @@ pub fn scan_repo(repo: &Path) -> Vec<ClaudeFile> {
         ".terraform",
         "dist",
         "build",
+        ".worktrees",
+        "worktrees",
     ];
     let mut out = Vec::new();
     let mut stack = vec![repo.to_path_buf()];
@@ -59,7 +72,12 @@ pub fn scan_repo(repo: &Path) -> Vec<ClaudeFile> {
             let Ok(meta) = e.metadata() else { continue };
             let name = e.file_name().to_string_lossy().to_string();
             if meta.is_dir() {
-                if !SKIP.contains(&name.as_str()) {
+                // `.claude/worktrees` needs the PARENT checked too:
+                // a directory literally named `worktrees` is caught by
+                // SKIP, but the agent-managed ones live one level down
+                // inside `.claude`, which is otherwise worth walking.
+                let agent_worktrees = name == ".claude" && e.path().join("worktrees").is_dir();
+                if !SKIP.contains(&name.as_str()) && !agent_worktrees {
                     stack.push(e.path());
                 }
                 continue;

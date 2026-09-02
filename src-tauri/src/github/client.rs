@@ -126,20 +126,40 @@ fn is_transport_error(e: &octocrab::Error) -> bool {
 /// 100 is GitHub's page maximum, and what the app has always asked for.
 /// MEASURED live: 100 costs 6 rate-limit points, 50 costs 3, 25 costs 2 --
 /// so halving the page halves the spend as well as the server-side work.
+const PAGE_SIZE: u32 = 25;
+
+/// Page sizes for the MERGED-DETAIL query, which is a different shape
+/// and keeps its ladder: it fetches far fewer fields per item, so it
+/// does not hit the timeout the PR search does, and a smaller sample
+/// there costs accuracy rather than completeness.
 const PAGE_FULL: u32 = 100;
+const PAGE_REDUCED: u32 = 50;
+
+/// A ceiling on how many pages one search will fetch.
+///
+/// 10 pages is 250 pull requests, far past any real review queue. It
+/// exists so a pathological `issueCount` cannot fan out into hundreds of
+/// concurrent requests.
+const MAX_PAGES: u32 = 10;
+
+/// The cursor for a given offset.
+///
+/// GitHub's search cursors are base64 of `cursor:<offset>` -- VERIFIED
+/// against the live API, where a constructed `cursor:25` returns exactly
+/// the items that a `first: 27` query holds at positions 26 and 27.
+///
+/// This is undocumented, which is why a page that fails is treated as a
+/// short list rather than an error: if the encoding ever changes, the
+/// symptom is a shortfall the UI already reports, not a broken view.
+fn offset_cursor(offset: u32) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(format!("cursor:{offset}"))
+}
 
 /// The two searches the app runs, named once so the poll path and the
 /// review path cannot drift apart.
 const AUTHORED_OPEN: &str = "is:pr is:open author:@me";
 const REVIEW_REQUESTED: &str = "is:pr is:open review-requested:@me";
-
-/// The fallback page when GitHub cannot answer the full one.
-///
-/// Half, not a quarter: the point is to get a list at all on an account
-/// where the full page times out, and dropping further than necessary
-/// hides more pull requests than it has to. The truncation is surfaced
-/// either way, so the user is told what they are not seeing.
-const PAGE_REDUCED: u32 = 50;
 
 /// Whether GitHub gave up rather than objected.
 ///
@@ -158,6 +178,10 @@ fn server_gave_up(e: &ClientError) -> bool {
     }
 }
 
+/// `Clone` is cheap: `Octocrab` is an `Arc` internally, so a clone
+/// shares the same connection pool rather than opening another. That is
+/// what lets the paged search spawn its requests concurrently.
+#[derive(Clone)]
 pub struct GitHubClient {
     octocrab: Octocrab,
 }
@@ -236,23 +260,73 @@ impl GitHubClient {
         &self,
         query: &str,
     ) -> Result<serde_json::Value, ClientError> {
-        match self.search_page(query, PAGE_FULL).await {
-            Err(e) if server_gave_up(&e) => {
-                log::warn!(
-                    "GitHub could not answer a {PAGE_FULL}-item query ({e}); \
-                     retrying with {PAGE_REDUCED}"
-                );
-                self.search_page(query, PAGE_REDUCED).await
-            }
-            other => other,
+        // First page at PAGE_SIZE, which also tells us the true total.
+        let first = self.search_page(query, PAGE_SIZE, None).await?;
+        let total = first["authored"]["issueCount"].as_u64().unwrap_or(0) as u32;
+        if total <= PAGE_SIZE {
+            return Ok(first);
         }
+
+        // The REST of the pages, all at once.
+        //
+        // Search cursors are base64 of `cursor:<offset>` -- verified
+        // against the live API: a constructed `cursor:25` returns
+        // exactly the items a `first: 27` query has at positions 26-27.
+        // That means pages do not have to be chained; they can be
+        // requested simultaneously, and GitHub shows no contention
+        // between concurrent queries.
+        let pages = total.div_ceil(PAGE_SIZE).min(MAX_PAGES);
+        // Issued together, awaited together. `join_all` would need
+        // another crate; a Vec of futures polled by `select`-free
+        // sequential await would serialise them, which is the thing this
+        // exists to avoid. Spawning is what actually overlaps them.
+        let mut handles = Vec::new();
+        for i in 1..pages {
+            let cursor = offset_cursor(i * PAGE_SIZE);
+            let q = query.to_string();
+            let client = self.clone();
+            handles.push(tokio::spawn(async move {
+                client.search_page(&q, PAGE_SIZE, Some(cursor)).await
+            }));
+        }
+        let mut rest = Vec::new();
+        for h in handles {
+            rest.push(h.await.unwrap_or(Err(ClientError::Graphql(
+                "a search page did not complete".into(),
+            ))));
+        }
+
+        let mut merged = first;
+        for page in rest {
+            match page {
+                Ok(v) => {
+                    if let Some(nodes) = v["authored"]["nodes"].as_array() {
+                        if let Some(into) = merged["authored"]["nodes"].as_array_mut() {
+                            into.extend(nodes.iter().cloned());
+                        }
+                    }
+                }
+                // A failed page is a SHORT list, not a failed fetch. The
+                // caller already reports a shortfall by comparing what
+                // arrived against `issueCount`, and discarding the pages
+                // that did arrive would turn a partial answer into no
+                // answer -- the mistake v3.2.5 made.
+                Err(e) => log::warn!("a page of the search failed ({e}); the list will be short"),
+            }
+        }
+        Ok(merged)
     }
 
     /// One search, one request.
-    async fn search_page(&self, query: &str, first: u32) -> Result<serde_json::Value, ClientError> {
+    async fn search_page(
+        &self,
+        query: &str,
+        first: u32,
+        after: Option<String>,
+    ) -> Result<serde_json::Value, ClientError> {
         self.graphql_partial_ok(&json!({
             "query": PRS_QUERY,
-            "variables": { "q": query, "first": first },
+            "variables": { "q": query, "first": first, "after": after },
         }))
         .await
     }
@@ -1189,22 +1263,75 @@ mod tests {
     /// Half a list beats none, and the truncation is already surfaced,
     /// so the UI says "showing 50 of N" rather than claiming that is
     /// everything.
+    /// The 502 this used to work around is now PREVENTED rather than
+    /// retried.
+    ///
+    /// The old ladder asked for 100 items, took a ~10s timeout, then
+    /// asked for 50 and took another. MEASURED against the live API: on
+    /// a dense account both rungs fail, so it was ~21s of waste before a
+    /// truncated list -- which matches the 20.8s and 21.3s in the
+    /// original report exactly.
+    ///
+    /// The cause was never page size in general. It was
+    /// `mergeStateStatus`, which GitHub computes per pull request
+    /// synchronously: measured at ~154ms each against a ~0.7s baseline
+    /// for the whole search. At 25 the query lands inside the timeout.
     #[tokio::test]
-    async fn a_502_retries_with_a_smaller_page() {
+    async fn the_first_page_is_small_enough_to_answer() {
         let server = MockServer::start().await;
-        // The full page fails the way GitHub actually fails: 502 with a
-        // body that is not JSON.
+        // A 100-item request would go unmatched and fail the test; only
+        // PAGE_SIZE is mocked.
         Mock::given(method("POST"))
             .and(path("/graphql"))
-            .and(body_string_contains("\"first\":100"))
-            .respond_with(ResponseTemplate::new(502).set_body_raw("", "text/html"))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/graphql"))
-            .and(body_string_contains("\"first\":50"))
+            .and(body_string_contains("\"first\":25"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "data": {"authored": {"issueCount": 1, "nodes": []}, "reviewing": {"nodes": []}}
+            })))
+            .mount(&server)
+            .await;
+
+        let (_prs, total) = client_for(&server)
+            .await
+            .fetch_prs_with_total()
+            .await
+            .expect("a 25-item page must not need a fallback");
+        assert_eq!(total, 1);
+    }
+
+    /// A result larger than one page is fetched as SEVERAL pages, and
+    /// they are merged.
+    ///
+    /// Cursors are constructed rather than chained -- GitHub's search
+    /// cursor is base64 of `cursor:<offset>`, verified against the live
+    /// API -- so the pages issue concurrently instead of waiting on each
+    /// other.
+    #[tokio::test]
+    async fn a_large_result_is_fetched_as_several_pages() {
+        let server = MockServer::start().await;
+        let node = |n: u64| {
+            serde_json::json!({
+                "number": n, "title": "t", "url": "u",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-01T00:00:00Z",
+                "repository": {"nameWithOwner": "octocat/hello-world"}
+            })
+        };
+
+        // Page one reports a total of 30, so a second page is needed.
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("\"after\":null"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"authored": {"issueCount": 30, "nodes": [node(1)]}, "reviewing": {"nodes": []}}
+            })))
+            .mount(&server)
+            .await;
+        // The second page, addressed by a constructed offset cursor.
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("Y3Vyc29yOjI1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {"authored": {"issueCount": 30, "nodes": [node(2)]}, "reviewing": {"nodes": []}}
             })))
             .mount(&server)
             .await;
@@ -1214,8 +1341,49 @@ mod tests {
             .fetch_prs_with_total()
             .await
             .unwrap();
-        assert_eq!(total, 1, "the reduced page must actually be used");
-        assert!(prs.is_empty());
+        assert_eq!(total, 30, "the true total comes from issueCount");
+        assert_eq!(prs.len(), 2, "both pages are merged: {prs:?}");
+    }
+
+    /// A page that FAILS is a short list, not a failed fetch.
+    ///
+    /// Discarding the pages that did arrive would turn a partial answer
+    /// into no answer -- the mistake v3.2.5 made, and the reason the UI
+    /// compares what arrived against `issueCount` rather than trusting
+    /// the length.
+    #[tokio::test]
+    async fn a_failed_page_shortens_the_list_rather_than_emptying_it() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("\"after\":null"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "data": {
+                    "authored": {"issueCount": 30, "nodes": [{
+                        "number": 1, "title": "t", "url": "u",
+                        "createdAt": "2026-01-01T00:00:00Z",
+                        "updatedAt": "2026-01-01T00:00:00Z",
+                        "repository": {"nameWithOwner": "octocat/hello-world"}
+                    }]},
+                    "reviewing": {"nodes": []}
+                }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("Y3Vyc29yOjI1"))
+            .respond_with(ResponseTemplate::new(502).set_body_raw("", "text/html"))
+            .mount(&server)
+            .await;
+
+        let (prs, total) = client_for(&server)
+            .await
+            .fetch_prs_with_total()
+            .await
+            .expect("a failed page must not fail the whole fetch");
+        assert_eq!(prs.len(), 1, "what arrived is kept");
+        assert_eq!(total, 30, "and the shortfall stays visible");
     }
 
     /// Only when the SERVER gave up. A 401 means asking again changes
@@ -1496,8 +1664,18 @@ mod tests {
             .fetch_prs_with_total()
             .await
             .unwrap();
-        assert_eq!(prs.len(), 3);
+        // The mock answers EVERY page with the same 3 nodes, so the
+        // merged list is a multiple of 3 rather than 3 -- that is an
+        // artefact of the fixture, not of the code. What this test is
+        // for is the TOTAL: `issueCount` must be reported as GitHub
+        // stated it, however many nodes actually arrived, because that
+        // difference is what the UI turns into "showing N of M".
+        assert!(!prs.is_empty(), "the page that arrived is kept");
         assert_eq!(total, 137, "the UI needs the real total to say so");
+        assert!(
+            u64::from(prs.len() as u32) < total,
+            "and a short list must stay visibly short"
+        );
     }
 
     /// The bug this replaced: octocrab's `GraphqlResponse` is untagged
