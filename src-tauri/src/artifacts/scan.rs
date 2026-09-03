@@ -200,13 +200,34 @@ fn is_ignored(path: &Path) -> bool {
     let Some(parent) = path.parent() else {
         return false;
     };
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(parent)
-        .arg("check-ignore")
-        .arg("-q")
-        .arg(path)
-        .status();
+    // RETRIED on a spawn failure. macOS `posix_spawn` intermittently
+    // returns ENOENT under load -- reproduced in CI's 8-thread race
+    // check -- and a single attempt turns that into "not ignored",
+    // which silently drops a real build directory from the view.
+    //
+    // Only the SPAWN is retried. A git that ran and answered is
+    // believed, whatever it said.
+    let mut status = None;
+    for attempt in 0..3 {
+        let attempted = std::process::Command::new("git")
+            .arg("-C")
+            .arg(parent)
+            .arg("check-ignore")
+            .arg("-q")
+            .arg(path)
+            .status();
+        match attempted {
+            Ok(s) => {
+                status = Some(Ok(s));
+                break;
+            }
+            Err(e) => {
+                status = Some(Err(e));
+                std::thread::sleep(std::time::Duration::from_millis(5 << attempt));
+            }
+        }
+    }
+    let status = status.expect("the loop runs at least once");
     // `check-ignore -q` answers in three ways, and only ONE of them is
     // permission: 0 means ignored, 1 means tracked or untracked, and
     // anything else (128 for a broken repository) means it could not
@@ -357,6 +378,19 @@ mod tests {
         );
     }
 
+    /// The retry in `is_ignored` has NO unit test, deliberately.
+    ///
+    /// Its trigger is `posix_spawn` returning ENOENT under process
+    /// pressure, which cannot be forced from a test without replacing
+    /// the spawn itself. The evidence is the race check: this module
+    /// failed at iteration 1 of CI's `--test-threads=8` loop before the
+    /// retry and passed 25 consecutive iterations after it.
+    ///
+    /// Recorded here so the retry is not later removed as untested code.
+    /// The test below is what fails when it regresses -- and it fails
+    /// pointing at the artifact scan, which is why the cause took two
+    /// attempts to find: the first fix retried the TEST HELPER's
+    /// `git init` and left the production spawn alone.
     #[test]
     fn a_gitignored_build_directory_is_an_artifact() {
         if !git_available() {
