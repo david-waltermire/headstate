@@ -701,6 +701,14 @@ export function useVenvs(enabled: boolean) {
   });
 }
 
+/// How many virtualenvs one sizing request measures.
+///
+/// Small enough that a stalled entry holds up few others, large enough
+/// that the IPC round trips do not dominate. Four matches the backend's
+/// concurrency cap, so a chunk maps to one permit rather than queueing
+/// against itself.
+const VENV_CHUNK = 4;
+
 /// Sizes and idle times for virtualenvs.
 ///
 /// One batch rather than per-project groups: unlike artifacts, venvs are
@@ -709,27 +717,57 @@ export function useVenvs(enabled: boolean) {
 /// fragment the cache.
 export function useVenvSizes(venvs: Venv[], enabled: boolean) {
   const paths = venvs.map((v) => v.path);
-  const q = useQuery({
-    // Keyed on the PATHS, not their count. Two different sets of the
-    // same size shared a cache entry, so removing one venv and adding
-    // another served the old sizes.
-    queryKey: ["venv-sizes", ...paths],
-    queryFn: () => timeCall(`size_venvs n=${paths.length}`, () => sizeVenvs(paths)),
-    enabled: enabled && paths.length > 0,
-    // Matched to the scan above. Sizing walks every virtualenv -- up to
-    // 73 seconds measured -- and a five-minute window meant it was
-    // re-running almost as often as it finished.
-    staleTime: 30 * 60 * 1000,
-    refetchOnWindowFocus: false,
+
+  // CHUNKED, so results land progressively.
+  //
+  // This was one query over every virtualenv, which meant one silent
+  // wait: measured on a real machine at up to 73 seconds with a single
+  // boolean `measuring` and nothing on screen changing. Worse, one
+  // unreadable path -- a network mount, a permission wall -- stalled
+  // every other row behind it.
+  //
+  // Chunks rather than one query per venv: 13 separate IPC round trips
+  // for 13 directories is its own cost, and the backend already logs
+  // per-venv timings for the "which one is slow" question. Four is
+  // small enough that a stalled chunk holds up at most three others.
+  const chunks: string[][] = [];
+  for (let i = 0; i < paths.length; i += VENV_CHUNK) {
+    chunks.push(paths.slice(i, i + VENV_CHUNK));
+  }
+
+  const results = useQueries({
+    queries: chunks.map((chunk, i) => ({
+      // Keyed on the chunk's OWN paths, not its index. An index would
+      // reuse a cache entry for a different set after a removal --
+      // the same trap `artifact-sizes` hit with `paths.length`.
+      queryKey: ["venv-sizes", ...chunk],
+      queryFn: () => timeCall(`size_venvs[#${i}] n=${chunk.length}`, () => sizeVenvs(chunk)),
+      enabled: enabled && chunk.length > 0,
+      // Matched to the scan. Sizing walks every virtualenv, and a short
+      // window meant it re-ran almost as often as it finished.
+      staleTime: 30 * 60 * 1000,
+      refetchOnWindowFocus: false,
+    })),
   });
 
   const sizes = new Map<string, number>();
   const idle = new Map<string, number>();
-  for (const [path, bytes, secs] of q.data ?? []) {
-    sizes.set(path, bytes);
-    if (secs !== null) idle.set(path, secs);
+  for (const r of results) {
+    for (const [path, bytes, secs] of r.data ?? []) {
+      sizes.set(path, bytes);
+      if (secs !== null) idle.set(path, secs);
+    }
   }
-  return { sizes, idle, measuring: q.isFetching };
+  return {
+    sizes,
+    idle,
+    measuring: results.some((r) => r.isFetching),
+    /// How many chunks have not answered yet, and how many there are.
+    /// The pair is what makes a partially-filled page legible rather
+    /// than looking stuck -- the same thing `useArtifactSizes` reports.
+    pending: results.filter((r) => r.isFetching).length,
+    total: results.length,
+  };
 }
 
 /// Remove virtualenvs, then refresh what is left.

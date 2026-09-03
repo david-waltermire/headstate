@@ -75,7 +75,7 @@ export function VenvSection() {
   // so the page was indistinguishable from one with no virtualenvs for
   // almost half a minute, which is exactly how it was reported.
   const { data: venvs = [], isLoading } = useVenvs(true);
-  const { sizes, idle, measuring } = useVenvSizes(venvs, venvs.length > 0);
+  const { sizes, idle, measuring, pending, total } = useVenvSizes(venvs, venvs.length > 0);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -109,8 +109,12 @@ export function VenvSection() {
           {orphans.length} orphaned{measuring ? "" : ` · ${formatSize(orphanBytes)}`}
         </span>
         {measuring ? (
+          // COUNTED, not a bare "measuring…". Sizing is chunked now, so
+          // there is real progress to report -- and a bare word on a
+          // pass that took 73 seconds is indistinguishable from being
+          // stuck, which is how it was reported.
           <span aria-live="polite" className="text-xs text-[#58a6ff]">
-            measuring…
+            measuring — {total - pending} of {total}
           </span>
         ) : null}
         <HelpButton topic="poetry-venvs" />

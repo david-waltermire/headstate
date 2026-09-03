@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   sizes: new Map<string, number>(),
   idle: new Map<string, number>(),
   measuring: false,
+  pending: 0,
+  total: 0,
   loading: false,
 }));
 
@@ -24,6 +26,8 @@ vi.mock("../api/hooks", () => ({
     sizes: state.sizes,
     idle: state.idle,
     measuring: state.measuring,
+    pending: state.pending,
+    total: state.total,
   }),
   useRemoveVenvs: () => removeFn,
 }));
@@ -391,5 +395,26 @@ describe("while the scan is running", () => {
     render(<VenvSection />);
     expect(screen.getByText("mls-delivery-service")).toBeTruthy();
     expect(screen.queryByText(/looking for poetry/i)).toBeNull();
+  });
+});
+
+/// #421: a bare "measuring…" on a pass that took 73 seconds is
+/// indistinguishable from being stuck. Sizing is chunked now, so there
+/// is real progress to report.
+describe("measuring progress", () => {
+  it("says how many chunks have answered", () => {
+    state.venvs = [venv()];
+    state.measuring = true;
+    state.pending = 2;
+    state.total = 4;
+    render(<VenvSection />);
+    expect(screen.getByText(/measuring — 2 of 4/)).toBeTruthy();
+  });
+
+  it("says nothing about measuring once it is done", () => {
+    state.venvs = [venv()];
+    state.measuring = false;
+    render(<VenvSection />);
+    expect(screen.queryByText(/measuring/i)).toBeNull();
   });
 });
