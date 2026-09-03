@@ -98,7 +98,7 @@ query($q: String!, $first: Int!, $after: String) {
             commit {
               statusCheckRollup {
                 state
-                contexts(first: 20) { nodes { ... on CheckRun { status } } }
+                contexts(first: 100) { nodes { ... on CheckRun { status } } }
               }
             }
           }
@@ -392,7 +392,14 @@ query($owner: String!, $repo: String!, $number: Int!) {
       commits(last: 1) {
         nodes { commit { statusCheckRollup {
           state
-          contexts(first: 20) { nodes {
+          # 100 is the connection maximum. The page is NOT the cost --
+          # measured on the list query, `first: 1` and `first: 20` cost
+          # the same, because GitHub charges the connection -- so asking
+          # for the largest page is free and cuts the number of follow-up
+          # requests to nearly always zero.
+          contexts(first: 100) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
             ... on CheckRun {
               name conclusion detailsUrl
               # The workflow RUN, not the check run: re-running failed
@@ -404,7 +411,36 @@ query($owner: String!, $repo: String!, $number: Int!) {
               checkSuite { workflowRun { databaseId } }
             }
             ... on StatusContext { context state targetUrl }
-          } }
+            }
+          }
+        } } }
+      }
+    }
+  }
+}"#;
+
+/// One further page of `statusCheckRollup.contexts`.
+///
+/// Deliberately narrow: the detail query re-fetches comments, review
+/// threads and labels, none of which change between check pages, so
+/// paging with it would pay for all of that again per page. Named
+/// `ChecksPage` so the follow-up is identifiable in a request log.
+pub const PR_CHECKS_PAGE_QUERY: &str = r#"
+query ChecksPage($owner: String!, $repo: String!, $number: Int!, $after: String!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      commits(last: 1) {
+        nodes { commit { statusCheckRollup {
+          contexts(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
+            nodes {
+              ... on CheckRun {
+                name conclusion detailsUrl
+                checkSuite { workflowRun { databaseId } }
+              }
+              ... on StatusContext { context state targetUrl }
+            }
+          }
         } } }
       }
     }

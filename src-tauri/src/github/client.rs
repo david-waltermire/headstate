@@ -11,7 +11,8 @@ use super::map::{
 use super::model::{CycleTrend, History, MergedDetail, Periods, PrDetail, PullRequest, Stats};
 use super::query::{
     cycle_trend_query, history_query_range, history_query_range_with_periods, periods_query,
-    COUNT_QUERY, HISTORY_CHUNK_DAYS, MERGED_DETAIL_QUERY, PRS_QUERY, PR_DETAIL_QUERY, STATS_QUERY,
+    COUNT_QUERY, HISTORY_CHUNK_DAYS, MERGED_DETAIL_QUERY, PRS_QUERY, PR_CHECKS_PAGE_QUERY,
+    PR_DETAIL_QUERY, STATS_QUERY,
 };
 use chrono::{DateTime, Duration, Utc};
 use octocrab::Octocrab;
@@ -569,7 +570,8 @@ impl GitHubClient {
         }
     }
 
-    /// Everything the detail view needs, in one request at cost 1.
+    /// Everything the detail view needs, in one request at cost 1, plus
+    /// one small follow-up per extra page of checks.
     ///
     /// `repo` is `owner/name`; it is split here rather than by the caller
     /// so a malformed value fails in one place with a clear message.
@@ -577,13 +579,79 @@ impl GitHubClient {
         let (owner, name) = repo
             .split_once('/')
             .ok_or_else(|| ClientError::Graphql(format!("malformed repository: {repo}")))?;
-        let v = self
+        let mut v = self
             .graphql_partial_ok(&json!({
                 "query": PR_DETAIL_QUERY,
                 "variables": { "owner": owner, "repo": name, "number": number }
             }))
             .await?;
+        self.append_remaining_checks(&mut v, owner, name, number)
+            .await?;
         Ok(map_detail(&v, repo))
+    }
+
+    /// Follow `statusCheckRollup.contexts` pagination into `v`.
+    ///
+    /// A truncated check list is the most dangerous shape this view can
+    /// take, because it does not look truncated: the panel renders a
+    /// full, plausible list of passing checks on a pull request the
+    /// rollup itself reports as FAILURE. Observed on a pull request with
+    /// 63 checks whose only two failures both sat past the first page.
+    ///
+    /// Stops on the first page that says there is no next one. The page
+    /// budget is a guard against a cursor that never advances, not an
+    /// expected limit: 100 per page means it allows 2000 checks, far
+    /// past anything real, so hitting it means the API is misbehaving
+    /// and looping forever would be worse than showing what we have.
+    async fn append_remaining_checks(
+        &self,
+        v: &mut serde_json::Value,
+        owner: &str,
+        name: &str,
+        number: u64,
+    ) -> Result<(), ClientError> {
+        const MAX_PAGES: usize = 20;
+
+        for _ in 0..MAX_PAGES {
+            let contexts = &v["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]
+                ["statusCheckRollup"]["contexts"];
+            if !contexts["pageInfo"]["hasNextPage"]
+                .as_bool()
+                .unwrap_or(false)
+            {
+                return Ok(());
+            }
+            // A cursor is required to advance. Absent one, stop rather
+            // than re-request the same page forever.
+            let Some(cursor) = contexts["pageInfo"]["endCursor"].as_str() else {
+                return Ok(());
+            };
+            let cursor = cursor.to_string();
+
+            let page = self
+                .graphql_partial_ok(&json!({
+                    "query": PR_CHECKS_PAGE_QUERY,
+                    "variables": {
+                        "owner": owner, "repo": name, "number": number, "after": cursor
+                    }
+                }))
+                .await?;
+            let fetched = &page["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]
+                ["statusCheckRollup"]["contexts"];
+            let more = fetched["nodes"].as_array().cloned().unwrap_or_default();
+            let page_info = fetched["pageInfo"].clone();
+
+            let target = &mut v["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]
+                ["statusCheckRollup"]["contexts"];
+            match target["nodes"].as_array_mut() {
+                Some(existing) => existing.extend(more),
+                // No array to append to means the response shape is not
+                // what the mapper reads either; stop instead of looping.
+                None => return Ok(()),
+            }
+            target["pageInfo"] = page_info;
+        }
+        Ok(())
     }
 
     /// The PR list together with GitHub's own match count.
@@ -1984,6 +2052,71 @@ mod tests {
             .fetch_merged_detail()
             .await
             .is_err());
+    }
+
+    /// A pull request can carry more checks than one page returns, and a
+    /// failure is not necessarily on the first page. Observed live: 63
+    /// checks, both failures past the first page, so the detail view
+    /// listed nothing but green while the rollup said FAILURE. Paging is
+    /// what makes the list honest.
+    #[tokio::test]
+    async fn pr_detail_follows_check_pagination() {
+        let server = MockServer::start().await;
+
+        // The detail query: one check, and a cursor saying more remain.
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("mergeStateStatus"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"repository": {"pullRequest": {
+                    "number": 42,
+                    "commits": {"nodes": [{"commit": {"statusCheckRollup": {
+                        "state": "FAILURE",
+                        "contexts": {
+                            "pageInfo": {"hasNextPage": true, "endCursor": "CUR1"},
+                            "nodes": [{"name": "passing-one", "conclusion": "SUCCESS",
+                                       "detailsUrl": "https://x/1"}]
+                        }
+                    }}}]}
+                }}}
+            })))
+            .mount(&server)
+            .await;
+
+        // The follow-up page, carrying the failure the first page omitted.
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("ChecksPage"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {"repository": {"pullRequest": {
+                    "commits": {"nodes": [{"commit": {"statusCheckRollup": {
+                        "contexts": {
+                            "pageInfo": {"hasNextPage": false, "endCursor": null},
+                            "nodes": [{"name": "failing-two", "conclusion": "FAILURE",
+                                       "detailsUrl": "https://x/2"}]
+                        }
+                    }}}]}
+                }}}
+            })))
+            .mount(&server)
+            .await;
+
+        let d = client_for(&server)
+            .await
+            .fetch_pr_detail("acme/alpha", 42)
+            .await
+            .unwrap();
+
+        let names: Vec<&str> = d.checks.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec!["passing-one", "failing-two"],
+            "every page of checks must reach the detail view"
+        );
+        assert_eq!(
+            d.checks[1].state, "failure",
+            "a failure on a later page must survive the merge"
+        );
     }
 
     // Exercises the real fetch path against the LIVE API, exactly as the
