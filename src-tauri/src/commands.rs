@@ -683,13 +683,32 @@ pub async fn scan_artifacts(app: AppHandle) -> Result<Vec<crate::artifacts::Arti
 #[tauri::command]
 pub async fn size_artifacts(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u64>)>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        paths
+        // DIAGNOSTIC LOGGING (Settings > diagnostic log). Per-directory,
+        // for the same reason as `size_venvs`: the total says the batch
+        // was slow, this says which entry made it slow.
+        let started = std::time::Instant::now();
+        let total = paths.len();
+        let out: Vec<(String, u64, Option<u64>)> = paths
             .into_iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(i, p)| {
+                let each = std::time::Instant::now();
                 let (bytes, age) = crate::artifacts::measure(std::path::Path::new(&p));
+                crate::diag!(
+                    "[diag] size_artifacts {}/{} {}ms {}b",
+                    i + 1,
+                    total,
+                    each.elapsed().as_millis(),
+                    bytes
+                );
                 (p, bytes, age)
             })
-            .collect()
+            .collect();
+        crate::diag!(
+            "[diag] size_artifacts total {}ms n={total}",
+            started.elapsed().as_millis()
+        );
+        out
     })
     .await
     .map_err(|e| e.to_string())
@@ -707,11 +726,24 @@ pub async fn remove_artifacts(
     paths: Vec<String>,
 ) -> Result<Vec<crate::artifacts::ArtifactRemoval>, String> {
     let roots = get_worktree_dirs(app);
+    // DIAGNOSTIC LOGGING (Settings > diagnostic log). This is the
+    // BACKEND half of the freeze report: paired with the frontend's
+    // `ui remove_artifacts` marks, it separates a slow `remove_dir_all`
+    // from a slow render. The work is already off the event loop, so if
+    // this number is small and the UI one is large, the cost is in the
+    // frontend.
+    let started = std::time::Instant::now();
+    let count = paths.len();
+    crate::diag!("[diag] remove_artifacts start n={count}");
     let out = tauri::async_runtime::spawn_blocking(move || {
         crate::artifacts::remove_artifacts(&paths, &roots)
     })
     .await
     .map_err(|e| e.to_string())?;
+    crate::diag!(
+        "[diag] remove_artifacts done {}ms n={count}",
+        started.elapsed().as_millis()
+    );
     let failed = out.iter().filter(|o| o.error.is_some()).count();
     log::info!(
         "artifact removal: {} of {} removed",
@@ -747,13 +779,41 @@ pub async fn scan_venvs(app: AppHandle) -> Result<Vec<crate::caches::Venv>, Stri
 #[tauri::command]
 pub async fn size_venvs(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u64>)>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        paths
+        // DIAGNOSTIC LOGGING (Settings > diagnostic log).
+        //
+        // PER-VENV, not just a total: these are walked serially in one
+        // call, so a single pathological path -- a network mount, a
+        // permission wall -- stalls every other row with nothing on
+        // screen changing. A total says "slow"; this says WHICH.
+        let started = std::time::Instant::now();
+        let total = paths.len();
+        let out: Vec<(String, u64, Option<u64>)> = paths
             .into_iter()
-            .map(|p| {
+            .enumerate()
+            .map(|(i, p)| {
+                let each = std::time::Instant::now();
                 let (bytes, idle) = crate::caches::measure(std::path::Path::new(&p));
+                crate::diag!(
+                    "[diag] size_venvs {}/{} {}ms {}",
+                    i + 1,
+                    total,
+                    each.elapsed().as_millis(),
+                    // The basename, not the path: the full path is a
+                    // project name on someone's disk.
+                    std::path::Path::new(&p)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                );
                 (p, bytes, idle)
             })
-            .collect()
+            .collect();
+        crate::diag!(
+            "[diag] size_venvs total {}ms n={}",
+            started.elapsed().as_millis(),
+            total
+        );
+        out
     })
     .await
     .map_err(|e| e.to_string())
@@ -817,6 +877,28 @@ pub fn mark_assessed(app: AppHandle, worktree_path: String) -> Result<(), String
     let head = crate::worktrees::head_oid(&worktree_path)
         .map_err(|e| format!("could not read the worktree's head: {e}"))?;
     seen.insert(worktree_path, head);
+    settings::set(&conn, settings::keys::ASSESSED_WORKTREES, &seen).map_err(|e| e.to_string())
+}
+
+/// Forget that a worktree was assessed.
+///
+/// The mark is what turns Claudify into "Remove anyway…", and it
+/// persists across restarts -- so a single exploratory click removed the
+/// only way to copy that worktree's prompt, permanently, until the
+/// branch happened to move. This is the way back.
+///
+/// Removing a mark is the SAFE direction: it re-locks the force-removal
+/// path rather than unlocking it, so it needs no confirmation of its
+/// own.
+#[tauri::command]
+pub fn clear_assessed(app: AppHandle, worktree_path: String) -> Result<(), String> {
+    let conn = open_db(&db_path(&app)).map_err(|e| e.to_string())?;
+    let mut seen: std::collections::BTreeMap<String, String> =
+        settings::get(&conn, settings::keys::ASSESSED_WORKTREES)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+    seen.remove(&worktree_path);
     settings::set(&conn, settings::keys::ASSESSED_WORKTREES, &seen).map_err(|e| e.to_string())
 }
 

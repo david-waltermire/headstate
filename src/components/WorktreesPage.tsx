@@ -2,6 +2,7 @@ import { ExternalLink } from "./ExternalLink";
 import { Sparkles } from "lucide-react";
 import { useState } from "react";
 import {
+  useClearAssessed,
   useMarkAssessed,
   useRemoveWorktree,
   useAssessed,
@@ -34,6 +35,7 @@ import {
   upstreamTone,
 } from "../lib/worktrees";
 import { HelpButton } from "./HelpButton";
+import { WorktreeKebab } from "./WorktreeKebab";
 import { claudifyCommand } from "../api/tauri";
 import { copyText } from "../lib/clipboard";
 import { relativeTime } from "../lib/time";
@@ -73,6 +75,7 @@ function Row({
   pr,
   onRemove,
   onClaudify,
+  onForget,
   sizePending,
   removing = false,
   assessed = false,
@@ -87,6 +90,7 @@ function Row({
   pr?: PullRequest | null;
   onRemove: (wt: Worktree) => void;
   onClaudify: (wt: Worktree) => void;
+  onForget: (wt: Worktree) => void;
   /// This row's removal is in flight. Per row, not per page: with 100+
   /// rows, freezing all of them because one is deleting would be worse
   /// than no feedback at all.
@@ -215,18 +219,30 @@ function Row({
           and without a reserved width that swap re-flowed every column
           in the table. A row's layout should not depend on which action
           it currently offers. */}
-      <span className="flex w-32 shrink-0 justify-end">
+      {/* Fixed width still, but wider: the assessed state now holds a
+          button AND a kebab, and the point of the fixed cell is that a
+          row's layout never depends on which action it offers. */}
+      <span className="flex w-40 shrink-0 items-center justify-end gap-1">
       {claudifiable && assessed ? (
         // Only after an assessment of THIS worktree. Otherwise this is a
         // "delete anything" button with extra steps.
-        <button
-          type="button"
-          onClick={() => onForce(wt)}
-          title="You assessed this worktree — remove it despite the safety gate"
-          className="shrink-0 rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10"
-        >
-          Remove anyway…
-        </button>
+        //
+        // The kebab beside it is the way BACK. Marking an assessment
+        // used to be a one-way door: it replaced Claudify, persisted
+        // across restarts, and cleared only when the branch moved -- so
+        // one exploratory click permanently removed the only route to
+        // that worktree's prompt. Needing the prompt again is normal.
+        <>
+          <button
+            type="button"
+            onClick={() => onForce(wt)}
+            title="You assessed this worktree — remove it despite the safety gate"
+            className="shrink-0 rounded border border-[#f85149]/40 px-2 py-0.5 text-xs text-[#f85149] hover:bg-[#f85149]/10"
+          >
+            Remove anyway…
+          </button>
+          <WorktreeKebab worktree={wt} onClaudify={onClaudify} onForget={onForget} />
+        </>
       ) : claudifiable ? (
         <button
           type="button"
@@ -422,6 +438,21 @@ export function WorktreesPage() {
   /// where their config applies and `claude` resolves -- and there is no
   /// portable way to open "the user's terminal" anyway.
   const markRead = useMarkAssessed();
+  const clearRead = useClearAssessed();
+
+  /// Restore a worktree's Claudify action.
+  ///
+  /// Re-LOCKS force removal rather than unlocking it, so it is the safe
+  /// direction and needs no confirmation of its own.
+  const forget = (wt: Worktree) => {
+    void clearRead(wt.path).then(
+      () => toast.success(`${pathBasename(wt.path)} is no longer marked as assessed`),
+      (e: unknown) =>
+        toast.error("Could not clear the assessment", {
+          description: typeof e === "string" ? e : undefined,
+        }),
+    );
+  };
 
   const claudify = (wt: Worktree) => {
     claudifyCommand(selected?.path ?? "", wt.path, wt.branch).then(
@@ -618,6 +649,7 @@ export function WorktreesPage() {
             onPull={runPull}
             onRemove={setPending}
             onClaudify={claudify}
+              onForget={forget}
             removing={removing === wt.path}
           />
         ))}
@@ -1002,6 +1034,7 @@ export function WorktreesPage() {
               pulling={pullingPath === wt.path}
               onRemove={setPending}
               onClaudify={claudify}
+              onForget={forget}
               sizePending={sizing}
               removing={removing === wt.path}
             />

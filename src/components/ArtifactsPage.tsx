@@ -4,6 +4,7 @@ import type { Artifact, ArtifactKind } from "@/types/pr";
 import { useArtifacts, useArtifactSizes, useRemoveArtifacts, useVenvs } from "@/api/hooks";
 import { useActiveFilters } from "@/store/filters";
 import { relativeSeconds } from "@/lib/time";
+import { diagMark } from "@/api/diag";
 import { GROUP_LABEL, VENV_GROUP } from "./ArtifactSidebar";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -271,10 +272,22 @@ export function ArtifactsPage() {
                 type="button"
                 onClick={() => {
                   const paths = [...checked];
+                  // DIAGNOSTIC (Settings > diagnostic log). The freeze
+                  // report is about the window between this click and
+                  // the UI responding, which spans a command, a render,
+                  // and a query invalidation -- no single call wraps it,
+                  // so it is bracketed by hand.
+                  const clickedAt = performance.now();
+                  diagMark(`ui remove_artifacts click n=${paths.length} rows=${rows.length}`);
                   setConfirming(false);
                   setBusy(true);
                   remove(paths).then(
                     (outcomes) => {
+                      diagMark(
+                        `ui remove_artifacts resolved ${Math.round(
+                          performance.now() - clickedAt,
+                        )}ms`,
+                      );
                       setBusy(false);
                       // Clear only what was actually REMOVED.
                       //
@@ -290,6 +303,16 @@ export function ArtifactsPage() {
                         }
                         return next;
                       });
+                      // After the state updates above, so the gap
+                      // between "resolved" and this line is the render
+                      // cost rather than the removal's.
+                      queueMicrotask(() =>
+                        diagMark(
+                          `ui remove_artifacts settled ${Math.round(
+                            performance.now() - clickedAt,
+                          )}ms`,
+                        ),
+                      );
                       const failed = outcomes.filter((o) => o.error !== null);
                       const ok = outcomes.length - failed.length;
                       // Never a bare "done": a directory refused at

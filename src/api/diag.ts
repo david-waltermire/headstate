@@ -50,6 +50,34 @@ export function timed<T>(name: string, fn: () => Promise<T>): () => Promise<T> {
   };
 }
 
+/// Time one call without wrapping it, for parameterised query functions.
+///
+/// `timed()` returns a NEW function each call, so it must be hoisted to
+/// module scope -- which a queryFn closing over per-render arguments
+/// cannot be. This measures the same thing from inside the call instead,
+/// leaving the queryFn's identity to TanStack.
+export async function timeCall<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const started = performance.now();
+  diag(`call ${name} start`);
+  try {
+    const out = await fn();
+    diag(`call ${name} ok ${Math.round(performance.now() - started)}ms`);
+    return out;
+  } catch (e) {
+    diag(`call ${name} failed ${Math.round(performance.now() - started)}ms`);
+    throw e;
+  }
+}
+
+/// Mark a moment, for measuring a gap the caller brackets itself.
+///
+/// The freeze reports are about the window between a click and the UI
+/// responding, which spans a command, a render, and a query
+/// invalidation -- no single call wraps it.
+export function diagMark(line: string): void {
+  diag(line);
+}
+
 /// DIAGNOSTIC HOOK (Settings > diagnostic log).
 ///
 /// Reports what the To review query is actually doing each render. The

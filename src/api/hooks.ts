@@ -1,7 +1,7 @@
 import { type QueryClient, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { safeUnlisten } from "./unlisten";
-import { timed } from "./diag";
+import { timeCall, timed } from "./diag";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type {
   Artifact,
@@ -44,6 +44,7 @@ import {
   setAutoMerge,
   removeWorktrees,
   removeArtifacts,
+  clearAssessed,
   markAssessed,
   checkPackages,
   readClaudeMd,
@@ -352,6 +353,12 @@ export function useViewCadence(view: string): void {
 /// a refetch: a queryFn is configuration, and rebuilding it per render
 /// is the kind of thing that bites later even when it is currently
 /// harmless.
+/// Local-scan timings, for "slow on my machine" reports about the
+/// Artifacts, Virtualenvs and Docker views. Hoisted for the same reason
+/// as the GitHub ones above.
+const SCAN_ARTIFACTS_FN = timed("scan_artifacts", scanArtifacts);
+const SCAN_VENVS_FN = timed("scan_venvs", scanVenvs);
+
 const REVIEWING_FN = timed("reviewing", getReviewing);
 const CACHED_REVIEWING_FN = timed("reviewing-cached", getCachedReviewing);
 const REVIEWING_COUNT_FN = timed("reviewing-count", countReviewing);
@@ -551,7 +558,7 @@ export function useReplyToThread() {
 export function useArtifacts(enabled: boolean) {
   return useQuery({
     queryKey: ["artifacts"],
-    queryFn: scanArtifacts,
+    queryFn: SCAN_ARTIFACTS_FN,
     enabled,
     // The set changes when someone builds or clones, not on a timer.
     staleTime: 60 * 1000,
@@ -582,7 +589,7 @@ export function useArtifactSizes(artifacts: Artifact[], enabled: boolean) {
   const results = useQueries({
     queries: groups.map(([repo, paths]) => ({
       queryKey: ["artifact-sizes", repo, paths.length],
-      queryFn: () => sizeArtifacts(paths),
+      queryFn: () => timeCall(`size_artifacts[${repo}] n=${paths.length}`, () => sizeArtifacts(paths)),
       enabled,
       staleTime: 5 * 60 * 1000,
     })),
@@ -628,7 +635,7 @@ export function useRemoveArtifacts() {
 export function useVenvs(enabled: boolean) {
   return useQuery({
     queryKey: ["venvs"],
-    queryFn: scanVenvs,
+    queryFn: SCAN_VENVS_FN,
     enabled,
     staleTime: 60 * 1000,
   });
@@ -647,7 +654,7 @@ export function useVenvSizes(venvs: Venv[], enabled: boolean) {
     // same size shared a cache entry, so removing one venv and adding
     // another served the old sizes.
     queryKey: ["venv-sizes", ...paths],
-    queryFn: () => sizeVenvs(paths),
+    queryFn: () => timeCall(`size_venvs n=${paths.length}`, () => sizeVenvs(paths)),
     enabled: enabled && paths.length > 0,
     staleTime: 5 * 60 * 1000,
   });
@@ -1017,6 +1024,19 @@ export function useMarkAssessed() {
   const qc = useQueryClient();
   return async (worktreePath: string) => {
     await markAssessed(worktreePath);
+    await qc.invalidateQueries({ queryKey: ["assessed-worktrees"] });
+  };
+}
+
+/// Forget a worktree's assessment.
+///
+/// The inverse of `useMarkAssessed`, and the way back from a one-way
+/// door: the mark persists across restarts, so without this an
+/// exploratory click removed that worktree's Claudify action for good.
+export function useClearAssessed() {
+  const qc = useQueryClient();
+  return async (worktreePath: string) => {
+    await clearAssessed(worktreePath);
     await qc.invalidateQueries({ queryKey: ["assessed-worktrees"] });
   };
 }

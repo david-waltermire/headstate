@@ -102,6 +102,7 @@ pub fn run() {
             commands::remove_artifacts,
             commands::size_artifacts,
             commands::mark_assessed,
+            commands::clear_assessed,
             commands::preview_cleanup,
             commands::cleanup_log,
             commands::get_cleanup_prefs,

@@ -441,6 +441,10 @@ export const removeVenvs = (paths: string[]) =>
 export const markAssessed = (worktreePath: string) =>
   invoke<void>("mark_assessed", { worktreePath });
 
+/// Forget that a worktree was assessed, restoring its Claudify action.
+export const clearAssessed = (worktreePath: string) =>
+  invoke<void>("clear_assessed", { worktreePath });
+
 /// Run the cleanup pass now and return what it WOULD remove.
 ///
 /// Preview only: the backend has no removal path for this, so it cannot

@@ -71,6 +71,7 @@ vi.mock("../api/hooks", () => ({
   useRemoveWorktreeForced: () => forceFn,
   useAssessed: () => ({ data: state.assessed }),
   useMarkAssessed: () => markAssessedFn,
+  useClearAssessed: () => clearAssessedFn,
   usePullRequests: () => ({ data: state.prs }),
   // Mirrors the real hook: a DISABLED query reports `isLoading: true`
   // forever, so the page reads `isFetching` instead -- and a mock that
@@ -92,6 +93,7 @@ const removeManyFn = vi.hoisted(() =>
 );
 
 const markAssessedFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const clearAssessedFn = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 const claudify = vi.hoisted(() =>
   vi.fn(() =>
     Promise.resolve({ command: "cd '/code/proj-a' && claude 'assess'", claude_installed: true }),
@@ -567,6 +569,48 @@ describe("WorktreesPage", () => {
 
       opts.action?.onClick();
       await waitFor(() => expect(markAssessedFn).toHaveBeenCalled());
+    });
+
+    /// Marking an assessment used to be a ONE-WAY DOOR: Claudify was
+    /// replaced by "Remove anyway…", the mark persisted across restarts,
+    /// and only a moved branch cleared it. One exploratory click removed
+    /// the only route to that worktree's prompt.
+    it("still offers Claudify after the assessment is marked", async () => {
+      const writeText = vi.fn<(text: string) => Promise<void>>(() => Promise.resolve());
+      Object.assign(navigator, { clipboard: { writeText } });
+      const w = wt({ safety: { kind: "never_pushed" } });
+      state.classified = [w];
+      state.assessed = [w.path];
+      render(<WorktreesPage />);
+
+      // The row now offers the forced removal...
+      expect(screen.getByRole("button", { name: /remove anyway/i })).toBeTruthy();
+      // ...and Claudify is still reachable, behind the kebab.
+      fireEvent.click(screen.getByRole("button", { name: /more actions/i }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /copy the claudify command/i }));
+      await waitFor(() => expect(writeText).toHaveBeenCalled());
+    });
+
+    it("can forget an assessment, restoring the plain Claudify button", async () => {
+      const w = wt({ safety: { kind: "never_pushed" } });
+      state.classified = [w];
+      state.assessed = [w.path];
+      render(<WorktreesPage />);
+
+      fireEvent.click(screen.getByRole("button", { name: /more actions/i }));
+      fireEvent.click(screen.getByRole("menuitem", { name: /forget the assessment/i }));
+      await waitFor(() => expect(clearAssessedFn).toHaveBeenCalledWith(w.path));
+    });
+
+    /// The kebab is only for the assessed state -- an unassessed row
+    /// already has Claudify as its one action, and a menu holding a
+    /// duplicate of it would be noise.
+    it("shows no kebab before an assessment is marked", () => {
+      state.classified = [wt({ safety: { kind: "never_pushed" } })];
+      state.assessed = [];
+      render(<WorktreesPage />);
+      expect(screen.getByRole("button", { name: /claudify/i })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /more actions/i })).toBeNull();
     });
 
     /// #396: an ABSENT clipboard produced NO toast at all.
