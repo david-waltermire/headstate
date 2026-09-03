@@ -169,3 +169,20 @@ describe("the diagnostic log controls", () => {
     expect(screen.queryByRole("button", { name: /show the log/i })).toBeNull();
   });
 });
+
+/// #436: a notification when a PR enters the green "Ready for review"
+/// panel, so it can be picked up immediately.
+describe("the ready-for-review notification", () => {
+  it("offers a toggle for it", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.getByLabelText(/ready for your review/i)).toBeTruthy();
+  });
+
+  /// The wording described breakage while every notification WAS
+  /// breakage. This one is good news.
+  it("no longer says notifications are only about breakage", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.queryByText(/newly breaks/)).toBeNull();
+    expect(screen.getByText(/never on first launch/)).toBeTruthy();
+  });
+});

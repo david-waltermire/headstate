@@ -99,6 +99,9 @@ export interface NotifyPrefs {
   enabled: boolean;
   ci_failed: boolean;
   conflicted: boolean;
+  /// Notify when a pull request enters the "Ready for review" set: green
+  /// checks, no blockers, and the user is a requested reviewer.
+  ready_to_review: boolean;
 }
 
 export const getNotifyPrefs = () => invoke<NotifyPrefs>("get_notify_prefs");

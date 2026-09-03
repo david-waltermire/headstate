@@ -6,7 +6,7 @@
 //! disk and listens for the `prs-updated` event.
 
 use crate::github::client::{ClientError, GitHubClient};
-use crate::github::model::{needs_attention_count, CiState, MergeState, PullRequest};
+use crate::github::model::{needs_attention_count, CiState, MergeState, PullRequest, ReviewState};
 use crate::store::{open_db, save_snapshot, CachedList};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -172,6 +172,15 @@ pub struct Breakage {
 pub enum BreakageKind {
     CiFailed,
     Conflicted,
+    /// A pull request awaiting YOUR review became ready to pick up.
+    ///
+    /// The odd one out: this is good news, where the other two are
+    /// breakage. The type keeps its name because renaming it touches
+    /// every call site for no behavioural gain -- but a third variant
+    /// that is not a breakage is exactly the sort of thing that makes a
+    /// name wrong, so it is called out here rather than left to be
+    /// discovered.
+    ReadyToReview,
 }
 
 impl BreakageKind {
@@ -180,6 +189,7 @@ impl BreakageKind {
         match self {
             BreakageKind::CiFailed => "CI is failing",
             BreakageKind::Conflicted => "has merge conflicts",
+            BreakageKind::ReadyToReview => "is ready for your review",
         }
     }
 
@@ -188,6 +198,7 @@ impl BreakageKind {
         match self {
             BreakageKind::CiFailed => prefs.ci_failed,
             BreakageKind::Conflicted => prefs.conflicted,
+            BreakageKind::ReadyToReview => prefs.ready_to_review,
         }
     }
 }
@@ -304,6 +315,14 @@ pub struct NotifyPrefs {
     pub enabled: bool,
     pub ci_failed: bool,
     pub conflicted: bool,
+    /// Notify when a pull request enters the "Ready for review" set.
+    ///
+    /// `#[serde(default)]` so an existing stored preference, written
+    /// before this field existed, still deserialises -- without it a
+    /// missing key would fail the whole struct and silently reset every
+    /// other notification setting to its default.
+    #[serde(default = "default_true")]
+    pub ready_to_review: bool,
 }
 
 impl Default for NotifyPrefs {
@@ -312,6 +331,7 @@ impl Default for NotifyPrefs {
             enabled: true,
             ci_failed: true,
             conflicted: true,
+            ready_to_review: true,
         }
     }
 }
@@ -335,6 +355,62 @@ impl NotifyPrefs {
 /// forever. A PR absent from `previous` -- first run, or newly opened --
 /// never fires, because its "before" state is unknown and assuming green
 /// would notify the whole list on first launch.
+/// Whether a pull request is ready for someone to review right now.
+///
+/// MUST mirror `readyForReview` in `src/lib/derive.ts`, which decides
+/// what the green "Ready for review" panel shows. A notification that
+/// used its own rule would announce pull requests the panel does not
+/// list, and the two would drift apart silently.
+///
+/// `ci == None` counts as ready: a repository with no checks configured
+/// has nothing to wait for. `Pending` does NOT -- ready means the checks
+/// passed, not that they have not failed yet.
+fn ready_for_review(pr: &PullRequest) -> bool {
+    !pr.is_draft
+        && (pr.ci == CiState::Success || pr.ci == CiState::None)
+        && pr.merge != MergeState::Conflicted
+        && pr.review != ReviewState::Approved
+        && pr.review != ReviewState::ChangesRequested
+        && !pr.in_merge_queue
+}
+
+/// Pull requests that have just become ready for the user to review.
+///
+/// The transition rule is DELIBERATELY different from `newly_broken`.
+///
+/// That function never fires for a pull request absent from `previous`,
+/// because its "before" state is unknown and assuming green would
+/// notify the whole list on the first tick. Correct for breakage.
+///
+/// Here it is backwards: a brand-new pull request that arrives already
+/// green, with the user as a reviewer, is EXACTLY the case worth
+/// announcing -- and it is always absent from `previous`. So an absent
+/// prior state counts as "was not ready".
+///
+/// The first-tick burst is prevented by the caller instead, which skips
+/// this entirely until it has one tick of history. Opening the app must
+/// not announce every pull request already waiting.
+pub fn newly_ready(previous: &[PullRequest], current: &[PullRequest]) -> Vec<Breakage> {
+    current
+        .iter()
+        .filter(|pr| ready_for_review(pr))
+        .filter(|pr| {
+            // Absent from `previous` means "was not ready", not "skip".
+            previous
+                .iter()
+                .find(|p| p.repo == pr.repo && p.number == pr.number)
+                .is_none_or(|was| !ready_for_review(was))
+        })
+        .map(|pr| Breakage {
+            title: pr.title.clone(),
+            repo: pr.repo.clone(),
+            number: pr.number,
+            url: pr.url.clone(),
+            kind: BreakageKind::ReadyToReview,
+        })
+        .collect()
+}
+
 pub fn newly_broken(previous: &[PullRequest], current: &[PullRequest]) -> Vec<Breakage> {
     current
         .iter()
@@ -562,6 +638,15 @@ pub fn spawn(
 ) {
     tauri::async_runtime::spawn(async move {
         let mut previous: Vec<PullRequest> = Vec::new();
+        // The review queue as of the last tick, and whether there HAS
+        // been one.
+        //
+        // `None` rather than an empty Vec: for the ready-to-review
+        // notification an absent prior entry means "was not ready", so
+        // an empty history and a genuinely empty queue would be
+        // indistinguishable -- and the first tick would announce every
+        // pull request already waiting.
+        let mut previous_reviewing: Option<Vec<PullRequest>> = None;
         // Consecutive failures, reset by any success. Transient failures
         // are not surfaced until this crosses the threshold -- see
         // `should_surface`.
@@ -584,6 +669,32 @@ pub fn spawn(
                     Ok(res) => res,
                     Err(_) => Err(ClientError::Timeout(FETCH_TIMEOUT.as_secs())),
                 };
+
+            // The review queue, for the ready-to-review notification.
+            //
+            // A SEPARATE request rather than `fetch_prs_and_reviewing`,
+            // which returns both but drops the total this loop needs.
+            // Fetched only when the notification is wanted, so a user
+            // who turns it off pays nothing.
+            //
+            // A failure here is NOT a tick failure: the authored list
+            // above is what the UI renders, and losing one notification
+            // must not cost the poll.
+            let reviewing_now = if read_notify_prefs(&app).ready_to_review {
+                match tokio::time::timeout(FETCH_TIMEOUT, client.fetch_reviewing()).await {
+                    Ok(Ok(list)) => Some(list),
+                    Ok(Err(e)) => {
+                        crate::diag!("[diag] poll reviewing failed: {e}");
+                        None
+                    }
+                    Err(_) => {
+                        crate::diag!("[diag] poll reviewing timed out");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             crate::diag!(
                 "[diag] poll tick fetch done {}ms {}",
                 tick_started.elapsed().as_millis(),
@@ -609,6 +720,22 @@ pub fn spawn(
                             notify_breakage(&app, &b);
                         }
                     }
+                    // Ready-to-review, from the queue fetched above.
+                    //
+                    // Skipped entirely until there is one tick of
+                    // history: without this, opening the app announces
+                    // every pull request already waiting.
+                    if let Some(now) = reviewing_now {
+                        if let Some(before) = &previous_reviewing {
+                            for b in newly_ready(before, &now) {
+                                if prefs.wants(b.kind) {
+                                    notify_breakage(&app, &b);
+                                }
+                            }
+                        }
+                        previous_reviewing = Some(now);
+                    }
+
                     previous = prs.clone();
                     // Only interesting when GitHub says there are more than
                     // it returned; the UI stays silent otherwise.
@@ -778,11 +905,14 @@ mod tests {
             enabled: false,
             ci_failed: true,
             conflicted: true,
+            ready_to_review: true,
         };
         assert!(!p.wants(BreakageKind::CiFailed));
         assert!(!p.wants(BreakageKind::Conflicted));
+        // Good news is silenced by the master switch too.
+        assert!(!p.wants(BreakageKind::ReadyToReview));
         // The choices survive: flipping `enabled` back is enough.
-        assert!(p.ci_failed && p.conflicted);
+        assert!(p.ci_failed && p.conflicted && p.ready_to_review);
     }
 
     /// Turning one kind off must not touch the other. This is the whole
@@ -794,17 +924,30 @@ mod tests {
             enabled: true,
             ci_failed: true,
             conflicted: false,
+            ready_to_review: true,
         };
         assert!(no_conflicts.wants(BreakageKind::CiFailed));
         assert!(!no_conflicts.wants(BreakageKind::Conflicted));
+        assert!(no_conflicts.wants(BreakageKind::ReadyToReview));
 
         let no_ci = NotifyPrefs {
             enabled: true,
             ci_failed: false,
             conflicted: true,
+            ready_to_review: true,
         };
         assert!(!no_ci.wants(BreakageKind::CiFailed));
         assert!(no_ci.wants(BreakageKind::Conflicted));
+
+        // And the new kind is independent of both.
+        let no_ready = NotifyPrefs {
+            enabled: true,
+            ci_failed: true,
+            conflicted: true,
+            ready_to_review: false,
+        };
+        assert!(!no_ready.wants(BreakageKind::ReadyToReview));
+        assert!(no_ready.wants(BreakageKind::CiFailed));
     }
 
     /// The kind drives the filter; the prose is only display. Asserting
@@ -1188,6 +1331,90 @@ mod tests {
             pr("octocat/spoon-knife", 7, MergeState::Conflicted),
         ];
         assert!(!has_checking(&prs));
+    }
+
+    /// #436: a notification when a pull request enters the green
+    /// "Ready for review" panel -- so it can be picked up immediately.
+    mod ready {
+        use super::*;
+
+        fn ready(number: u64) -> PullRequest {
+            pr_full("o/r", number, CiState::Success, MergeState::Mergeable)
+        }
+
+        /// The case that makes this DIFFERENT from `newly_broken`.
+        ///
+        /// That function never fires for a pull request absent from
+        /// `previous`. Here, a brand-new PR arriving already green with
+        /// the user as reviewer is exactly what is worth announcing --
+        /// and it is always absent from the previous tick.
+        #[test]
+        fn a_brand_new_ready_pull_request_notifies() {
+            let out = newly_ready(&[], &[ready(1)]);
+            assert_eq!(out.len(), 1, "an unseen ready PR must notify");
+            assert_eq!(out[0].kind, BreakageKind::ReadyToReview);
+        }
+
+        /// And it must not re-announce on every tick afterwards.
+        #[test]
+        fn a_pull_request_already_ready_does_not_notify_again() {
+            let before = vec![ready(1)];
+            assert!(newly_ready(&before, &[ready(1)]).is_empty());
+        }
+
+        /// Going green is the transition, not merely being green.
+        #[test]
+        fn turning_green_notifies() {
+            let before = vec![pr_full("o/r", 1, CiState::Failure, MergeState::Mergeable)];
+            assert_eq!(newly_ready(&before, &[ready(1)]).len(), 1);
+        }
+
+        #[test]
+        fn a_draft_is_not_ready() {
+            let mut d = ready(1);
+            d.is_draft = true;
+            assert!(newly_ready(&[], &[d]).is_empty());
+        }
+
+        /// Pending is not ready: the checks have not passed, they merely
+        /// have not failed yet.
+        #[test]
+        fn pending_checks_are_not_ready() {
+            let p = pr_full("o/r", 1, CiState::Pending, MergeState::Mergeable);
+            assert!(newly_ready(&[], &[p]).is_empty());
+        }
+
+        /// A repository with no checks configured has nothing to wait
+        /// for -- excluding it would empty the panel for anyone not
+        /// running CI.
+        #[test]
+        fn no_checks_configured_is_ready() {
+            let p = pr_full("o/r", 1, CiState::None, MergeState::Mergeable);
+            assert_eq!(newly_ready(&[], &[p]).len(), 1);
+        }
+
+        #[test]
+        fn conflicts_are_not_ready() {
+            let p = pr_full("o/r", 1, CiState::Success, MergeState::Conflicted);
+            assert!(newly_ready(&[], &[p]).is_empty());
+        }
+
+        /// An existing verdict means it is no longer WAITING.
+        #[test]
+        fn an_already_reviewed_pull_request_is_not_ready() {
+            for verdict in [ReviewState::Approved, ReviewState::ChangesRequested] {
+                let mut p = ready(1);
+                p.review = verdict;
+                assert!(newly_ready(&[], &[p]).is_empty(), "{verdict:?}");
+            }
+        }
+
+        #[test]
+        fn a_queued_pull_request_is_not_ready() {
+            let mut p = ready(1);
+            p.in_merge_queue = true;
+            assert!(newly_ready(&[], &[p]).is_empty());
+        }
     }
 
     fn pr_full(repo: &str, number: u64, ci: CiState, merge: MergeState) -> PullRequest {

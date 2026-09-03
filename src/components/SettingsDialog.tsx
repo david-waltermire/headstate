@@ -153,10 +153,24 @@ export function SettingsDialog({
               />
               Merge conflicts appear
             </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={!(prefs?.enabled ?? true)}
+                checked={prefs?.ready_to_review ?? true}
+                onChange={() =>
+                  prefs && void setPrefs({ ...prefs, ready_to_review: !prefs.ready_to_review })
+                }
+              />
+              A pull request becomes ready for your review
+            </label>
           </div>
+          {/* "newly breaks" was accurate while every notification was
+              breakage. The ready-to-review one is good news, so the
+              wording is about the TRANSITION rather than the direction. */}
           <p className="text-xs text-[#8b949e]">
-            Only when a pull request newly breaks — never repeated for one that
-            was already broken, and never on first launch.
+            Only when something newly changes — never repeated for a pull request
+            already in that state, and never on first launch.
           </p>
         </div>
 
