@@ -276,7 +276,20 @@ export function ArtifactsPage() {
                   remove(paths).then(
                     (outcomes) => {
                       setBusy(false);
-                      setChecked(new Set());
+                      // Clear only what was actually REMOVED.
+                      //
+                      // A blanket reset discarded two things: anything
+                      // ticked while the removal was in flight (a long
+                      // window, with no sign it happened), and the
+                      // selection for rows that FAILED -- which are
+                      // exactly the ones still needing attention.
+                      setChecked((prev) => {
+                        const next = new Set(prev);
+                        for (const o of outcomes) {
+                          if (o.error === null) next.delete(o.path);
+                        }
+                        return next;
+                      });
                       const failed = outcomes.filter((o) => o.error !== null);
                       const ok = outcomes.length - failed.length;
                       // Never a bare "done": a directory refused at

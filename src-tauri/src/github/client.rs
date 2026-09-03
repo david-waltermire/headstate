@@ -915,6 +915,28 @@ async fn graphql_partial_ok(
 
 #[cfg(test)]
 mod tests {
+
+    /// Serialises the tests that assert an exact `REFUSED_FIELDS` value.
+    ///
+    /// It is ONE process-global counter and five tests each reset it and
+    /// then assert a specific number, so under `--test-threads=8`
+    /// whichever pair interleaves loses. CI runs the suite in a loop as
+    /// a race check, which is where it surfaced.
+    ///
+    /// `tokio::sync::Mutex`, not `std::sync::Mutex`: these are
+    /// `#[tokio::test]`s and the window that needs protecting contains
+    /// the `.await` on the mock server. Holding a std guard across an
+    /// await is a deadlock on a multi-threaded runtime, and clippy
+    /// rejects it -- which is how the first attempt at this failed.
+    ///
+    /// The global itself is the real defect; this makes the existing
+    /// assertions honest without weakening them. Making the counter
+    /// injectable is the better fix and a larger change.
+    async fn refused_fields_lock() -> tokio::sync::MutexGuard<'static, ()> {
+        static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+        LOCK.lock().await
+    }
+
     use super::super::mutate::ReviewVerdict;
     use super::*;
     use wiremock::matchers::{body_string_contains, method, path};
@@ -1425,6 +1447,7 @@ mod tests {
     async fn every_call_site_supplies_the_page_size() {
         // Process-global counter: a previous test's refusals would
         // otherwise make this empty fixture look like a refused page.
+        let _guard = refused_fields_lock().await;
         REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1452,6 +1475,7 @@ mod tests {
     async fn the_review_queue_does_not_fetch_the_authored_list() {
         // Process-global counter: a previous test's refusals would
         // otherwise make this empty fixture look like a refused page.
+        let _guard = refused_fields_lock().await;
         REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1718,6 +1742,7 @@ mod tests {
     /// An error is honest and, unlike an empty success, retries.
     #[tokio::test]
     async fn a_wholly_refused_page_is_an_error_not_an_empty_list() {
+        let _guard = refused_fields_lock().await;
         REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1743,6 +1768,7 @@ mod tests {
     /// nothing to review" into an error would be its own wrong answer.
     #[tokio::test]
     async fn an_honestly_empty_queue_is_not_an_error() {
+        let _guard = refused_fields_lock().await;
         REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -1776,6 +1802,7 @@ mod tests {
     /// visible without being fatal.
     #[tokio::test]
     async fn an_over_budget_response_keeps_the_data_it_got() {
+        let _guard = refused_fields_lock().await;
         REFUSED_FIELDS.store(0, std::sync::atomic::Ordering::Relaxed);
         let server = MockServer::start().await;
         Mock::given(method("POST"))

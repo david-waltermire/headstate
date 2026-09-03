@@ -643,7 +643,10 @@ export function useVenvs(enabled: boolean) {
 export function useVenvSizes(venvs: Venv[], enabled: boolean) {
   const paths = venvs.map((v) => v.path);
   const q = useQuery({
-    queryKey: ["venv-sizes", paths.length],
+    // Keyed on the PATHS, not their count. Two different sets of the
+    // same size shared a cache entry, so removing one venv and adding
+    // another served the old sizes.
+    queryKey: ["venv-sizes", ...paths],
     queryFn: () => sizeVenvs(paths),
     enabled: enabled && paths.length > 0,
     staleTime: 5 * 60 * 1000,

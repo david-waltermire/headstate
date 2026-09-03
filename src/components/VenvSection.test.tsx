@@ -1,17 +1,25 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Venv } from "@/types/pr";
 
-const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
+// Typed so a test can resolve with real outcomes: a bare
+// `Promise.resolve([])` infers `never[]`, which rejects every fixture.
+const removeFn = vi.hoisted(() =>
+  vi.fn<(paths: string[]) => Promise<{ path: string; error: string | null }[]>>(() =>
+    Promise.resolve([]),
+  ),
+);
 const state = vi.hoisted(() => ({
   venvs: [] as Venv[],
   sizes: new Map<string, number>(),
   idle: new Map<string, number>(),
   measuring: false,
+  allowStale: false,
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("../api/hooks", () => ({
+  useUiPrefs: () => ({ prefs: { remove_stale_venvs: state.allowStale }, set: vi.fn() }),
   useVenvs: () => ({ data: state.venvs }),
   useVenvSizes: () => ({
     sizes: state.sizes,
@@ -36,6 +44,7 @@ const venv = (over: Partial<Venv> = {}): Venv => ({
 beforeEach(() => {
   removeFn.mockClear();
   state.venvs = [];
+  state.allowStale = false;
   state.sizes = new Map();
   state.idle = new Map();
   state.measuring = false;
@@ -218,5 +227,114 @@ describe("VenvSection bulk removal", () => {
     state.venvs = [venv()];
     render(<VenvSection />);
     expect(screen.queryByRole("button", { name: /Remove all/ })).toBeNull();
+  });
+});
+
+describe("selecting a stale virtualenv", () => {
+  const staleVenv = () =>
+    venv({
+      path: "/cache/old-project-BBBBBBBB-py3.13",
+      project: "old-project",
+      state: "live",
+    });
+
+  /// Settings already had "Also allow removing stale virtualenvs", and
+  /// `remove_venvs` already honoured it as `policy.allow_stale`. The
+  /// checkbox did not, so turning the setting on changed nothing the
+  /// user could see.
+  it("is selectable once the setting allows it", () => {
+    state.venvs = [staleVenv()];
+    state.idle = new Map([["/cache/old-project-BBBBBBBB-py3.13", 60 * 60 * 24 * 400]]);
+    state.allowStale = true;
+    render(<VenvSection />);
+    expect(screen.getByText("stale")).toBeTruthy();
+    const box = screen.getByLabelText("Select old-project virtualenv");
+    expect(box.hasAttribute("disabled")).toBe(false);
+  });
+
+  /// Off by default: a stale venv's project still exists, so removing it
+  /// is a judgement the user has to make explicitly.
+  it("is not selectable while the setting is off", () => {
+    state.venvs = [staleVenv()];
+    state.idle = new Map([["/cache/old-project-BBBBBBBB-py3.13", 60 * 60 * 24 * 400]]);
+    state.allowStale = false;
+    render(<VenvSection />);
+    const box = screen.getByLabelText(/old-project virtualenv is stale/);
+    expect(box.hasAttribute("disabled")).toBe(true);
+  });
+
+  /// A live venv is never removable, at either layer.
+  it("never offers a live virtualenv, even with the setting on", () => {
+    state.venvs = [venv({ path: "/cache/live-CCCCCCCC-py3.13", project: "live", state: "live" })];
+    state.idle = new Map([["/cache/live-CCCCCCCC-py3.13", 60]]);
+    state.allowStale = true;
+    render(<VenvSection />);
+    const box = screen.getByLabelText(/live virtualenv cannot be removed/);
+    expect(box.hasAttribute("disabled")).toBe(true);
+  });
+
+  /// An orphan needs no setting: its project is gone, which is a fact
+  /// rather than a judgement.
+  it("always offers an orphan", () => {
+    state.venvs = [venv()];
+    state.allowStale = false;
+    render(<VenvSection />);
+    const box = screen.getByLabelText("Select mls-delivery-service virtualenv");
+    expect(box.hasAttribute("disabled")).toBe(false);
+  });
+});
+
+describe("selection during removal", () => {
+  /// Same defect as the artifacts page: a blanket reset after the await
+  /// discarded anything ticked mid-flight, and unticked rows that FAILED
+  /// -- which are the ones still needing attention.
+  it("keeps a selection made while the removal was running", async () => {
+    state.venvs = [
+      venv({ path: "/cache/a-AAAAAAAA-py3.13", project: "a" }),
+      venv({ path: "/cache/b-BBBBBBBB-py3.13", project: "b" }),
+    ];
+    state.sizes = new Map([
+      ["/cache/a-AAAAAAAA-py3.13", 1_000],
+      ["/cache/b-BBBBBBBB-py3.13", 2_000],
+    ]);
+
+    let settle: (v: { path: string; error: string | null }[]) => void = () => {};
+    removeFn.mockImplementationOnce(() => new Promise((res) => { settle = res; }));
+
+    render(<VenvSection />);
+    fireEvent.click(screen.getByLabelText("Select a virtualenv"));
+    fireEvent.click(screen.getByRole("button", { name: /^Remove 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Remove$/ }));
+    expect(removeFn).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByLabelText("Select b virtualenv"));
+
+    await act(async () => {
+      settle([{ path: "/cache/a-AAAAAAAA-py3.13", error: null }]);
+    });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("Select a virtualenv") as HTMLInputElement).checked).toBe(false),
+    );
+    expect((screen.getByLabelText("Select b virtualenv") as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("keeps the selection for a virtualenv that could not be removed", async () => {
+    state.venvs = [venv({ path: "/cache/a-AAAAAAAA-py3.13", project: "a" })];
+    state.sizes = new Map([["/cache/a-AAAAAAAA-py3.13", 1_000]]);
+    removeFn.mockResolvedValueOnce([
+      { path: "/cache/a-AAAAAAAA-py3.13", error: "it is not an orphan" },
+    ]);
+
+    render(<VenvSection />);
+    fireEvent.click(screen.getByLabelText("Select a virtualenv"));
+    fireEvent.click(screen.getByRole("button", { name: /^Remove 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Remove$/ }));
+
+    await waitFor(() => expect(removeFn).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^Remove 1/ })).toBeTruthy(),
+    );
+    expect((screen.getByLabelText("Select a virtualenv") as HTMLInputElement).checked).toBe(true);
   });
 });

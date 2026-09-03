@@ -54,6 +54,23 @@ macro_rules! diag {
 
 #[cfg(test)]
 mod tests {
+
+    /// Serialises the tests that drive the global diagnostics switch.
+    ///
+    /// `set_enabled` is process-global and BOTH tests here toggle it, so
+    /// under `--test-threads=8` one flips the switch while the other is
+    /// asserting on it. The counter noise was already handled with
+    /// deltas; the SWITCH itself was not.
+    ///
+    /// `std::sync::Mutex` is right here -- these are ordinary
+    /// synchronous tests with no await in the guarded window. Recovers
+    /// from poisoning so a panic in one test fails that test rather than
+    /// cascading.
+    fn switch_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     use super::*;
 
     /// Defaults OFF, so a user who never opens Settings never pays for
@@ -108,6 +125,7 @@ mod tests {
         // version of this test passed alone and failed in the suite.
         // A delta is still a real assertion: what matters is whether
         // THIS macro call produced a record.
+        let _guard = switch_lock();
         set_enabled(false);
         let before = RECORDS.load(Ordering::Relaxed);
         crate::diag!("[diag] must not be written");
@@ -138,6 +156,7 @@ mod tests {
 
     #[test]
     fn the_switch_round_trips() {
+        let _guard = switch_lock();
         set_enabled(true);
         assert!(enabled());
         set_enabled(false);

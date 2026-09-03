@@ -411,3 +411,32 @@ describe("DockerPage", () => {
     expect(screen.queryByText(/% cached/)).toBeNull();
   });
 });
+
+describe("removing a dangling volume", () => {
+  /// `window.confirm` does not work in the Tauri webview: it returned
+  /// falsy, the handler took its early return, and the click did nothing
+  /// at all -- no removal, no error, no toast.
+  ///
+  /// Asserting the COMMAND is called is the point. A test that only
+  /// checked the dialog opens would pass against the broken code too.
+  it("calls the removal after the confirmation is accepted", async () => {
+    state.volumes = [{ name: "orphan-vol", size_bytes: 1_000_000 }];
+    render(<DockerPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    // A real dialog, not a native one.
+    expect(screen.getByText("Delete this volume?")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(removeVolumeFn).toHaveBeenCalledWith("orphan-vol"));
+  });
+
+  it("removes nothing when the confirmation is cancelled", () => {
+    state.volumes = [{ name: "orphan-vol", size_bytes: 1_000_000 }];
+    render(<DockerPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(removeVolumeFn).not.toHaveBeenCalled();
+    expect(screen.queryByText("Delete this volume?")).toBeNull();
+  });
+});

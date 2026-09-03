@@ -29,7 +29,7 @@ import {
 } from "../lib/buildJoin";
 import { relativeTime } from "../lib/time";
 
-import type { DockerBuild, DockerImage } from "../types/pr";
+import type { DanglingVolume, DockerBuild, DockerImage } from "../types/pr";
 import { QueryError, errorMessage } from "./QueryError";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
@@ -296,6 +296,13 @@ export function DockerPage() {
   const prune = usePruneCache();
 
   const [pending, setPending] = useState<DockerImage | null>(null);
+  /// The volume awaiting confirmation, or null.
+  ///
+  /// A Dialog rather than `window.confirm`: the native dialog does not
+  /// work in the Tauri webview -- it returned falsy, so the handler took
+  /// its early return and the click did nothing at all, with no error.
+  /// Every other destructive path on this page already uses Dialog.
+  const [pendingVolume, setPendingVolume] = useState<DanglingVolume | null>(null);
   /// Which bulk set the confirmation is for, or null when closed.
   ///
   /// "stale" is the conservative set (superseded AND merged AND unused);
@@ -490,17 +497,7 @@ export function DockerPage() {
               <span className="tabular-nums text-[#8b949e]">{formatDockerSize(v.size_bytes || null)}</span>
               <button
                 type="button"
-                onClick={() => {
-                  if (!window.confirm(`Delete volume ${v.name}? Its contents cannot be recovered.`))
-                    return;
-                  removeVolume(v.name).then(
-                    () => toast.success(`Removed ${v.name}`),
-                    (e: unknown) =>
-                      toast.error(`Could not remove ${v.name}`, {
-                        description: typeof e === "string" ? e : undefined,
-                      }),
-                  );
-                }}
+                onClick={() => setPendingVolume(v)}
                 className="rounded border border-[#f85149]/40 px-2 py-0.5 text-[#f85149] hover:bg-[#f85149]/10"
               >
                 Remove
@@ -508,6 +505,50 @@ export function DockerPage() {
             </div>
           ))}
         </div>
+      ) : null}
+
+      {pendingVolume ? (
+        <Dialog open onOpenChange={(o) => !o && setPendingVolume(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogTitle>Delete this volume?</DialogTitle>
+            <p className="mt-3 break-all font-mono text-xs text-[#8b949e]">
+              {pendingVolume.name}
+            </p>
+            {/* Kept from the original wording: a volume's contents are
+                not regenerable, which is why volumes are confirmed one
+                at a time and never bulk-pruned. */}
+            <p className="mt-2 text-sm text-[#8b949e]">
+              {formatDockerSize(pendingVolume.size_bytes || null)} · its contents cannot
+              be recovered.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingVolume(null)}
+                className="rounded border border-[#30363d] px-3 py-1.5 text-sm hover:bg-[#21262d]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = pendingVolume;
+                  setPendingVolume(null);
+                  removeVolume(target.name).then(
+                    () => toast.success(`Removed ${target.name}`),
+                    (e: unknown) =>
+                      toast.error(`Could not remove ${target.name}`, {
+                        description: typeof e === "string" ? e : undefined,
+                      }),
+                  );
+                }}
+                className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149]"
+              >
+                Delete
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
       ) : null}
 
       {pending ? (

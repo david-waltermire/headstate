@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Artifact } from "@/types/pr";
 
@@ -12,11 +12,18 @@ const state = vi.hoisted(() => ({
   total: 0,
 }));
 
-const removeFn = vi.hoisted(() => vi.fn(() => Promise.resolve([])));
+// Typed so a test can resolve with real outcomes: a bare
+// `Promise.resolve([])` infers `never[]`, which rejects every fixture.
+const removeFn = vi.hoisted(() =>
+  vi.fn<(paths: string[]) => Promise<{ path: string; error: string | null }[]>>(() =>
+    Promise.resolve([]),
+  ),
+);
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock("../api/hooks", () => ({
+  useUiPrefs: () => ({ prefs: { remove_stale_venvs: false }, set: vi.fn() }),
   useRemoveArtifacts: () => removeFn,
   // The page renders VenvSection, which has its own hooks. Stubbed to
   // empty here rather than exercised: that component has its own test
@@ -317,5 +324,87 @@ describe("ArtifactsPage bulk removal and grouping", () => {
     state.ages = new Map();
     render(<ArtifactsPage />);
     expect(screen.queryByRole("button", { name: /Remove all/ })).toBeNull();
+  });
+});
+
+describe("selection during removal", () => {
+  /// A blanket `setChecked(new Set())` after the await discarded
+  /// anything ticked while the removal was in flight -- a long window on
+  /// a 100k-file node_modules, with no sign it had happened.
+  it("keeps a selection made while the removal was running", async () => {
+    const a = { ...art(), path: "/code/repo/a" };
+    const b = { ...art(), path: "/code/repo/b" };
+    state.artifacts = [a, b];
+    state.sizes = new Map([
+      ["/code/repo/a", 1_000],
+      ["/code/repo/b", 2_000],
+    ]);
+    state.ages = new Map([
+      ["/code/repo/a", 60 * 60 * 24 * 30],
+      ["/code/repo/b", 60 * 60 * 24 * 30],
+    ]);
+    state.pending = 0;
+
+    // Hold the removal open so a second selection lands mid-flight.
+    let settle: (v: { path: string; error: string | null }[]) => void = () => {};
+    removeFn.mockImplementationOnce(
+      () => new Promise((res) => { settle = res; }),
+    );
+
+    render(<ArtifactsPage />);
+    fireEvent.click(screen.getByLabelText("Select /code/repo/a"));
+    fireEvent.click(screen.getByRole("button", { name: /Remove 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Remove$/ }));
+
+    // Mid-removal, the user ticks another row. Asserted, so a change
+    // that disables checkboxes while busy fails here loudly instead of
+    // making this test silently vacuous.
+    expect(removeFn).toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText("Select /code/repo/b"));
+    expect((screen.getByLabelText("Select /code/repo/b") as HTMLInputElement).checked).toBe(true);
+
+    // Inside `act`, so the state update the resolution triggers is
+    // flushed before the assertion. Without it the post-settle render
+    // had not happened and the test passed against a gutted fix.
+    await act(async () => {
+      settle([{ path: "/code/repo/a", error: null }]);
+    });
+
+    // Wait for a state that only exists AFTER the clear has run: `a` is
+    // unticked. Waiting on `b` instead would pass instantly -- it was
+    // already ticked before settling -- which is how this test survived
+    // gutting the fix.
+    await waitFor(() =>
+      expect((screen.getByLabelText("Select /code/repo/a") as HTMLInputElement).checked).toBe(false),
+    );
+    // And the mid-flight selection survived it.
+    expect((screen.getByLabelText("Select /code/repo/b") as HTMLInputElement).checked).toBe(true);
+  });
+
+  /// A row that FAILED to remove is the one still needing attention;
+  /// unticking it makes the user find it again.
+  it("keeps the selection for a row that could not be removed", async () => {
+    const a = { ...art(), path: "/code/repo/a" };
+    state.artifacts = [a];
+    state.sizes = new Map([["/code/repo/a", 1_000]]);
+    state.ages = new Map([["/code/repo/a", 60 * 60 * 24 * 30]]);
+    state.pending = 0;
+    removeFn.mockResolvedValueOnce([
+      { path: "/code/repo/a", error: "a build is writing there" },
+    ]);
+
+    render(<ArtifactsPage />);
+    fireEvent.click(screen.getByLabelText("Select /code/repo/a"));
+    fireEvent.click(screen.getByRole("button", { name: /Remove 1/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Remove$/ }));
+
+    // Wait for the removal to SETTLE first. Without this the assertion
+    // passes before anything happened -- the box was already ticked --
+    // which is a vacuous test that survives deleting the fix.
+    await waitFor(() => expect(removeFn).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Remove 1/ })).toBeTruthy(),
+    );
+    expect((screen.getByLabelText("Select /code/repo/a") as HTMLInputElement).checked).toBe(true);
   });
 });

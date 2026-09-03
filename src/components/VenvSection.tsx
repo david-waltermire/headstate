@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import type { Venv, VenvState } from "@/types/pr";
-import { useRemoveVenvs, useVenvs, useVenvSizes } from "@/api/hooks";
+import { useRemoveVenvs, useUiPrefs, useVenvs, useVenvSizes } from "@/api/hooks";
 import { formatSize } from "@/lib/worktrees";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { HelpButton } from "./HelpButton";
@@ -15,13 +15,23 @@ const STALE_SECS = 90 * 24 * 60 * 60;
 
 /// Whether a venv is offered for removal at all.
 ///
-/// ORPHANS ONLY, and the backend enforces the same rule independently.
-/// An orphan is a fact -- the path that made it is gone, so nothing can
-/// ever use it again. A stale venv is a judgement about a project that
-/// still exists, and a judgement is not something to act on unattended.
-/// Stale rows are shown, and named, and left alone.
-function isRemovable(v: Venv, state: VenvState): boolean {
-  return state === "orphaned" && v.path.length > 0;
+/// Orphans always; stale only when the user has said so in Settings.
+///
+/// An orphan is a FACT -- the path that made it is gone, so nothing can
+/// ever use it again. A stale venv is a JUDGEMENT about a project that
+/// still exists, which is why it needs an explicit opt-in rather than
+/// being removable by default.
+///
+/// That opt-in already existed: "Also allow removing stale virtualenvs"
+/// in Settings, which `remove_venvs` reads as `policy.allow_stale`. The
+/// BACKEND honoured it and this function did not, so turning the setting
+/// on changed nothing a user could see -- the checkbox stayed disabled
+/// and the row could never be selected. `live` is never removable at
+/// either layer.
+function isRemovable(v: Venv, state: VenvState, allowStale: boolean): boolean {
+  if (v.path.length === 0) return false;
+  if (state === "orphaned") return true;
+  return state === "stale" && allowStale;
 }
 
 /// The state a row displays, once its idle time is known.
@@ -50,6 +60,10 @@ export function VenvSection() {
   const { data: venvs = [] } = useVenvs(true);
   const { sizes, idle, measuring } = useVenvSizes(venvs, venvs.length > 0);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  // The same setting the backend reads. Without it the two layers
+  // disagree and the UI silently refuses what the backend would allow.
+  const { prefs } = useUiPrefs();
+  const allowStale = prefs?.remove_stale_venvs ?? false;
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const remove = useRemoveVenvs();
@@ -137,7 +151,20 @@ export function VenvSection() {
                   remove(paths).then(
                     (outcomes) => {
                       setBusy(false);
-                      setChecked(new Set());
+                      // Clear only what was actually REMOVED.
+                      //
+                      // A blanket reset discarded two things: anything
+                      // ticked while the removal was in flight (a long
+                      // window, with no sign it happened), and the
+                      // selection for rows that FAILED -- which are
+                      // exactly the ones still needing attention.
+                      setChecked((prev) => {
+                        const next = new Set(prev);
+                        for (const o of outcomes) {
+                          if (o.error === null) next.delete(o.path);
+                        }
+                        return next;
+                      });
                       const failed = outcomes.filter((o) => o.error !== null);
                       const ok = outcomes.length - failed.length;
                       if (failed.length === 0) {
@@ -168,7 +195,7 @@ export function VenvSection() {
 
       <ul className="flex flex-col gap-1">
         {rows.map(({ v, state }) => {
-          const removable = isRemovable(v, state);
+          const removable = isRemovable(v, state, allowStale);
           return (
             <li
               key={v.path}
@@ -191,7 +218,9 @@ export function VenvSection() {
                 aria-label={
                   removable
                     ? `Select ${v.project} virtualenv`
-                    : `${v.project} virtualenv cannot be removed: its project still exists`
+                    : state === "stale"
+                      ? `${v.project} virtualenv is stale: enable "Also allow removing stale virtualenvs" in Settings`
+                      : `${v.project} virtualenv cannot be removed: its project still exists`
                 }
                 className="shrink-0 disabled:opacity-30"
               />
