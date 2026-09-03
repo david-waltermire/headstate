@@ -488,10 +488,19 @@ export function useReviewPr() {
           prev === undefined ? prev : withOwnReview(prev, viewer, state),
         );
       }
-      // AWAITED, unlike the list refresh. The button stays busy until the
-      // detail view reflects the click, rather than until an unrelated
-      // list finishes.
-      await qc.refetchQueries({ queryKey: ["pr-detail", repo, number] });
+      // NOT refetched here, and that is the whole point.
+      //
+      // The seed above writes the verdict we know landed. Immediately
+      // awaiting a refetch of THE SAME KEY replaced it with GitHub's
+      // pre-approval review set -- inside the exact lag window the seed
+      // exists to cover. So the button reverted to "Approve" for an
+      // approval that had succeeded, and only corrected itself when
+      // something else refetched later: clicking Merge, or leaving the
+      // PR and coming back.
+      //
+      // The seed is authoritative rather than optimistic (the mutation
+      // rejects a PENDING review), so there is nothing to confirm. The
+      // next natural fetch overwrites it once GitHub agrees.
       await refreshPrs(qc);
     });
 }
