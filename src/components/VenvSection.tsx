@@ -57,7 +57,13 @@ const TONE: Record<VenvState, string> = {
 /// caches" across two views would make a user check two places for one
 /// answer.
 export function VenvSection() {
-  const { data: venvs = [] } = useVenvs(true);
+  // `isLoading` as well as the data: the `= []` default made "still
+  // scanning" and "there are none" the SAME value, and the early
+  // return below then removed the section entirely. On a real machine
+  // the scan takes 26 SECONDS -- measured, walking 28,144 directories --
+  // so the page was indistinguishable from one with no virtualenvs for
+  // almost half a minute, which is exactly how it was reported.
+  const { data: venvs = [], isLoading } = useVenvs(true);
   const { sizes, idle, measuring } = useVenvSizes(venvs, venvs.length > 0);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   // The same setting the backend reads. Without it the two layers
@@ -68,6 +74,16 @@ export function VenvSection() {
   const [busy, setBusy] = useState(false);
   const remove = useRemoveVenvs();
 
+  // Say the scan is running rather than rendering nothing. The
+  // artifacts list already does this; this section did not.
+  if (isLoading) {
+    return (
+      <p className="px-1 py-2 text-xs text-[#8b949e]" aria-live="polite">
+        Looking for Poetry virtualenvs…
+      </p>
+    );
+  }
+  // Only once the scan has ANSWERED does an empty list mean "none".
   if (venvs.length === 0) return null;
 
   const rows = [...venvs]
