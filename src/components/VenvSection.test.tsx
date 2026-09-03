@@ -338,3 +338,26 @@ describe("selection during removal", () => {
     expect((screen.getByLabelText("Select a virtualenv") as HTMLInputElement).checked).toBe(true);
   });
 });
+
+/// #431: the virtualenv rows showed a size and no date, so "is this old
+/// enough to remove" had no answer on screen. The idle time was already
+/// being fetched -- it drove the stale badge -- and never displayed.
+describe("age on a virtualenv row", () => {
+  it("shows how long ago the virtualenv was last written", () => {
+    state.venvs = [venv()];
+    state.idle = new Map([
+      ["/cache/mls-delivery-service-AAAAAAAA-py3.13", 60 * 60 * 24 * 270],
+    ]);
+    render(<VenvSection />);
+    expect(screen.getByText("9 months ago")).toBeTruthy();
+  });
+
+  /// Unknown must not read as brand new -- that would hide exactly the
+  /// venvs worth removing. Same rule the size column follows.
+  it("does not claim an unmeasured virtualenv was written just now", () => {
+    state.venvs = [venv()];
+    state.idle = new Map();
+    render(<VenvSection />);
+    expect(screen.queryByText("just now")).toBeNull();
+  });
+});

@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import type { Venv, VenvState } from "@/types/pr";
 import { useRemoveVenvs, useUiPrefs, useVenvs, useVenvSizes } from "@/api/hooks";
 import { formatSize } from "@/lib/worktrees";
+import { relativeSeconds } from "@/lib/time";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { HelpButton } from "./HelpButton";
 
@@ -233,6 +234,18 @@ export function VenvSection() {
                   which is what lets someone disagree with the label. */}
               <span className="min-w-0 flex-1 truncate font-mono text-xs text-[#8b949e]">
                 {v.source ?? "no project directory found"}
+              </span>
+              {/* AGE, for the same reason the artifacts list got it in
+                  #417: size cannot rank these rows. The idle time was
+                  already being fetched and used ONLY to compute the
+                  stale badge -- the number itself was never shown, so
+                  "is this old enough to delete" had no answer on screen.
+
+                  Unknown renders as an em dash, never as "just now":
+                  reading not-yet-measured as brand new would hide
+                  exactly the venvs worth removing. */}
+              <span className="w-24 shrink-0 text-right text-xs text-[#8b949e]">
+                {idle.has(v.path) ? relativeSeconds(idle.get(v.path) ?? 0) : "—"}
               </span>
               <span className="w-20 shrink-0 text-right text-xs tabular-nums text-[#8b949e]">
                 {sizes.has(v.path) ? formatSize(sizes.get(v.path) ?? 0) : "—"}
