@@ -598,14 +598,23 @@ export function useArtifactSizes(artifacts: Artifact[], enabled: boolean) {
 
   const results = useQueries({
     queries: groups.map(([repo, paths], i) => ({
-      queryKey: ["artifact-sizes", repo, paths.length],
+      // Keyed on the repo alone, NOT on `paths.length`.
+      //
+      // With the count in the key, removing one directory changed every
+      // surviving group's key too -- so the cache had nothing for the
+      // new keys and all of them refetched at once. That is the storm
+      // this is fixing; dropping removed entries from the cache
+      // achieves nothing if the key they were cached under no longer
+      // exists.
+      //
+      // The query function still closes over the current `paths`, so a
+      // group whose membership changed re-measures on its next natural
+      // fetch rather than never.
+      queryKey: ["artifact-sizes", repo],
       queryFn: () =>
-        // The GROUP INDEX, never the path. This log is meant to be sent
-        // to someone, and Settings promises it carries "counts and
-        // timings only -- never repository names". An absolute path
-        // names the user, the org and the repo; an index answers the
-        // only question the log is asked ("which group was slow") and
-        // stays comparable across lines in one file.
+        // The GROUP INDEX in the log label, never the path. This log is
+        // meant to be sent to someone, and Settings promises it carries
+        // "counts and timings only -- never repository names".
         timeCall(`size_artifacts[#${i}] n=${paths.length}`, () => sizeArtifacts(paths)),
       enabled,
       staleTime: 5 * 60 * 1000,
@@ -639,8 +648,28 @@ export function useRemoveArtifacts() {
   const qc = useQueryClient();
   return async (paths: string[]) => {
     const out = await removeArtifacts(paths);
+    // The SCAN is invalidated: a removed directory must leave the list.
     await qc.invalidateQueries({ queryKey: ["artifacts"] });
-    await qc.invalidateQueries({ queryKey: ["artifact-sizes"] });
+    // The SIZES are not.
+    //
+    // Invalidating them re-walked every group on the machine. Measured
+    // on a real removal: 54 concurrent `size_artifacts` calls all
+    // finishing around 17.8s, with groups of TWO directories taking
+    // 17.6s -- contention, not measurement. The 20.4s "freeze" after a
+    // deletion was this, not `remove_dir_all` and not rendering.
+    //
+    // A removal is the one operation whose effect on other rows is
+    // known to be nil: the removed directories are gone and the rest
+    // are untouched. So the removed entries are dropped from the cached
+    // results and everything else stands. `useRemoveWorktrees` already
+    // does exactly this.
+    const gone = new Set(out.filter((o) => o.error === null).map((o) => o.path));
+    if (gone.size > 0) {
+      qc.setQueriesData<[string, number, number | null][]>(
+        { queryKey: ["artifact-sizes"] },
+        (old) => old?.filter(([path]) => !gone.has(path)),
+      );
+    }
     return out;
   };
 }

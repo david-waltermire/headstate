@@ -680,8 +680,26 @@ pub async fn scan_artifacts(app: AppHandle) -> Result<Vec<crate::artifacts::Arti
 /// entry: asking a second question of the same `metadata()` call is
 /// free, and it is the ONLY signal that a build is currently writing
 /// there. Build output is gitignored, so no git check can see it.
+/// How many sizing walks may run at once.
+///
+/// These are disk-bound, and the frontend fires one per repository
+/// group -- 54 concurrently on a real machine. Measured there: groups of
+/// TWO directories took 17.6 seconds, which is contention rather than
+/// work, and it blocked an artifact removal behind it for 20 seconds.
+///
+/// A cap makes the total no slower (the disk is the bottleneck either
+/// way) while leaving the blocking pool free for everything else --
+/// which is what actually made the UI look frozen.
+static SIZE_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
 #[tauri::command]
 pub async fn size_artifacts(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u64>)>, String> {
+    // Held for the whole walk. `acquire` only fails if the semaphore is
+    // closed, which never happens for a static.
+    let _permit = SIZE_LIMIT
+        .acquire()
+        .await
+        .map_err(|e| format!("could not schedule the measurement: {e}"))?;
     tauri::async_runtime::spawn_blocking(move || {
         // DIAGNOSTIC LOGGING (Settings > diagnostic log). Per-directory,
         // for the same reason as `size_venvs`: the total says the batch
@@ -778,6 +796,12 @@ pub async fn scan_venvs(app: AppHandle) -> Result<Vec<crate::caches::Venv>, Stri
 /// directory's own mtime reports a year-old venv as days old.
 #[tauri::command]
 pub async fn size_venvs(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u64>)>, String> {
+    // Shares the artifact cap: both walk the same disk, and a venv batch
+    // competing with a 54-way artifact fan-out is the same contention.
+    let _permit = SIZE_LIMIT
+        .acquire()
+        .await
+        .map_err(|e| format!("could not schedule the measurement: {e}"))?;
     tauri::async_runtime::spawn_blocking(move || {
         // DIAGNOSTIC LOGGING (Settings > diagnostic log).
         //
