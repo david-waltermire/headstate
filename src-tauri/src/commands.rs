@@ -794,16 +794,14 @@ pub async fn size_venvs(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u
                 let each = std::time::Instant::now();
                 let (bytes, idle) = crate::caches::measure(std::path::Path::new(&p));
                 crate::diag!(
-                    "[diag] size_venvs {}/{} {}ms {}",
+                    "[diag] size_venvs {}/{} {}ms",
                     i + 1,
                     total,
-                    each.elapsed().as_millis(),
-                    // The basename, not the path: the full path is a
-                    // project name on someone's disk.
-                    std::path::Path::new(&p)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default()
+                    each.elapsed().as_millis() // Deliberately NO name, not even a basename: a venv
+                                               // directory is `<project>-<hash>-py3.13`, so the
+                                               // basename IS the project name. The index answers
+                                               // "which one was slow" without naming it, and
+                                               // Settings promises this log carries no such names.
                 );
                 (p, bytes, idle)
             })
@@ -1032,6 +1030,36 @@ pub async fn apply_package_updates(
         Err(e) => log::warn!("update run in {repo_path} refused: {e}"),
     }
     result
+}
+
+/// Reveal the diagnostic log in the file manager.
+///
+/// A command rather than the opener plugin's `open-url`: that is
+/// ACL-gated to the http/https scope (see `capabilities/default.json`),
+/// and revealing a local file would need a new grant. App commands
+/// registered through `generate_handler!` are not ACL-gated, so this
+/// keeps the capability surface unchanged.
+///
+/// Returns the PATH on success, so the caller can show it even where
+/// revealing is unsupported -- being told where the file is beats a
+/// button that silently does nothing.
+#[tauri::command]
+pub fn reveal_log(app: AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("could not locate the log directory: {e}"))?;
+    let file = dir.join("headstate.log");
+    let shown = file.to_string_lossy().into_owned();
+    // Reveal the FILE, not just the directory, so the user does not have
+    // to find it among rotated siblings.
+    match tauri_plugin_opener::reveal_item_in_dir(&file) {
+        Ok(()) => Ok(shown),
+        // The path is still useful when revealing is unsupported, so
+        // this reports where to look rather than only that it failed.
+        Err(e) => Err(format!("could not open {shown}: {e}")),
+    }
 }
 
 /// Every CLAUDE.md in a repository, with its import tree resolved.

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { toast } from "sonner";
+import { revealLog } from "@/api/tauri";
 import { HelpButton } from "./HelpButton";
 import {
   useAutostart,
@@ -280,10 +282,34 @@ export function SettingsDialog({
             <HelpButton topic="diagnostic-log" />
           </span>
           {ui?.diagnostic_logging ? (
-            <p className="text-xs text-[#8b949e]">
-              Records how long each GitHub request takes. Counts and timings only —
-              never repository names, titles, or tokens.
-            </p>
+            <>
+              {/* "GitHub requests" was accurate until local scans were
+                  instrumented too. A user reading the old text had no
+                  reason to think this would help with a hanging
+                  Virtualenvs page, which is now what it is for. */}
+              <p className="text-xs text-[#8b949e]">
+                Records how long GitHub requests and local scans take. Counts and
+                timings only — never repository names, titles, or tokens.
+              </p>
+              {/* Where the file IS. Without this the path has to be
+                  passed on out of band, which is the friction the
+                  checkbox exists to remove. */}
+              <button
+                type="button"
+                onClick={() => {
+                  void revealLog().then(
+                    (path) => toast.success("Showed the log", { description: path }),
+                    (e: unknown) =>
+                      toast.error("Could not show the log", {
+                        description: typeof e === "string" ? e : undefined,
+                      }),
+                  );
+                }}
+                className="self-start rounded border border-[#30363d] px-2 py-0.5 text-xs text-[#e6edf3] hover:bg-[#21262d]"
+              >
+                Show the log
+              </button>
+            </>
           ) : null}
           {autostartError ? (
             <p role="alert" className="text-xs text-[#f85149]">

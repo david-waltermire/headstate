@@ -475,6 +475,9 @@ export const packagesMarkdown = (
 export const applyPackageUpdates = (repoPath: string, requests: UpdateRequest[]) =>
   invoke<RunReport>("apply_package_updates", { repoPath, requests });
 
+/// Reveal the diagnostic log in the file manager. Returns its path.
+export const revealLog = () => invoke<string>("reveal_log");
+
 /// Every CLAUDE.md in a repository, with its import tree resolved.
 export const scanClaudeMd = (repoPath: string) =>
   invoke<ClaudeFile[]>("scan_claude_md", { repoPath });

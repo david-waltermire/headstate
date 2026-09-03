@@ -587,9 +587,16 @@ export function useArtifactSizes(artifacts: Artifact[], enabled: boolean) {
   const groups = [...byRepo.entries()].sort(([a], [b]) => a.localeCompare(b));
 
   const results = useQueries({
-    queries: groups.map(([repo, paths]) => ({
+    queries: groups.map(([repo, paths], i) => ({
       queryKey: ["artifact-sizes", repo, paths.length],
-      queryFn: () => timeCall(`size_artifacts[${repo}] n=${paths.length}`, () => sizeArtifacts(paths)),
+      queryFn: () =>
+        // The GROUP INDEX, never the path. This log is meant to be sent
+        // to someone, and Settings promises it carries "counts and
+        // timings only -- never repository names". An absolute path
+        // names the user, the org and the repo; an index answers the
+        // only question the log is asked ("which group was slow") and
+        // stays comparable across lines in one file.
+        timeCall(`size_artifacts[#${i}] n=${paths.length}`, () => sizeArtifacts(paths)),
       enabled,
       staleTime: 5 * 60 * 1000,
     })),
