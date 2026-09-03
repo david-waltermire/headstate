@@ -852,12 +852,26 @@ pub async fn remove_venvs(
     app: AppHandle,
     paths: Vec<String>,
 ) -> Result<Vec<crate::caches::VenvRemoval>, String> {
-    // The policy is read from SETTINGS, never from the request. Whether
-    // a stale venv may be removed is the user's standing decision, and a
-    // caller that could pass its own would make the opt-in decorative.
+    // MANUAL removal is not gated by a setting.
+    //
+    // This used to read `remove_stale_venvs`, on the reasoning that a
+    // staleness threshold is a guess about intent. That argument holds
+    // for AUTOMATIC cleanup, where the app acts on its own -- and it was
+    // wrong here. The user is looking at a list, ticking a specific row,
+    // and confirming in a dialog: the tick IS the intent, and no other
+    // artifact asks permission twice. A Rust `target` costs minutes to
+    // rebuild and has no such gate; a virtualenv is `poetry install`.
+    //
+    // `RemovalPolicy` remains for automatic cleanup, which still needs a
+    // threshold it can be conservative about.
+    //
+    // The safety that matters is untouched and lives in `remove_venv`:
+    // re-verified at delete time, symlinks refused, containment inside
+    // Poetry's cache enforced. Those are facts about the path rather
+    // than guesses about intent.
     let prefs = get_ui_prefs(app.clone());
     let policy = crate::caches::RemovalPolicy {
-        allow_stale: prefs.remove_stale_venvs,
+        allow_stale: true,
         stale_days: crate::poll::stale_venv_days(&prefs),
     };
     let roots = get_worktree_dirs(app);

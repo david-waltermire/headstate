@@ -683,7 +683,21 @@ export function useVenvs(enabled: boolean) {
     queryKey: ["venvs"],
     queryFn: SCAN_VENVS_FN,
     enabled,
-    staleTime: 60 * 1000,
+    // 30 MINUTES, not 60 seconds.
+    //
+    // A one-minute staleTime on a scan that takes 9-40 SECONDS means
+    // the page spends most of its life re-measuring. Measured on a real
+    // machine: rescans at 18:28, 18:31, 18:34, 18:37 -- each 9-40s of
+    // scan followed by up to 73s of sizing, so the list never settled
+    // and sizes never appeared to populate.
+    //
+    // Virtualenvs do not appear and disappear on a one-minute cadence.
+    // The manual refresh and the post-removal invalidation are what
+    // update this promptly; the timer only needs to catch drift.
+    staleTime: 30 * 60 * 1000,
+    // A background refetch mid-session restarts the whole cycle for no
+    // benefit -- the data is minutes old at worst.
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -702,7 +716,11 @@ export function useVenvSizes(venvs: Venv[], enabled: boolean) {
     queryKey: ["venv-sizes", ...paths],
     queryFn: () => timeCall(`size_venvs n=${paths.length}`, () => sizeVenvs(paths)),
     enabled: enabled && paths.length > 0,
-    staleTime: 5 * 60 * 1000,
+    // Matched to the scan above. Sizing walks every virtualenv -- up to
+    // 73 seconds measured -- and a five-minute window meant it was
+    // re-running almost as often as it finished.
+    staleTime: 30 * 60 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   const sizes = new Map<string, number>();

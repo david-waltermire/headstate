@@ -63,13 +63,6 @@ export interface UiPrefs {
   /// asking someone to install a special build to produce it is much
   /// worse than a checkbox.
   diagnostic_logging: boolean;
-  /// Whether STALE virtualenvs may be selected for removal (#394).
-  ///
-  /// Orphans never need this: nothing on the machine hashes to them, so
-  /// the verdict is a fact. Stale is a judgement about a project that
-  /// still exists, and the app should not act on a judgement unless the
-  /// user supplied the intent.
-  remove_stale_venvs: boolean;
   /// Days idle before a virtualenv counts as stale. 0 means the default.
   stale_venv_days: number;
 }

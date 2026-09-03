@@ -131,10 +131,21 @@ describe("automatic cleanup settings", () => {
   /// #394: the opt-in must say what turning it on ASSERTS, since the
   /// distinction between orphaned and stale is the whole reason it
   /// exists as a separate switch.
-  it("explains what the stale opt-in asserts", () => {
+  /// The stale opt-in belongs to AUTOMATIC cleanup, beside the orphan
+  /// one -- not to manual removal, which it used to gate. Ticking a row
+  /// and confirming a dialog is already the user's intent; unattended
+  /// deletion acting on a 90-day threshold is not.
+  it("offers stale virtualenvs beside orphaned ones, under automatic cleanup", () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    expect(screen.getByLabelText(/Also allow removing stale/)).toBeTruthy();
-    expect(screen.getByText(/asserts you are done with them/i)).toBeTruthy();
+    const orphaned = screen.getByLabelText(/Orphaned virtualenvs/);
+    const stale = screen.getByLabelText(/Stale virtualenvs/);
+    expect(orphaned).toBeTruthy();
+    expect(stale).toBeTruthy();
+    // Same section: the stale toggle sits with the automatic-cleanup
+    // choices rather than in a section of its own about manual removal.
+    expect(orphaned.closest("div")?.parentElement).toBe(
+      stale.closest("div")?.parentElement,
+    );
   });
 });
 

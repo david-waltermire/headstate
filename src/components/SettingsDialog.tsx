@@ -376,30 +376,25 @@ export function SettingsDialog({
                 />
                 Orphaned virtualenvs
               </label>
+              {/* Beside the orphan toggle, not in its own section.
+                  It used to gate MANUAL removal too, which was wrong --
+                  ticking a row and confirming a dialog is already the
+                  user's intent. Unattended deletion is different: a
+                  staleness threshold is a guess, and a guess is not
+                  something the app should act on by itself. */}
+              <label className="ml-6 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={cleanup.venvs_stale}
+                  disabled={!cleanup.venvs}
+                  onChange={() =>
+                    void setCleanup({ ...cleanup, venvs_stale: !cleanup.venvs_stale })
+                  }
+                />
+                Stale virtualenvs, whose projects still exist
+              </label>
             </>
           ) : null}
-        </div>
-
-        {/* #394: stale virtualenvs, behind an explicit opt-in. */}
-        <div className="flex flex-col gap-2 border-t border-[#30363d] pt-4">
-          <div className="flex items-center gap-2">
-            <h3 className="text-sm font-semibold text-[#e6edf3]">Virtualenv cleanup</h3>
-            <HelpButton topic="stale-venvs" />
-          </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={ui?.remove_stale_venvs ?? false}
-              onChange={() =>
-                ui && void setUi({ ...ui, remove_stale_venvs: !ui.remove_stale_venvs })
-              }
-            />
-            Also allow removing stale virtualenvs
-          </label>
-          <p className="text-xs text-[#8b949e]">
-            Their projects still exist. Turning this on asserts you are done with
-            them — orphans, whose projects are gone, never needed it.
-          </p>
         </div>
 
         {/* Every one of these already worked and none was mentioned

@@ -59,9 +59,24 @@ pub struct CleanupPrefs {
     /// Whether build artifacts are considered.
     #[serde(default)]
     pub artifacts: bool,
-    /// Whether orphaned virtualenvs are considered.
+    /// Whether virtualenvs are considered at all.
     #[serde(default)]
     pub venvs: bool,
+    /// Whether STALE virtualenvs count too, not just orphans.
+    ///
+    /// The distinction is the whole reason this is separate from
+    /// `venvs`. An orphan is a FACT: nothing on the machine hashes to
+    /// it, so the project that made it is gone and it can never be used
+    /// again. Stale is a THRESHOLD -- 90 days by default -- about a
+    /// project that still exists, and a threshold is a guess at intent.
+    ///
+    /// Manual removal does not need this: ticking a row and confirming a
+    /// dialog IS the intent. An unattended pass has no such signal, so
+    /// this is where the opt-in belongs and where it now lives.
+    ///
+    /// Defaults OFF: an upgrade must never widen what runs by itself.
+    #[serde(default)]
+    pub venvs_stale: bool,
     /// Most entries a single run may propose.
     ///
     /// A blast radius, and it matters in Preview too: a run that proposed
@@ -82,6 +97,7 @@ impl Default for CleanupPrefs {
             mode: CleanupMode::Preview,
             artifacts: false,
             venvs: false,
+            venvs_stale: false,
             max_per_run: 0,
         }
     }
@@ -172,19 +188,37 @@ pub fn propose(prefs: &CleanupPrefs, roots: &[String], now: &str) -> Vec<LedgerE
     let mut out: Vec<LedgerEntry> = Vec::new();
 
     if prefs.venvs {
-        // ORPHANS only, matching what the view offers without an opt-in.
-        // An orphan is a fact -- nothing on the machine hashes to it --
-        // where stale is a judgement about a project that still exists,
-        // and an unattended pass is the last place to act on a judgement.
+        // Orphans always; stale only with `venvs_stale`.
+        //
+        // An orphan is a FACT -- nothing on the machine hashes to it, so
+        // the project that made it is gone. Stale is a THRESHOLD about a
+        // project that still exists, and an unattended pass is the last
+        // place to act on a threshold without being told to.
+        //
+        // The manual path deliberately has no such gate: ticking a row
+        // and confirming a dialog is already the user's intent. Here
+        // there is no such signal, which is why the opt-in lives here.
         let dirs = crate::caches::project_dirs(roots);
         for v in crate::caches::scan_poetry(&dirs) {
             if out.len() >= cap {
                 break;
             }
-            if v.state != crate::caches::VenvState::Orphaned {
+            // MEASURED first, because staleness needs the idle time and
+            // `scan_poetry` reports only what it can decide without a
+            // walk. The size is needed for the ledger either way, so
+            // this costs nothing extra.
+            let (bytes, idle) = crate::caches::measure(std::path::Path::new(&v.path));
+            let state = crate::caches::classify_measured(v.state, idle);
+            let eligible = match state {
+                crate::caches::VenvState::Orphaned => true,
+                crate::caches::VenvState::Stale => prefs.venvs_stale,
+                // Live is never removed unattended. Its project exists
+                // and something touched it recently.
+                crate::caches::VenvState::Live => false,
+            };
+            if !eligible {
                 continue;
             }
-            let (bytes, _) = crate::caches::measure(std::path::Path::new(&v.path));
             out.push(LedgerEntry {
                 at: now.to_string(),
                 kind: "venv".into(),
@@ -247,6 +281,60 @@ mod tests {
             artifacts: true,
             venvs: false,
             ..Default::default()
+        }
+    }
+
+    /// #453: which virtualenv states an UNATTENDED pass may propose.
+    ///
+    /// Tested as the decision itself rather than through `propose`,
+    /// which would need a real Poetry cache on the machine running the
+    /// tests -- and writing into a developer's actual cache to assert a
+    /// boolean is the wrong trade.
+    mod venv_eligibility {
+        use super::*;
+        use crate::caches::VenvState;
+
+        /// Mirrors the arm in `propose`. If that changes shape, this
+        /// test must be updated with it -- which is the point: the rule
+        /// is small enough that duplicating it beats not testing it.
+        fn eligible(state: VenvState, venvs_stale: bool) -> bool {
+            match state {
+                VenvState::Orphaned => true,
+                VenvState::Stale => venvs_stale,
+                VenvState::Live => false,
+            }
+        }
+
+        /// An orphan is a FACT -- nothing hashes to it, so the project
+        /// that made it is gone. No opt-in needed.
+        #[test]
+        fn orphans_need_no_opt_in() {
+            assert!(eligible(VenvState::Orphaned, false));
+            assert!(eligible(VenvState::Orphaned, true));
+        }
+
+        /// Stale is a THRESHOLD about a project that still exists, and
+        /// an unattended pass is the last place to act on one uninvited.
+        #[test]
+        fn stale_requires_the_opt_in() {
+            assert!(!eligible(VenvState::Stale, false));
+            assert!(eligible(VenvState::Stale, true));
+        }
+
+        /// Live is never proposed, whatever the settings say. Its
+        /// project exists and something touched it recently.
+        #[test]
+        fn live_is_never_proposed() {
+            assert!(!eligible(VenvState::Live, false));
+            assert!(!eligible(VenvState::Live, true));
+        }
+
+        /// The default must not widen what runs by itself.
+        #[test]
+        fn the_default_is_orphans_only() {
+            let p = CleanupPrefs::default();
+            assert!(!p.venvs_stale);
+            assert!(!eligible(VenvState::Stale, p.venvs_stale));
         }
     }
 

@@ -239,17 +239,6 @@ pub struct UiPrefs {
     /// almost none of them need.
     #[serde(default)]
     pub diagnostic_logging: bool,
-    /// Whether STALE virtualenvs may be selected for removal.
-    ///
-    /// Orphans need no opt-in: nothing on the machine hashes to them, so
-    /// the path that made them is gone and the verdict is a fact. Stale
-    /// is a judgement about a project that still EXISTS -- the threshold
-    /// is a guess about intent, and the app should not act on a guess
-    /// unless the user has supplied the intent themselves.
-    ///
-    /// Defaults OFF, so an upgrade never widens what a click can delete.
-    #[serde(default)]
-    pub remove_stale_venvs: bool,
     /// How many days idle before a virtualenv counts as stale.
     ///
     /// Adjustable because 90 is a default, not a fact: someone with
@@ -293,7 +282,6 @@ impl Default for UiPrefs {
             // the setting is for.
             announce_updates: true,
             // OFF: an upgrade must never widen what a click can delete.
-            remove_stale_venvs: false,
             // 0 means "use the default", resolved by `stale_venv_days`.
             stale_venv_days: 0,
             // OFF. Verbose per-request logging is a cost every user

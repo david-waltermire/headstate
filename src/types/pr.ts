@@ -508,6 +508,10 @@ export interface CleanupPrefs {
   mode: "preview" | "remove";
   artifacts: boolean;
   venvs: boolean;
+  /// Whether an unattended pass may propose STALE virtualenvs, not just
+  /// orphans. An orphan is a fact; stale is a threshold about a project
+  /// that still exists, and that is what needs the opt-in here.
+  venvs_stale: boolean;
   max_per_run: number;
 }
 

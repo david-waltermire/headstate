@@ -14,13 +14,12 @@ const state = vi.hoisted(() => ({
   sizes: new Map<string, number>(),
   idle: new Map<string, number>(),
   measuring: false,
-  allowStale: false,
+  loading: false,
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("../api/hooks", () => ({
-  useUiPrefs: () => ({ prefs: { remove_stale_venvs: state.allowStale }, set: vi.fn() }),
-  useVenvs: () => ({ data: state.venvs }),
+  useVenvs: () => ({ data: state.venvs, isLoading: state.loading }),
   useVenvSizes: () => ({
     sizes: state.sizes,
     idle: state.idle,
@@ -44,7 +43,7 @@ const venv = (over: Partial<Venv> = {}): Venv => ({
 beforeEach(() => {
   removeFn.mockClear();
   state.venvs = [];
-  state.allowStale = false;
+  state.loading = false;
   state.sizes = new Map();
   state.idle = new Map();
   state.measuring = false;
@@ -59,7 +58,11 @@ describe("VenvSection", () => {
   /// Orphaned is a FACT -- the path that made it is gone. Stale is a
   /// judgement about a project that still exists, and this view will not
   /// act on a judgement.
-  it("offers only orphans for removal", () => {
+  /// Was "offers only orphans". A 416-day-old virtualenv is now
+  /// removable without a setting: ticking the row IS the intent, and no
+  /// other artifact asks twice. `live` stays refused -- its project
+  /// exists and is in use, which is a fact rather than a threshold.
+  it("offers orphans and stale virtualenvs, but never live ones", () => {
     state.venvs = [
       venv(),
       venv({
@@ -74,8 +77,10 @@ describe("VenvSection", () => {
 
     const boxes = screen.getAllByRole("checkbox");
     expect(boxes).toHaveLength(2);
+    // The orphan.
     expect(boxes[0].hasAttribute("disabled")).toBe(false);
-    expect(boxes[1].hasAttribute("disabled")).toBe(true);
+    // 416 days idle -> stale -> now selectable, no setting involved.
+    expect(boxes[1].hasAttribute("disabled")).toBe(false);
   });
 
   /// The reported case: a project still on disk, untouched for over a
@@ -245,29 +250,27 @@ describe("selecting a stale virtualenv", () => {
   it("is selectable once the setting allows it", () => {
     state.venvs = [staleVenv()];
     state.idle = new Map([["/cache/old-project-BBBBBBBB-py3.13", 60 * 60 * 24 * 400]]);
-    state.allowStale = true;
     render(<VenvSection />);
     expect(screen.getByText("stale")).toBeTruthy();
     const box = screen.getByLabelText("Select old-project virtualenv");
     expect(box.hasAttribute("disabled")).toBe(false);
   });
 
-  /// Off by default: a stale venv's project still exists, so removing it
-  /// is a judgement the user has to make explicitly.
-  it("is not selectable while the setting is off", () => {
+  /// The gate is GONE. This asserts it stays gone: a stale virtualenv is
+  /// selectable regardless of any setting, because manual removal is not
+  /// where a staleness threshold needs the user's permission.
+  it("is selectable regardless of any setting", () => {
     state.venvs = [staleVenv()];
     state.idle = new Map([["/cache/old-project-BBBBBBBB-py3.13", 60 * 60 * 24 * 400]]);
-    state.allowStale = false;
     render(<VenvSection />);
-    const box = screen.getByLabelText(/old-project virtualenv is stale/);
-    expect(box.hasAttribute("disabled")).toBe(true);
+    const box = screen.getByLabelText("Select old-project virtualenv");
+    expect(box.hasAttribute("disabled")).toBe(false);
   });
 
   /// A live venv is never removable, at either layer.
   it("never offers a live virtualenv, even with the setting on", () => {
     state.venvs = [venv({ path: "/cache/live-CCCCCCCC-py3.13", project: "live", state: "live" })];
     state.idle = new Map([["/cache/live-CCCCCCCC-py3.13", 60]]);
-    state.allowStale = true;
     render(<VenvSection />);
     const box = screen.getByLabelText(/live virtualenv cannot be removed/);
     expect(box.hasAttribute("disabled")).toBe(true);
@@ -277,7 +280,6 @@ describe("selecting a stale virtualenv", () => {
   /// rather than a judgement.
   it("always offers an orphan", () => {
     state.venvs = [venv()];
-    state.allowStale = false;
     render(<VenvSection />);
     const box = screen.getByLabelText("Select mls-delivery-service virtualenv");
     expect(box.hasAttribute("disabled")).toBe(false);
@@ -359,5 +361,35 @@ describe("age on a virtualenv row", () => {
     state.idle = new Map();
     render(<VenvSection />);
     expect(screen.queryByText("just now")).toBeNull();
+  });
+});
+
+/// #431: the section rendered NOTHING for the 9-40 seconds the scan
+/// takes on a real machine, which is indistinguishable from having no
+/// virtualenvs -- and is exactly how it was reported.
+describe("while the scan is running", () => {
+  it("says it is looking, rather than rendering nothing", () => {
+    state.venvs = [];
+    state.loading = true;
+    const { container } = render(<VenvSection />);
+    expect(screen.getByText(/looking for poetry virtualenvs/i)).toBeTruthy();
+    expect(container.textContent).not.toBe("");
+  });
+
+  /// Once the scan has ANSWERED, an empty list really does mean none --
+  /// and then saying nothing is right.
+  it("renders nothing once an empty result is known", () => {
+    state.venvs = [];
+    state.loading = false;
+    const { container } = render(<VenvSection />);
+    expect(container.textContent).toBe("");
+  });
+
+  it("shows the rows once they arrive", () => {
+    state.venvs = [venv()];
+    state.loading = false;
+    render(<VenvSection />);
+    expect(screen.getByText("mls-delivery-service")).toBeTruthy();
+    expect(screen.queryByText(/looking for poetry/i)).toBeNull();
   });
 });
