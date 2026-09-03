@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const setDirs = vi.hoisted(() => vi.fn((d: string[]) => Promise.resolve(d)));
@@ -195,5 +195,43 @@ describe("the ready-for-review notification", () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
     expect(screen.queryByText(/newly breaks/)).toBeNull();
     expect(screen.getByText(/never on first launch/)).toBeTruthy();
+  });
+});
+
+/// #437: ~445 lines of continuous scroll became topics on the left and
+/// one panel on the right.
+describe("the settings sections", () => {
+  it("offers a topic for each group", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const nav = screen.getByRole("navigation", { name: /settings sections/i });
+    for (const label of ["General", "Repositories", "Notifications", "Cleanup", "Views"]) {
+      expect(within(nav).getByRole("button", { name: label })).toBeTruthy();
+    }
+  });
+
+  it("marks the chosen topic as current", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const nav = screen.getByRole("navigation", { name: /settings sections/i });
+    const notifications = within(nav).getByRole("button", { name: "Notifications" });
+    expect(notifications.getAttribute("aria-current")).toBeNull();
+    fireEvent.click(notifications);
+    expect(notifications.getAttribute("aria-current")).toBe("page");
+  });
+
+  /// The constraint from the issue: a reorganisation that HIDES a
+  /// control is a regression.
+  ///
+  /// Panels are hidden with CSS, never unmounted and never with the
+  /// `hidden` attribute -- that attribute removes them from the
+  /// accessibility tree, so a screen reader could not reach a setting
+  /// until the right topic was clicked. Both wrong approaches were
+  /// tried and both were caught by the existing tests failing to find
+  /// controls by role.
+  it("keeps every control reachable whichever topic is selected", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    // On "General" by default, yet a Notifications control is present.
+    expect(screen.getByRole("checkbox", { name: /desktop notifications/i })).toBeTruthy();
+    // ...and a Repositories one.
+    expect(screen.getByLabelText(/directories to scan/i)).toBeTruthy();
   });
 });

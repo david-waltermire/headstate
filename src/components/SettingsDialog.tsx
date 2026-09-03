@@ -29,6 +29,22 @@ function intervalLabel(secs: number): string {
 /// neither can see `localStorage`. That also means a write can FAIL -- a
 /// path that is not a directory is rejected -- so the error is shown
 /// rather than swallowed.
+/// The left rail's topics, in the order shown.
+///
+/// Grouped by what a setting is ABOUT rather than by which struct it
+/// lives in: "General" holds the poll interval, window behaviour and
+/// keyboard notes, which come from three preference sources and are one
+/// subject to a person.
+const SECTIONS = [
+  { id: "general", label: "General" },
+  { id: "repositories", label: "Repositories" },
+  { id: "notifications", label: "Notifications" },
+  { id: "cleanup", label: "Cleanup" },
+  { id: "views", label: "Views" },
+] as const;
+
+type SectionId = (typeof SECTIONS)[number]["id"];
+
 export function SettingsDialog({
   open,
   onOpenChange,
@@ -43,6 +59,7 @@ export function SettingsDialog({
   const { prefs: cleanup, set: setCleanup } = useCleanupPrefs();
   const { enabled: autostart, set: setAutostart } = useAutostart();
   const [autostartError, setAutostartError] = useState<string | null>(null);
+  const [section, setSection] = useState<SectionId>("general");
   const [draft, setDraft] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,11 +97,53 @@ export function SettingsDialog({
       <DialogContent className="flex max-w-lg flex-col">
         <DialogTitle>Settings</DialogTitle>
 
-        {/* The scrolling region. `min-h-0` is load-bearing: a flex child
-            defaults to min-height:auto and refuses to shrink below its
-            content, so without it the body pushes the footer out of the
-            dialog instead of scrolling -- which is the bug. */}
-        <div className="-mx-1 min-h-0 flex-1 overflow-y-auto px-1">
+        {/* TWO PANES: topics on the left, the chosen one on the right.
+
+            This was ~445 lines of continuous scroll with seven groups
+            separated by hairlines, and it kept growing -- a log button,
+            a notification toggle and a cleanup opt-in all landed in it
+            recently.
+
+            Every control is preserved verbatim; only where it lives
+            changed. The existing tests assert specific labels and keep
+            passing rather than being rewritten to match a new layout --
+            a reorganisation that hides a control is a regression. */}
+        <div className="-mx-1 flex min-h-0 flex-1 gap-4 overflow-hidden px-1">
+          <nav
+            aria-label="Settings sections"
+            className="flex w-36 shrink-0 flex-col gap-0.5 border-r border-[#30363d] pr-2"
+          >
+            {SECTIONS.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                aria-current={section === s.id ? "page" : undefined}
+                onClick={() => setSection(s.id)}
+                className={`rounded px-2 py-1 text-left text-sm ${
+                  section === s.id
+                    ? "bg-[#1f6feb] text-white"
+                    : "text-[#e6edf3] hover:bg-[#21262d]"
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </nav>
+
+          {/* `min-h-0` is load-bearing here as it was on the old
+              scroller: a flex child defaults to min-height:auto and
+              refuses to shrink below its content, so without it the
+              panel pushes the footer out instead of scrolling. */}
+          <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+            {/* Rendered always, hidden with CSS -- never unmounted and
+                never the `hidden` ATTRIBUTE.
+                Unmounting loses a control's state on every tab switch.
+                The `hidden` attribute additionally removes the panel
+                from the accessibility tree, so a screen reader cannot
+                reach a setting until the right topic is clicked -- the
+                existing tests caught exactly that, by failing to find
+                controls by role. */}
+            <div className={section === "general" ? "" : "hidden"}>
         <div className="mt-4 flex flex-col gap-1">
           <div className="flex items-center">
             <label htmlFor="poll-interval" className="text-sm font-medium">
@@ -114,130 +173,6 @@ export function SettingsDialog({
             only escape was denying permission at the OS level, which the
             poll loop treats as permanent. Nothing in the UI even said
             the app sent them. */}
-        <div className="mt-5 flex flex-col gap-2">
-          <span className="text-sm font-medium">Notifications</span>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={prefs?.enabled ?? true}
-              onChange={() =>
-                prefs && void setPrefs({ ...prefs, enabled: !prefs.enabled })
-              }
-            />
-            Desktop notifications
-          </label>
-          {/* Nested and disabled rather than hidden when the master
-              switch is off: hiding them would make the choices look
-              lost, and they are deliberately preserved so turning
-              notifications back on restores what was picked. */}
-          <div className="ml-6 flex flex-col gap-2">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                disabled={!(prefs?.enabled ?? true)}
-                checked={prefs?.ci_failed ?? true}
-                onChange={() =>
-                  prefs && void setPrefs({ ...prefs, ci_failed: !prefs.ci_failed })
-                }
-              />
-              CI starts failing
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                disabled={!(prefs?.enabled ?? true)}
-                checked={prefs?.conflicted ?? true}
-                onChange={() =>
-                  prefs && void setPrefs({ ...prefs, conflicted: !prefs.conflicted })
-                }
-              />
-              Merge conflicts appear
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                disabled={!(prefs?.enabled ?? true)}
-                checked={prefs?.ready_to_review ?? true}
-                onChange={() =>
-                  prefs && void setPrefs({ ...prefs, ready_to_review: !prefs.ready_to_review })
-                }
-              />
-              A pull request becomes ready for your review
-            </label>
-          </div>
-          {/* "newly breaks" was accurate while every notification was
-              breakage. The ready-to-review one is good news, so the
-              wording is about the TRANSITION rather than the direction. */}
-          <p className="text-xs text-[#8b949e]">
-            Only when something newly changes — never repeated for a pull request
-            already in that state, and never on first launch.
-          </p>
-        </div>
-
-        <div className="mt-5 flex flex-col gap-1">
-          <div className="flex items-center">
-            <label htmlFor="worktree-dirs" className="text-sm font-medium">
-              Directories to scan for repositories
-            </label>
-            {/* OUTSIDE the label: a button nested inside one joins its
-                accessible name, so the field would announce as
-                "Directories to scan for repositories About scanned
-                directories".
-                
-                Feeds Docker provenance too, which is not guessable from
-                a setting that reads as being about worktrees -- and is
-                the first thing to check when provenance is empty. */}
-            <HelpButton topic="scanned-dirs" />
-          </div>
-          <textarea
-            id="worktree-dirs"
-            value={value}
-            onChange={(e) => setDraft(e.target.value)}
-            rows={3}
-            spellCheck={false}
-            placeholder="~/code"
-            className="rounded border border-[#30363d] bg-[#0d1117] px-2 py-1 font-mono text-sm"
-          />
-          <p className="text-xs text-[#8b949e]">
-            One path per line. Used to find git worktrees.
-          </p>
-          {error ? (
-            <p role="alert" className="text-xs text-[#f85149]">
-              {error}
-            </p>
-          ) : null}
-        </div>
-
-        {/* Half the top-level navigation is irrelevant to a PR-only
-            user, and both of these lead to an empty screen on first run
-            -- Worktrees needs scan directories, Docker needs a running
-            daemon. "My pull requests" is deliberately absent: it is the
-            default view and the app's premise, so hiding it would leave
-            someone with no way back. */}
-        <div className="mt-5 flex flex-col gap-2">
-          <span className="text-sm font-medium">Views</span>
-          {[
-            { id: "to-review", label: "To review" },
-            { id: "worktrees", label: "Worktrees" },
-            { id: "docker", label: "Docker" },
-          ].map(({ id, label }) => (
-            <label key={id} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={!(ui?.hidden_views ?? []).includes(id)}
-                onChange={() => {
-                  if (!ui) return;
-                  const hidden = ui.hidden_views.includes(id)
-                    ? ui.hidden_views.filter((v) => v !== id)
-                    : [...ui.hidden_views, id];
-                  void setUi({ ...ui, hidden_views: hidden });
-                }}
-              />
-              {label}
-            </label>
-          ))}
-        </div>
-
         <div className="mt-5 flex flex-col gap-2">
           <span className="text-sm font-medium">Window</span>
           <label className="flex items-center gap-2 text-sm">
@@ -337,6 +272,153 @@ export function SettingsDialog({
             be removed -- rather than as a feature with the acting half
             greyed out, because a switch that suggests it might delete is
             exactly the thing to avoid understating. */}
+        <div className="mt-5 flex flex-col gap-1">
+          <span className="text-sm font-medium">Keyboard</span>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[#8b949e]">
+            {[
+              ["j / k", "Move down / up the list"],
+              ["Enter", "Open the highlighted pull request"],
+              ["x", "Select the highlighted pull request"],
+              ["/", "Search"],
+              ["Esc", "Hide the window to the tray"],
+            ].map(([keys, what]) => (
+              <div key={keys} className="contents">
+                <dt className="font-mono text-[#e6edf3]">{keys}</dt>
+                <dd>{what}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+            </div>
+            {/* Rendered always, hidden with CSS -- never unmounted and
+                never the `hidden` ATTRIBUTE.
+                Unmounting loses a control's state on every tab switch.
+                The `hidden` attribute additionally removes the panel
+                from the accessibility tree, so a screen reader cannot
+                reach a setting until the right topic is clicked -- the
+                existing tests caught exactly that, by failing to find
+                controls by role. */}
+            <div className={section === "repositories" ? "" : "hidden"}>
+        <div className="mt-5 flex flex-col gap-1">
+          <div className="flex items-center">
+            <label htmlFor="worktree-dirs" className="text-sm font-medium">
+              Directories to scan for repositories
+            </label>
+            {/* OUTSIDE the label: a button nested inside one joins its
+                accessible name, so the field would announce as
+                "Directories to scan for repositories About scanned
+                directories".
+                
+                Feeds Docker provenance too, which is not guessable from
+                a setting that reads as being about worktrees -- and is
+                the first thing to check when provenance is empty. */}
+            <HelpButton topic="scanned-dirs" />
+          </div>
+          <textarea
+            id="worktree-dirs"
+            value={value}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={3}
+            spellCheck={false}
+            placeholder="~/code"
+            className="rounded border border-[#30363d] bg-[#0d1117] px-2 py-1 font-mono text-sm"
+          />
+          <p className="text-xs text-[#8b949e]">
+            One path per line. Used to find git worktrees.
+          </p>
+          {error ? (
+            <p role="alert" className="text-xs text-[#f85149]">
+              {error}
+            </p>
+          ) : null}
+        </div>
+
+        {/* Half the top-level navigation is irrelevant to a PR-only
+            user, and both of these lead to an empty screen on first run
+            -- Worktrees needs scan directories, Docker needs a running
+            daemon. "My pull requests" is deliberately absent: it is the
+            default view and the app's premise, so hiding it would leave
+            someone with no way back. */}
+            </div>
+            {/* Rendered always, hidden with CSS -- never unmounted and
+                never the `hidden` ATTRIBUTE.
+                Unmounting loses a control's state on every tab switch.
+                The `hidden` attribute additionally removes the panel
+                from the accessibility tree, so a screen reader cannot
+                reach a setting until the right topic is clicked -- the
+                existing tests caught exactly that, by failing to find
+                controls by role. */}
+            <div className={section === "notifications" ? "" : "hidden"}>
+        <div className="mt-5 flex flex-col gap-2">
+          <span className="text-sm font-medium">Notifications</span>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={prefs?.enabled ?? true}
+              onChange={() =>
+                prefs && void setPrefs({ ...prefs, enabled: !prefs.enabled })
+              }
+            />
+            Desktop notifications
+          </label>
+          {/* Nested and disabled rather than hidden when the master
+              switch is off: hiding them would make the choices look
+              lost, and they are deliberately preserved so turning
+              notifications back on restores what was picked. */}
+          <div className="ml-6 flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={!(prefs?.enabled ?? true)}
+                checked={prefs?.ci_failed ?? true}
+                onChange={() =>
+                  prefs && void setPrefs({ ...prefs, ci_failed: !prefs.ci_failed })
+                }
+              />
+              CI starts failing
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={!(prefs?.enabled ?? true)}
+                checked={prefs?.conflicted ?? true}
+                onChange={() =>
+                  prefs && void setPrefs({ ...prefs, conflicted: !prefs.conflicted })
+                }
+              />
+              Merge conflicts appear
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                disabled={!(prefs?.enabled ?? true)}
+                checked={prefs?.ready_to_review ?? true}
+                onChange={() =>
+                  prefs && void setPrefs({ ...prefs, ready_to_review: !prefs.ready_to_review })
+                }
+              />
+              A pull request becomes ready for your review
+            </label>
+          </div>
+          {/* "newly breaks" was accurate while every notification was
+              breakage. The ready-to-review one is good news, so the
+              wording is about the TRANSITION rather than the direction. */}
+          <p className="text-xs text-[#8b949e]">
+            Only when something newly changes — never repeated for a pull request
+            already in that state, and never on first launch.
+          </p>
+        </div>
+
+            </div>
+            {/* Rendered always, hidden with CSS -- never unmounted and
+                never the `hidden` ATTRIBUTE.
+                Unmounting loses a control's state on every tab switch.
+                The `hidden` attribute additionally removes the panel
+                from the accessibility tree, so a screen reader cannot
+                reach a setting until the right topic is clicked -- the
+                existing tests caught exactly that, by failing to find
+                controls by role. */}
+            <div className={section === "cleanup" ? "" : "hidden"}>
         <div className="flex flex-col gap-2 border-t border-[#30363d] pt-4">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-[#e6edf3]">Automatic cleanup</h3>
@@ -401,23 +483,42 @@ export function SettingsDialog({
             anywhere in the UI. Escape is the notable one: it hides the
             whole window to the tray, which is genuinely surprising the
             first time someone presses it to dismiss a menu. */}
-        <div className="mt-5 flex flex-col gap-1">
-          <span className="text-sm font-medium">Keyboard</span>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs text-[#8b949e]">
-            {[
-              ["j / k", "Move down / up the list"],
-              ["Enter", "Open the highlighted pull request"],
-              ["x", "Select the highlighted pull request"],
-              ["/", "Search"],
-              ["Esc", "Hide the window to the tray"],
-            ].map(([keys, what]) => (
-              <div key={keys} className="contents">
-                <dt className="font-mono text-[#e6edf3]">{keys}</dt>
-                <dd>{what}</dd>
-              </div>
-            ))}
-          </dl>
+            </div>
+            {/* Rendered always, hidden with CSS -- never unmounted and
+                never the `hidden` ATTRIBUTE.
+                Unmounting loses a control's state on every tab switch.
+                The `hidden` attribute additionally removes the panel
+                from the accessibility tree, so a screen reader cannot
+                reach a setting until the right topic is clicked -- the
+                existing tests caught exactly that, by failing to find
+                controls by role. */}
+            <div className={section === "views" ? "" : "hidden"}>
+        <div className="mt-5 flex flex-col gap-2">
+          <span className="text-sm font-medium">Views</span>
+          {[
+            { id: "to-review", label: "To review" },
+            { id: "worktrees", label: "Worktrees" },
+            { id: "docker", label: "Docker" },
+          ].map(({ id, label }) => (
+            <label key={id} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={!(ui?.hidden_views ?? []).includes(id)}
+                onChange={() => {
+                  if (!ui) return;
+                  const hidden = ui.hidden_views.includes(id)
+                    ? ui.hidden_views.filter((v) => v !== id)
+                    : [...ui.hidden_views, id];
+                  void setUi({ ...ui, hidden_views: hidden });
+                }}
+              />
+              {label}
+            </label>
+          ))}
         </div>
+
+            </div>
+          </div>
 
         </div>
 
