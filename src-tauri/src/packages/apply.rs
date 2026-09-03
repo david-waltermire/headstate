@@ -47,6 +47,18 @@ pub enum Unsupported {
 /// deciding it should be updated.
 pub fn supported(eco: Ecosystem) -> Result<(), Unsupported> {
     match eco {
+        // Refused for the same reason as Swift, by a different route:
+        // a provider version lives as a CONSTRAINT in `.tf` source, and
+        // `terraform init -upgrade` moves it only as far as that
+        // constraint allows. Applying an update means editing the
+        // constraint, which is a source change rather than a lockfile
+        // one -- and guessing at someone's version policy is not this
+        // command's job.
+        Ecosystem::Terraform => Err(Unsupported::NoCommand(
+            "Terraform providers cannot be updated here: the version is a \
+             constraint in your .tf source, not something a lockfile edit \
+             can change.",
+        )),
         Ecosystem::Swift => Err(Unsupported::NoCommand(
             "Swift packages cannot be updated here: nothing reports what is \
              outdated, so there is no version to move to. Update the version \
@@ -112,6 +124,8 @@ pub fn update_args(eco: Ecosystem, name: &str, version: &str) -> Vec<String> {
         Ecosystem::Dotnet => vec![s("add"), s("package"), s(name), s("--version"), s(version)],
         // No version argument exists for `pod update`.
         Ecosystem::Cocoapods => vec![s("update"), s(name)],
+        // Unreachable: `supported` refuses Terraform first.
+        Ecosystem::Terraform => vec![s("version")],
         // Unreachable: `supported` refuses Swift before this is called.
         // Kept total rather than panicking, because a panic here would
         // take down the whole command for a case the caller already

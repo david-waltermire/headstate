@@ -1004,7 +1004,17 @@ pub fn set_cleanup_prefs(
 pub async fn check_packages(
     repo_path: String,
 ) -> Result<Vec<crate::packages::ProjectReport>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    // TWO PHASES.
+    //
+    // The blocking pass spawns each ecosystem's tool and parses its
+    // output. Terraform and Swift have no such tool, so they come back
+    // with `latest == current` and `Bump::Unknown`, and `registry::
+    // enrich` fills those in over HTTP afterwards.
+    //
+    // Split this way rather than made async throughout because the
+    // subprocess work must stay off the event loop, and the network work
+    // must not sit inside a blocking task.
+    let mut reports = tauri::async_runtime::spawn_blocking(move || {
         let reports = crate::packages::run::check_repo(std::path::Path::new(&repo_path));
         // Counts only -- never package names, which would put a private
         // dependency list in a log meant to be shared.
@@ -1020,7 +1030,14 @@ pub async fn check_packages(
         reports
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    // Phase two. Only touches rows whose ecosystem needs a registry, and
+    // a failed lookup leaves the row at `Bump::Unknown` rather than
+    // claiming it is current.
+    crate::packages::registry::enrich(&mut reports).await;
+
+    Ok(reports)
 }
 
 /// The updates as markdown, for handing to an agent.

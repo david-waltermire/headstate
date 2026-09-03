@@ -1,5 +1,5 @@
 use super::model::{Ecosystem, EcosystemReport, Outdated, ProjectReport};
-use super::{detect, tools, version};
+use super::{detect, swift, terraform, tools, version};
 use std::path::Path;
 
 /// Whether this project's Yarn is version 1.
@@ -54,15 +54,31 @@ pub fn check(repo: &Path, eco: Ecosystem) -> EcosystemReport {
     // Saying so is the point. An empty list would read as "up to date",
     // which is the same inversion a missing tool would produce, and this
     // module exists to refuse it.
+    // Terraform answers from a FILE plus the registry, never a command.
+    //
+    // `terraform providers` reports the constraints (`>= 5.0.0`) and
+    // does not diff, so there is nothing to spawn and parse. The lock
+    // file carries the resolved versions, and `enrich` fills in the
+    // latest asynchronously afterwards.
+    if eco == Ecosystem::Terraform {
+        return EcosystemReport {
+            ecosystem: eco,
+            outdated: terraform::pinned(repo),
+            error: None,
+        };
+    }
+
+    // Swift answers from a FILE plus the Git host, never a command.
+    //
+    // No command reports outdated Xcode-managed dependencies, which is
+    // what this used to say and stop at. But Swift packages are Git
+    // repositories and their versions are TAGS, so `Package.resolved`
+    // plus a tag listing answers the question -- see `packages::swift`.
     if eco == Ecosystem::Swift {
         return EcosystemReport {
             ecosystem: eco,
-            outdated: Vec::new(),
-            error: Some(
-                "Swift packages are not checked yet: no command reports outdated \
-                 Xcode-managed dependencies."
-                    .into(),
-            ),
+            outdated: swift::pinned(repo),
+            error: None,
         };
     }
 
@@ -111,6 +127,9 @@ pub fn check(repo: &Path, eco: Ecosystem) -> EcosystemReport {
         Ecosystem::Uv => &["pip", "list", "--outdated", "--format", "json"],
         Ecosystem::Dotnet => &["list", "package", "--outdated"],
         Ecosystem::Cocoapods => &["outdated"],
+        // Neither reaches here: both return early above, because
+        // neither has a command that answers the question.
+        Ecosystem::Terraform => &["version"],
         // Swift never reaches here -- `check` returns early for it,
         // because there is no command that answers the question.
         Ecosystem::Swift => &["--version"],
@@ -255,8 +274,8 @@ pub fn parse(stdout: &str, eco: Ecosystem, repo: &Path) -> Vec<Outdated> {
         Ecosystem::Poetry => parse_poetry(stdout),
         Ecosystem::Dotnet => parse_dotnet(stdout, repo),
         Ecosystem::Cocoapods => parse_cocoapods(stdout),
-        // Handled before any command runs.
-        Ecosystem::Swift => Vec::new(),
+        // Both handled before any command runs: neither has one.
+        Ecosystem::Swift | Ecosystem::Terraform => Vec::new(),
     }
 }
 
@@ -567,18 +586,38 @@ Project `Api` has the following updates
         assert!(!is_real_failure(true, true, ""));
     }
 
-    /// Swift must say it cannot check, not report an empty list.
+    /// Swift IS checked now, from `Package.resolved` plus the Git host's
+    /// tags -- #434.
     ///
-    /// An empty list reads as "up to date", which is the same inversion
-    /// a missing tool would produce -- and on an iOS repository that
-    /// would be a confident wrong answer about every dependency it has.
+    /// The old assertion here was that it reported "cannot check". That
+    /// was accurate about COMMANDS (nothing diffs Xcode-managed
+    /// dependencies) and wrong about the question: Swift versions are
+    /// git tags, and the resolved file names both the pin and its source
+    /// URL.
+    ///
+    /// A repository with no resolved file still reports NOTHING rather
+    /// than an error: there is genuinely nothing pinned, which is a real
+    /// empty rather than a failed check.
     #[test]
-    fn swift_states_that_it_cannot_check_rather_than_reporting_nothing() {
+    fn swift_reports_its_pins_rather_than_refusing() {
         let t = tempfile::TempDir::new().unwrap();
         let r = check(t.path(), Ecosystem::Swift);
-        assert!(r.outdated.is_empty());
-        let msg = r.error.expect("Swift must not report an empty success");
-        assert!(msg.contains("not checked"), "{msg}");
+        assert!(r.outdated.is_empty(), "no resolved file, nothing pinned");
+        assert!(r.error.is_none(), "an absent file is not a failure");
+
+        // With one, the pin is reported -- and left UNCOMPARED until
+        // enrichment, never claimed to be current.
+        std::fs::write(
+            t.path().join("Package.resolved"),
+            r#"{"pins":[{"identity":"x",
+               "location":"https://github.com/octocat/example.git",
+               "state":{"revision":"abc","version":"1.2.3"}}],"version":3}"#,
+        )
+        .unwrap();
+        let r = check(t.path(), Ecosystem::Swift);
+        assert_eq!(r.outdated.len(), 1);
+        assert_eq!(r.outdated[0].current, "1.2.3");
+        assert_eq!(r.outdated[0].bump, crate::packages::model::Bump::Unknown);
     }
 
     #[test]
