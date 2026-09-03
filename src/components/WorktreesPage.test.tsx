@@ -943,6 +943,47 @@ describe("WorktreesPage", () => {
     // contexts, both the main checkout. The tests that lived here
     // asserted a feature that had matched nothing since it shipped.
 
+    /// Reported: the modal stayed open after a successful bulk removal,
+    /// with no sign anything had happened, while the count silently
+    /// ticked down behind it.
+    it("closes the dialog after a successful removal", async () => {
+      state.classified = threeSafe();
+      removeManyFn.mockResolvedValueOnce([
+        { path: "/code/a", error: null },
+        { path: "/code/b", error: null },
+      ]);
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^remove 2 worktrees$/i }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    /// The error is in a toast; a modal left open on top of it hides the
+    /// message that explains what went wrong.
+    it("closes the dialog when the removal fails outright", async () => {
+      state.classified = threeSafe();
+      removeManyFn.mockRejectedValueOnce("git exploded");
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^remove 2 worktrees$/i }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    /// `bulkBusy` existed and nothing read it, so a slow removal showed
+    /// an unchanging button and looked inert.
+    it("says it is working while the removal runs", async () => {
+      state.classified = threeSafe();
+      let settle: (v: { path: string; error: string | null }[]) => void = () => {};
+      removeManyFn.mockImplementationOnce(() => new Promise((res) => { settle = res; }));
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^remove 2 worktrees$/i }));
+
+      await screen.findByRole("button", { name: /removing/i });
+      settle([{ path: "/code/a", error: null }, { path: "/code/b", error: null }]);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
     it("counts only the safe rows, in the label", () => {
       state.classified = threeSafe();
       render(<WorktreesPage />);

@@ -11,6 +11,7 @@ import type {
   PullRequest,
   Venv,
   Worktree,
+  WorktreeRepo,
 } from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
@@ -1004,8 +1005,36 @@ export function useRemoveWorktrees() {
       const removed = new Set(
         outcomes.filter((o) => o.error === null).map((o) => o.path),
       );
-      qc.setQueryData<Worktree[]>(["worktree-safety", repoPath], (old) =>
+      // EVERY cached classification, not just `repoPath`'s.
+      //
+      // The bulk button's targets come from what is DISPLAYED, which on
+      // the all-repositories view spans many repos -- while this only
+      // ever updated the selected one. So worktrees in other
+      // repositories were really removed, the toast correctly said so,
+      // and their rows came straight back because their cache still
+      // held them. `repoPath` is also "" when nothing is selected, and
+      // then this updated a key that does not exist at all.
+      //
+      // Filtering every cached list by path is safe regardless of which
+      // repository a path belongs to: a path that is not in a list
+      // leaves it unchanged.
+      qc.setQueriesData<Worktree[]>({ queryKey: ["worktree-safety"] }, (old) =>
         old?.filter((w) => !removed.has(w.path)),
+      );
+      // The base listing too, and by EDITING it rather than only
+      // invalidating.
+      //
+      // The page renders `classified ?? selected?.worktrees` -- so when
+      // the classification has not arrived (or was cleared), it falls
+      // back to this list. Invalidation alone leaves the stale rows on
+      // screen until the refetch lands, which is what "the same 3
+      // worktrees are still listed" was: they really were removed, and
+      // the fallback was still serving them.
+      qc.setQueryData<WorktreeRepo[]>(["worktrees"], (old) =>
+        old?.map((r) => ({
+          ...r,
+          worktrees: r.worktrees.filter((w) => !removed.has(w.path)),
+        })),
       );
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
       return outcomes;

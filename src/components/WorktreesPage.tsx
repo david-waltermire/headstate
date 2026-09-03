@@ -980,9 +980,16 @@ export function WorktreesPage() {
                 type="button"
                 onClick={() => {
                   const targets = shownSafe.map((w) => w.path);
+                  // BUSY, and then CLOSED. Neither was set: the dialog
+                  // stayed open with an unchanging button while the
+                  // removal ran, so it looked like the click did
+                  // nothing -- and then the count silently ticked down
+                  // underneath as the list updated behind the modal.
+                  setBulkBusy(true);
                   removeMany(selected?.path ?? "", targets).then(
                     (outcomes) => {
                       setBulkBusy(false);
+                      setBulkOpen(false);
                       const failed = outcomes.filter((o) => o.error !== null);
                       const ok = outcomes.length - failed.length;
                       // Never a bare "done": a worktree that went dirty
@@ -1000,15 +1007,25 @@ export function WorktreesPage() {
                     },
                     (e: unknown) => {
                       setBulkBusy(false);
+                      // Closed on failure too: the error is in the
+                      // toast, and leaving a modal open over it hides
+                      // the very message that explains what happened.
+                      setBulkOpen(false);
                       toast.error("The bulk removal could not run", {
                         description: typeof e === "string" ? e : undefined,
                       });
                     },
                   );
                 }}
-                className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149]"
+                disabled={bulkBusy}
+                className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149] disabled:opacity-50"
               >
-                Remove {safeCount} worktree{safeCount === 1 ? "" : "s"}
+                {/* `bulkBusy` existed and nothing read it, so a slow
+                    removal showed an unchanged button and a live count
+                    ticking down behind the modal. */}
+                {bulkBusy
+                  ? "Removing…"
+                  : `Remove ${safeCount} worktree${safeCount === 1 ? "" : "s"}`}
               </button>
             </div>
           </DialogContent>
