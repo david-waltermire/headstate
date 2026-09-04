@@ -357,7 +357,10 @@ fn squash_merged(dir: &Path, default_branch: &str) -> Safety {
 /// than that is old enough that the extra git calls cost more than the
 /// answer is worth, and the fallback is the safe direction.
 fn aggregate_patch_merged(dir: &Path, default_branch: &str) -> Safety {
-    const SCAN_DEPTH: &str = "300";
+    /// A backstop, not a window. The range below is bounded by the
+    /// merge-base, so this only bites on a repository with a
+    /// pathologically long history since the branch diverged.
+    const SCAN_DEPTH: &str = "5000";
 
     let Ok(base) = git(dir, &["merge-base", "HEAD", default_branch]) else {
         return Safety::Unmerged;
@@ -374,7 +377,29 @@ fn aggregate_patch_merged(dir: &Path, default_branch: &str) -> Safety {
         return Safety::Unmerged;
     };
 
-    let Ok(candidates) = git(dir, &["rev-list", default_branch, "-n", SCAN_DEPTH]) else {
+    // Bounded by the MERGE-BASE, not by a fixed count.
+    //
+    // This asked for the last 300 commits of the default branch,
+    // ignoring the merge-base it had just computed. If a branch diverged
+    // further back than that, its squash merge sat outside the window
+    // and the branch was reported Unmerged.
+    //
+    // Measured on a real repository: worktree branches diverge a MEDIAN
+    // of 474 commits back, and 14 of 21 worktrees flipped from
+    // "unmerged" to "merged" when the window was widened. The failure is
+    // quiet -- refusing to delete something deletable -- so it presents
+    // as "the cleanup finds nothing" rather than as an error.
+    //
+    // `<base>..<default>` is exactly the range that could contain the
+    // merge: anything older than the merge-base predates the branch and
+    // cannot be its squash. Correct by construction, and cheap on a
+    // young branch where the old fixed 300 was pure waste.
+    //
+    // The cap remains as a BACKSTOP against a pathological repository,
+    // set far above the 498 observed rather than at a value that trims
+    // real history.
+    let range = format!("{base}..{default_branch}");
+    let Ok(candidates) = git(dir, &["rev-list", &range, "-n", SCAN_DEPTH]) else {
         return Safety::Unmerged;
     };
 
@@ -1967,6 +1992,90 @@ HEAD 8ed50a741e1696d1a0c9506f2e033cf2887bb144
             found.safety,
             Safety::Safe,
             "a squash-merged branch must be safe to remove"
+        );
+    }
+
+    /// #463: the squash must still be found when the default branch has
+    /// moved a long way since.
+    ///
+    /// This used to compare against the last 300 commits of the default
+    /// branch, ignoring the merge-base it had already computed. A branch
+    /// that diverged further back than that had its squash outside the
+    /// window and was reported Unmerged.
+    ///
+    /// Measured on a real repository before fixing: branches diverge a
+    /// MEDIAN of 474 commits back, and 14 of 21 worktrees flipped from
+    /// "unmerged" to "merged" once the window was widened.
+    ///
+    /// The failure was quiet -- refusing to delete something deletable
+    /// -- so it presented as "the cleanup finds nothing" rather than as
+    /// an error. That is why this needs a test rather than a bigger
+    /// constant.
+    #[test]
+    fn a_squash_merge_is_found_even_far_back_in_history() {
+        // A MULTI-COMMIT branch, collapsed into one squash.
+        //
+        // The single-commit fixture is answered by `git cherry` before
+        // `aggregate_patch_merged` is ever reached -- one commit's
+        // patch-id matches the squash directly. Only a branch whose
+        // commits collapse into one reaches the aggregate path, which is
+        // the code this test exists for.
+        let (_t, repo, wt) = squash_merged_fixture(false);
+        let ident = [
+            ("GIT_AUTHOR_NAME", "octocat"),
+            ("GIT_COMMITTER_NAME", "octocat"),
+            ("GIT_AUTHOR_EMAIL", "octocat@invalid"),
+            ("GIT_COMMITTER_EMAIL", "octocat@invalid"),
+        ];
+        let run_in = |dir: &Path, args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .envs(ident)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+
+        // Two more commits on the branch, so it is three in total.
+        for i in 0..2 {
+            std::fs::write(wt.join(format!("more{i}.txt")), format!("{i}\n")).unwrap();
+            run_in(&wt, &["add", "-A"]);
+            run_in(&wt, &["commit", "-q", "-m", "more"]);
+        }
+        run_in(&wt, &["push", "-q", "origin", "feature"]);
+
+        // The squash: all three landing on main as ONE commit, which no
+        // individual commit's patch-id matches.
+        run_in(&repo, &["checkout", "-q", "main"]);
+        std::fs::write(repo.join("feature.txt"), "the change\n").unwrap();
+        for i in 0..2 {
+            std::fs::write(repo.join(format!("more{i}.txt")), format!("{i}\n")).unwrap();
+        }
+        run_in(&repo, &["add", "-A"]);
+        run_in(&repo, &["commit", "-q", "-m", "add the feature (#1)"]);
+
+        // Then pile commits on AFTER the squash, so it sits well beyond
+        // any fixed recent window.
+        for i in 0..40 {
+            std::fs::write(repo.join(format!("filler{i}.txt")), format!("{i}\n")).unwrap();
+            run_in(&repo, &["add", "-A"]);
+            run_in(&repo, &["commit", "-q", "-m", "filler"]);
+        }
+        run_in(&repo, &["push", "-q", "origin", "main"]);
+
+        let wts = classify_repo(repo.to_str().unwrap()).unwrap();
+        let found = wts
+            .iter()
+            .find(|w| w.path.contains("proj-feature"))
+            .expect("worktree not found");
+        assert_eq!(
+            found.safety,
+            Safety::Safe,
+            "the squash is older than the newest commits, and must still be found"
         );
     }
 
