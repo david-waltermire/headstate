@@ -20,6 +20,7 @@ import {
 } from "../api/hooks";
 import {
   formatSize,
+  totalSize,
   canClaudify,
   isPending,
   isSafe,
@@ -942,12 +943,15 @@ export function WorktreesPage() {
               {/* Sizes are already computed, and reclaimed space is the
                   number that makes this decision -- it is why the view
                   exists. */}
-              Reclaims {formatSize(
-                shown
-                  .filter((w) => isSafe(w.safety))
-                  .reduce((n, w) => n + (w.size_bytes ?? 0), 0) || null,
-              )}
-              . Each is re-checked before deletion, so anything that changed
+              {/* "Still measuring" and "nothing to reclaim" are
+                  different answers and used to share one dash. */}
+              {(() => {
+                const total = totalSize(shown.filter((w) => isSafe(w.safety)));
+                return total === null
+                  ? "Sizes are still being measured."
+                  : `Reclaims ${formatSize(total)}.`;
+              })()}{" "}
+              Each is re-checked before deletion, so anything that changed
               since the scan is skipped.
             </p>
             {/* The third system this page could never reach. Docker
@@ -980,6 +984,19 @@ export function WorktreesPage() {
                 type="button"
                 onClick={() => {
                   const targets = shownSafe.map((w) => w.path);
+                  // Closed NOW, not when the batch finishes.
+                  //
+                  // It used to close in `.then()`, so the modal sat over
+                  // the app for the whole removal -- around 30 seconds
+                  // for ~100 worktrees -- and nothing else could be
+                  // used. The work does not need the dialog: progress
+                  // is already on the toolbar button ("Removed 12 of
+                  // 40…"), the outcomes arrive as a toast, and the
+                  // promise runs to completion regardless of what is on
+                  // screen. So the user asked for a deletion and gets
+                  // their app back.
+                  setBulkBusy(true);
+                  setBulkOpen(false);
                   removeMany(selected?.path ?? "", targets).then(
                     (outcomes) => {
                       setBulkBusy(false);
@@ -1006,9 +1023,15 @@ export function WorktreesPage() {
                     },
                   );
                 }}
-                className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149]"
+                disabled={bulkBusy}
+                className="rounded bg-[#da3633] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#f85149] disabled:opacity-50"
               >
-                Remove {safeCount} worktree{safeCount === 1 ? "" : "s"}
+                {/* `bulkBusy` existed and nothing read it, so a slow
+                    removal showed an unchanged button and a live count
+                    ticking down behind the modal. */}
+                {bulkBusy
+                  ? "Removing…"
+                  : `Remove ${safeCount} worktree${safeCount === 1 ? "" : "s"}`}
               </button>
             </div>
           </DialogContent>

@@ -47,6 +47,21 @@ chrono = { version = "0.4", features = ["serde"] }
 # venv naming, which is base64(sha256(project path))[:8].
 sha2 = "0.10"
 base64 = "0.22"
+# ALSO already in the tree, pulled in by octocrab at this version.
+#
+# Needed by the two ecosystems whose "latest version" answer comes from
+# an HTTP registry rather than a local command: Terraform providers and
+# Swift packages.
+#
+# `json` ONLY. The obvious `rustls` feature pulls in quinn (QUIC) and a
+# crypto stack -- 125 new lock entries -- despite the crate already being
+# present. With json alone the lock grows by one line, which is what
+# "already in the tree" is supposed to mean.
+reqwest = { version = "0.13", default-features = false, features = ["json"] }
+# For the crypto provider reqwest needs at runtime. Already in the tree
+# via octocrab, which is built with `rustls-ring` -- matching that here
+# means no second implementation is compiled in.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tauri-plugin-log = "2.9.0"
 # Auto-update. Verifies an Ed25519 signature over each bundle with the
 # public key in `tauri.conf.json` -- separate from Apple code signing

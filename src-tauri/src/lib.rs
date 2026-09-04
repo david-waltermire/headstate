@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod auth;
+pub mod branches;
 pub mod caches;
 pub mod claudemd;
 pub mod cleanup;
@@ -65,6 +66,22 @@ pub fn run() {
         .plugin(
             tauri_plugin_log::Builder::new()
                 .level(log::LevelFilter::Info)
+                // KEEP the previous file. The default discards it on
+                // startup, which destroyed a real diagnostic recording
+                // mid-analysis: 305 lines became 1 the moment the app
+                // relaunched.
+                //
+                // That is not a corner case for this feature. The
+                // workflow is "turn the log on, reproduce the problem,
+                // send the file" -- and reproducing a hang or a slow
+                // start is exactly what makes someone quit and relaunch,
+                // destroying the evidence of the thing they were
+                // capturing.
+                //
+                // Bounded, because this app is a disk-cleanup tool and
+                // must not become the thing filling the disk.
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+                .max_file_size(8 * 1024 * 1024)
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
@@ -75,6 +92,7 @@ pub fn run() {
         )
         .invoke_handler(tauri::generate_handler![
             commands::diag_log,
+            commands::reveal_log,
             commands::pull_checkout,
             commands::remove_orphan,
             commands::get_cached,
@@ -108,6 +126,7 @@ pub fn run() {
             commands::get_cleanup_prefs,
             commands::set_cleanup_prefs,
             commands::apply_package_updates,
+            commands::open_update_pr,
             commands::scan_claude_md,
             commands::read_claude_md,
             commands::check_packages,
@@ -129,6 +148,9 @@ pub fn run() {
             commands::set_worktree_dirs,
             commands::list_worktrees,
             commands::classify_worktrees,
+            commands::list_branches,
+            commands::delete_branches,
+            commands::delete_remote_branches,
             commands::remove_worktree,
             commands::remove_worktrees,
             commands::docker_state,

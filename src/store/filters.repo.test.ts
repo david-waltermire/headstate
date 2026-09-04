@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useFilters } from "./filters";
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} };
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {},
+  branches: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} };
 
 beforeEach(() => {
   useFilters.setState({

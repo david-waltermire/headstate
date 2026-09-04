@@ -4,7 +4,8 @@ import { FilterBar } from "./FilterBar";
 import { useFilters } from "@/store/filters";
 import { PR_FIXTURES } from "../fixtures/prs";
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} };
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {},
+  branches: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} };
 
 afterEach(() => {
   cleanup();
