@@ -22,14 +22,44 @@ const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 /// git call that hangs must become "cannot say", never "safe to
 /// delete".
 pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
-    let child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    // RETRIED on a spawn failure.
+    //
+    // Spawning git intermittently fails with ENOENT under process
+    // load, for a git binary that plainly exists. #447 hit this on
+    // macOS `posix_spawn`; the failure that prompted this change was
+    // on ubuntu CI, so it is not one platform's quirk. Observed both
+    // times as a spawn that never ran, never as a git that answered.
+    //
+    // This function did not retry, which was survivable while its
+    // callers were the worktree scan -- a few dozen calls. The branch
+    // scan calls it hundreds of times across 8 threads, and that is
+    // where it started failing.
+    //
+    // Only the SPAWN is retried. A git that RAN is believed, whatever
+    // it said -- retrying a real failure would turn a clear error into
+    // a slow one.
+    let mut spawned = None;
+    for _ in 0..3 {
+        match Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => {
+                spawned = Some(Ok(c));
+                break;
+            }
+            Err(e) => spawned = Some(Err(e)),
+        }
+    }
+    let child = match spawned {
+        Some(Ok(c)) => c,
+        Some(Err(e)) => return Err(e.to_string()),
+        None => return Err("could not spawn git".to_string()),
+    };
 
     // A thread that BLOCKS on the child, rather than polling it. Polling
     // was measurably wrong here: a flat 20ms interval took the full scan

@@ -29,6 +29,50 @@ const WORKERS: usize = 8;
 /// contain almost anything else, including `|` and spaces.
 const REF_FORMAT: &str = "%(refname:short)\t%(upstream:short)\t%(committerdate:iso8601)\t%(authorname)\t%(objectname:short)";
 
+/// Spawn a git command, retrying only the SPAWN.
+///
+/// Same reason as `git()`: spawning git intermittently fails with
+/// ENOENT under load. It matters more here than anywhere else, because the
+/// callers below treat a spawn failure as "no patch-ids" -- which
+/// reports every branch as unmerged, quietly, as "nothing is
+/// deletable" rather than as an error.
+fn spawn_git(dir: &Path, args: &[&str], stdin: bool) -> Option<std::process::Child> {
+    use std::process::Stdio;
+    retrying(|| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C")
+            .arg(dir)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        if stdin {
+            cmd.stdin(Stdio::piped());
+        }
+        cmd.spawn()
+    })
+}
+
+/// How many times a spawn is attempted before giving up.
+///
+/// Three, not two: the observed failures were single transient
+/// ENOENTs, and a second attempt already covers those. The third is
+/// headroom for a burst, and it costs nothing when the first succeeds.
+const SPAWN_ATTEMPTS: usize = 3;
+
+/// Run `attempt` until it succeeds, up to `SPAWN_ATTEMPTS` times.
+///
+/// Split out from `spawn_git` so the retry itself is testable without
+/// having to provoke a real ENOENT from the kernel, which is exactly
+/// the thing that cannot be summoned on demand.
+fn retrying<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> Option<T> {
+    for _ in 0..SPAWN_ATTEMPTS {
+        if let Ok(v) = attempt() {
+            return Some(v);
+        }
+    }
+    None
+}
+
 /// The default branch, read from the remote rather than assumed.
 ///
 /// Assuming `main` here would mean classifying every branch against a
@@ -131,7 +175,6 @@ fn ahead_behind(dir: &Path, default: &str) -> std::collections::HashMap<String, 
 /// version take minutes.
 fn mainline_patch_ids(dir: &Path, default: &str) -> HashSet<String> {
     use std::io::Write;
-    use std::process::Stdio;
 
     let mut set = HashSet::new();
     let Ok(shas) = git(dir, &["rev-list", default, "-n", "5000"]) else {
@@ -141,15 +184,11 @@ fn mainline_patch_ids(dir: &Path, default: &str) -> HashSet<String> {
         return set;
     }
 
-    let Ok(mut log) = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["log", "--stdin", "--no-walk", "-p", "--format=commit %H"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
+    let Some(mut log) = spawn_git(
+        dir,
+        &["log", "--stdin", "--no-walk", "-p", "--format=commit %H"],
+        true,
+    ) else {
         return set;
     };
     if let Some(mut stdin) = log.stdin.take() {
@@ -159,15 +198,7 @@ fn mainline_patch_ids(dir: &Path, default: &str) -> HashSet<String> {
         return set;
     };
 
-    let Ok(mut pid) = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["patch-id", "--stable"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
+    let Some(mut pid) = spawn_git(dir, &["patch-id", "--stable"], true) else {
         return set;
     };
     // Feed stdin from ITS OWN THREAD.
@@ -218,7 +249,6 @@ fn mainline_patch_ids(dir: &Path, default: &str) -> HashSet<String> {
 /// The patch-id of everything `branch` adds on top of the default.
 fn branch_patch_id(dir: &Path, branch: &str, default: &str) -> Option<String> {
     use std::io::Write;
-    use std::process::Stdio;
 
     let base = git(dir, &["merge-base", branch, default]).ok()?;
     let base = base.trim();
@@ -226,13 +256,8 @@ fn branch_patch_id(dir: &Path, branch: &str, default: &str) -> Option<String> {
         return None;
     }
 
-    let diff = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["diff", base, branch])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
+    let diff = spawn_git(dir, &["diff", base, branch], false)?
+        .wait_with_output()
         .ok()?;
     // An empty diff means there is nothing to compare. Claiming merged
     // on that would greenlight a deletion nothing established.
@@ -240,15 +265,7 @@ fn branch_patch_id(dir: &Path, branch: &str, default: &str) -> Option<String> {
         return None;
     }
 
-    let mut child = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["patch-id", "--stable"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
+    let mut child = spawn_git(dir, &["patch-id", "--stable"], true)?;
     child.stdin.take()?.write_all(&diff.stdout).ok()?;
     let out = child.wait_with_output().ok()?;
     if !out.status.success() {
@@ -629,6 +646,52 @@ mod tests {
         assert_eq!(b.upstream.as_deref(), Some("origin/shared"));
         // And it is listed once, not twice.
         assert_eq!(out.iter().filter(|x| x.name == "origin/shared").count(), 0);
+    }
+
+    /// The retry is the fix for the CI failure that stopped v4.6.0,
+    /// so it gets a test of its own rather than resting on "the flake
+    /// stopped happening".
+    ///
+    /// A real ENOENT under load cannot be summoned on demand, which is
+    /// why `retrying` is split out: the transient failure is injected
+    /// instead.
+    #[test]
+    fn a_spawn_that_fails_twice_still_answers() {
+        let mut calls = 0;
+        let got = retrying(|| {
+            calls += 1;
+            if calls <= 2 {
+                Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+            } else {
+                Ok("answered")
+            }
+        });
+        assert_eq!(got, Some("answered"));
+        assert_eq!(calls, 3, "it must keep trying, not give up after one");
+    }
+
+    /// A spawn that never works must report failure, not spin.
+    #[test]
+    fn a_spawn_that_always_fails_gives_up_and_says_so() {
+        let mut calls = 0;
+        let got: Option<()> = retrying(|| {
+            calls += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        });
+        assert_eq!(got, None);
+        assert_eq!(calls, SPAWN_ATTEMPTS);
+    }
+
+    /// The common path pays nothing: one call, no retries.
+    #[test]
+    fn a_spawn_that_works_is_attempted_once() {
+        let mut calls = 0;
+        let got = retrying(|| {
+            calls += 1;
+            Ok::<_, std::io::Error>(7)
+        });
+        assert_eq!(got, Some(7));
+        assert_eq!(calls, 1);
     }
 
     /// `origin/HEAD` is a symref, not something anyone deletes.
