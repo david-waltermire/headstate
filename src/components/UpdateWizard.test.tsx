@@ -167,6 +167,70 @@ describe("UpdateWizard", () => {
     await waitFor(() => expect(toasts.error).toHaveBeenCalled());
   });
 
+  /// #478: one repository declares the same dependency in several
+  /// manifests, so `ecosystem:name` was not a unique row identity --
+  /// ticking one checkbox ticked every row with that name.
+  it("gives each manifest its own checkbox for the same package", () => {
+    const dup = (manifest: string, current: string): Outdated => ({
+      ...pkg("registry.terraform.io/hashicorp/aws"),
+      manifest,
+      current,
+    });
+    show([dup("a/main.tf", "5.100.0"), dup("b/main.tf", "5.90.0")]);
+
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes).toHaveLength(2);
+    fireEvent.click(boxes[0]);
+    expect((boxes[0] as HTMLInputElement).checked).toBe(true);
+    expect((boxes[1] as HTMLInputElement).checked).toBe(false);
+  });
+
+  /// Two rows for one dependency are indistinguishable without saying
+  /// which file each came from.
+  it("names the manifest each row belongs to", () => {
+    show([pkg("lodash")]);
+    expect(screen.getByText("package.json")).toBeTruthy();
+  });
+
+  it("selects and clears every applicable package", () => {
+    show([pkg("lodash"), pkg("express")]);
+    fireEvent.click(screen.getByRole("button", { name: /select all 2/i }));
+    for (const b of screen.getAllByRole("checkbox")) {
+      expect((b as HTMLInputElement).checked).toBe(true);
+    }
+    fireEvent.click(screen.getByRole("button", { name: /^clear$/i }));
+    for (const b of screen.getAllByRole("checkbox")) {
+      expect((b as HTMLInputElement).checked).toBe(false);
+    }
+  });
+
+  /// The backend refuses Terraform (`apply::supported`), but the UI
+  /// listed it as applicable -- so every Terraform row was selectable,
+  /// counted toward the button, and failed at apply time with a reason
+  /// the user could have been given before clicking.
+  it("does not offer Terraform providers as applicable", () => {
+    show([pkg("registry.terraform.io/hashicorp/aws", "terraform")]);
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    expect(screen.getByText(/constraint in your .tf source/i)).toBeTruthy();
+  });
+
+  /// The `2.8.0 → 2.8.0` rows in the report. `registry::enrich` leaves
+  /// a provider at `latest == current` with `bump: "unknown"` when its
+  /// lookup FAILS -- meaning "cannot compare", not "up to date". The
+  /// wizard rendered that identically to a real update.
+  it("does not offer a row whose latest could not be determined", () => {
+    const unknown: Outdated = {
+      ...pkg("registry.terraform.io/hashicorp/archive"),
+      ecosystem: "npm",
+      current: "2.8.0",
+      latest: "2.8.0",
+      bump: "unknown",
+    };
+    show([unknown]);
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    expect(screen.getByText(/could not be determined/i)).toBeTruthy();
+  });
+
   describe("opening a pull request from the report", () => {
     const runToReport = async () => {
       show([pkg("lodash")]);
