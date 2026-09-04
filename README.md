@@ -42,9 +42,10 @@ separate modules so the read path stays independently auditable.
 
 ### Building from source on Linux
 
-The releases page ships macOS artifacts only, so on Linux you build from
-source. The steps below were verified on Ubuntu 26.04; package names differ
-on other distributions, but the four things you need are the same.
+Releases ship a `.deb` and an `.AppImage`, so building from source is only
+necessary to develop against the app or to run an unreleased commit. The
+steps below were verified on Ubuntu 26.04; package names differ on other
+distributions, but the four things you need are the same.
 
 Install `gh` from the [GitHub CLI site](https://cli.github.com/), which
 carries current apt, dnf, and Homebrew instructions. The version in Ubuntu's
@@ -88,9 +89,9 @@ cd src-tauri && cargo check
 
 Then `make dev` from the repository root.
 
-**CI does not build for Linux.** Every job in `.github/workflows/ci.yml`
-runs on `macos-latest`, so a Linux-only build or link failure will not have
-been caught before you hit it.
+CI runs the Rust and frontend suites plus Clippy on `ubuntu-latest` as well
+as macOS, so a Linux-only build or link failure is caught before it reaches
+you. The release workflow builds the `.deb` and `.AppImage` there too.
 
 ## Install
 
