@@ -244,19 +244,38 @@ pub fn find_gh() -> Option<std::path::PathBuf> {
 /// the entire fix for a GUI app's PATH not containing Homebrew -- is
 /// testable without depending on what is installed on the test machine.
 pub fn find_gh_in(fallbacks: &[&str]) -> Option<std::path::PathBuf> {
+    find_gh_with(
+        fallbacks,
+        std::env::var("PATH").ok().as_deref(),
+        std::env::var("HEADSTATE_GH").ok().as_deref(),
+    )
+}
+
+/// The same search with the ENVIRONMENT injected.
+///
+/// The tests for this replaced the process's `PATH` with a temp
+/// directory holding only a fake `gh`. `PATH` is process-global, so
+/// under `--test-threads=8` every concurrent spawn of `git` elsewhere
+/// in the suite failed with ENOENT for the duration (#481). Injecting
+/// the environment tests the same logic without editing everyone's.
+pub fn find_gh_with(
+    fallbacks: &[&str],
+    path: Option<&str>,
+    explicit: Option<&str>,
+) -> Option<std::path::PathBuf> {
     let exe = gh_exe();
     // An explicit override wins over everything: the escape hatch for a
     // non-standard install, and the only thing a user can act on when the
     // fallback list does not cover their setup.
-    if let Ok(explicit) = std::env::var("HEADSTATE_GH") {
+    if let Some(explicit) = explicit {
         let p = std::path::PathBuf::from(explicit);
         if p.is_file() {
             return Some(p);
         }
     }
     // `PATH` next so an explicitly-installed gh beats the fallbacks.
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
+    if let Some(path) = path {
+        for dir in std::env::split_paths(path) {
             let candidate = dir.join(&exe);
             if candidate.is_file() {
                 return Some(candidate);
@@ -562,9 +581,9 @@ mod tests {
     fn finds_gh_via_path() {
         let tmp = std::env::temp_dir().join(format!("hs-gh-path-{}", std::process::id()));
         let bin = fake_gh(&tmp);
-        temp_env::with_var("PATH", Some(tmp.to_str().unwrap()), || {
-            assert_eq!(find_gh(), Some(bin.clone()));
-        });
+        // Injected, not edited: replacing the process PATH broke every
+        // concurrent `git` spawn in the suite (#481).
+        assert_eq!(find_gh_with(&[], tmp.to_str(), None), Some(bin.clone()));
         std::fs::remove_dir_all(&tmp).ok();
     }
 
@@ -574,12 +593,9 @@ mod tests {
         let b = std::env::temp_dir().join(format!("hs-gh-b-{}", std::process::id()));
         fake_gh(&a);
         let want = fake_gh(&b);
-        temp_env::with_vars(
-            [
-                ("PATH", Some(a.to_str().unwrap())),
-                ("HEADSTATE_GH", Some(want.to_str().unwrap())),
-            ],
-            || assert_eq!(find_gh(), Some(want.clone())),
+        assert_eq!(
+            find_gh_with(&[], a.to_str(), want.to_str()),
+            Some(want.clone())
         );
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
