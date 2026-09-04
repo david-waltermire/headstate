@@ -135,8 +135,35 @@ jobs:
       - name: cargo-deny
         working-directory: src-tauri
         run: cargo deny check
+      # A REAL advisory fails. An unreachable service does not.
+      #
+      # npm's advisories endpoint went down for hours and took every
+      # merge with it: `yarn npm audit` cannot tell "no vulnerabilities"
+      # from "could not ask", and reported the outage as a supply-chain
+      # failure. The registry answered in 0.09s throughout; only
+      # `/-/npm/v1/security/advisories/bulk` was unreachable.
+      #
+      # Failing closed is the safer direction and still the wrong
+      # answer: a check that could not run must say so rather than
+      # blocking unrelated work. Same rule the package checks follow --
+      # "no updates" and "the check did not run" are different facts.
       - name: Yarn audit
-        run: yarn npm audit --environment production --severity high
+        shell: bash
+        run: |
+          set +e
+          out=$(yarn npm audit --environment production --severity high 2>&1)
+          code=$?
+          echo "$out"
+          if [ $code -eq 0 ]; then
+            exit 0
+          fi
+          # YN0001 with a socket/network error is the service being
+          # unreachable, not a finding. Anything else is a real failure.
+          if echo "$out" | grep -qE "Timeout awaiting|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket hang up"; then
+            echo "::warning::npm's advisories endpoint was unreachable; the audit did not run."
+            exit 0
+          fi
+          exit $code
 
   # Windows and Linux, deliberately NOT part of the jobs above.
   #
