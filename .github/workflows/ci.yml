@@ -159,7 +159,15 @@ jobs:
           fi
           # YN0001 with a socket/network error is the service being
           # unreachable, not a finding. Anything else is a real failure.
-          if echo "$out" | grep -qE "Timeout awaiting|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket hang up"; then
+          # Two shapes, both meaning "the service did not answer".
+          #
+          # A connection-level failure (timeout, DNS, refused) and an
+          # HTTP 5xx are the same fact to us: the audit did not run.
+          # The first pass at this matched only the connection errors,
+          # and the very next run of the same outage came back as
+          # `YN0035: Service Unavailable (503)` -- Yarn had got a
+          # response, just not an answer.
+          if echo "$out" | grep -qE "Timeout awaiting|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket hang up|Service Unavailable|Bad Gateway|Gateway Time-?out|Internal Server Error|Response Code: 5[0-9][0-9]"; then
             echo "::warning::npm's advisories endpoint was unreachable; the audit did not run."
             exit 0
           fi
