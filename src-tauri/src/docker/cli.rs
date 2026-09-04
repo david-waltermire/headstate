@@ -111,7 +111,7 @@ pub fn docker(args: &[&str]) -> Result<String, String> {
 /// environment variables are global, so a concurrent test can observe
 /// or clobber them. It made `removal_never_passes_force_to_docker`
 /// fail on ubuntu CI while passing locally.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn docker_at(bin: &Path, args: &[&str]) -> Result<String, String> {
     run_bounded(bin, args)
 }
