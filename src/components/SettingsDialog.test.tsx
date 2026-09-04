@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const setDirs = vi.hoisted(() => vi.fn((d: string[]) => Promise.resolve(d)));
@@ -6,6 +6,8 @@ const setInterval_ = vi.hoisted(() => vi.fn((s: number) => Promise.resolve(s)));
 const dirs = vi.hoisted(() => ({ current: ["/Users/x/code"] as string[] }));
 
 const setCleanup = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const uiState = vi.hoisted(() => ({ diagnosticLogging: false }));
+const revealFn = vi.hoisted(() => vi.fn(() => Promise.resolve("/Users/x/Library/Logs/app/headstate.log")));
 const cleanupPrefs = vi.hoisted(() => ({
   current: {
     enabled: false,
@@ -16,10 +18,16 @@ const cleanupPrefs = vi.hoisted(() => ({
   },
 }));
 
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("../api/tauri", () => ({ revealLog: revealFn }));
 vi.mock("../api/hooks", () => ({
   // Defaults, matching the Rust side: nothing hidden, close hides.
   useUiPrefs: () => ({
-    prefs: { hidden_views: [], close_hides_to_tray: true },
+    prefs: {
+      hidden_views: [],
+      close_hides_to_tray: true,
+      diagnostic_logging: uiState.diagnosticLogging,
+    },
     set: () => Promise.resolve(),
   }),
   useCleanupPrefs: () => ({ prefs: cleanupPrefs.current, set: setCleanup }),
@@ -123,9 +131,107 @@ describe("automatic cleanup settings", () => {
   /// #394: the opt-in must say what turning it on ASSERTS, since the
   /// distinction between orphaned and stale is the whole reason it
   /// exists as a separate switch.
-  it("explains what the stale opt-in asserts", () => {
+  /// The stale opt-in belongs to AUTOMATIC cleanup, beside the orphan
+  /// one -- not to manual removal, which it used to gate. Ticking a row
+  /// and confirming a dialog is already the user's intent; unattended
+  /// deletion acting on a 90-day threshold is not.
+  it("offers stale virtualenvs beside orphaned ones, under automatic cleanup", () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    expect(screen.getByLabelText(/Also allow removing stale/)).toBeTruthy();
-    expect(screen.getByText(/asserts you are done with them/i)).toBeTruthy();
+    const orphaned = screen.getByLabelText(/Orphaned virtualenvs/);
+    const stale = screen.getByLabelText(/Stale virtualenvs/);
+    expect(orphaned).toBeTruthy();
+    expect(stale).toBeTruthy();
+    // Same section: the stale toggle sits with the automatic-cleanup
+    // choices rather than in a section of its own about manual removal.
+    expect(orphaned.closest("div")?.parentElement).toBe(
+      stale.closest("div")?.parentElement,
+    );
+  });
+});
+
+describe("the diagnostic log controls", () => {
+  /// The old text said "each GitHub request", which was true until the
+  /// local scans were instrumented. A user with a hanging Virtualenvs
+  /// page had no reason to think this setting would help.
+  it("says it records local scans, not only GitHub requests", () => {
+    uiState.diagnosticLogging = true;
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.getByText(/GitHub requests and local scans/)).toBeTruthy();
+  });
+
+  /// The promise is load-bearing: this log exists to be SENT to someone.
+  it("still promises no repository names", () => {
+    uiState.diagnosticLogging = true;
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.getByText(/never repository names/)).toBeTruthy();
+  });
+
+  it("can reveal the log file", async () => {
+    uiState.diagnosticLogging = true;
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /show the log/i }));
+    await waitFor(() => expect(revealFn).toHaveBeenCalled());
+  });
+
+  /// Nothing to reveal and nothing to explain when it is off.
+  it("offers nothing while logging is disabled", () => {
+    uiState.diagnosticLogging = false;
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.queryByRole("button", { name: /show the log/i })).toBeNull();
+  });
+});
+
+/// #436: a notification when a PR enters the green "Ready for review"
+/// panel, so it can be picked up immediately.
+describe("the ready-for-review notification", () => {
+  it("offers a toggle for it", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.getByLabelText(/ready for your review/i)).toBeTruthy();
+  });
+
+  /// The wording described breakage while every notification WAS
+  /// breakage. This one is good news.
+  it("no longer says notifications are only about breakage", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    expect(screen.queryByText(/newly breaks/)).toBeNull();
+    expect(screen.getByText(/never on first launch/)).toBeTruthy();
+  });
+});
+
+/// #437: ~445 lines of continuous scroll became topics on the left and
+/// one panel on the right.
+describe("the settings sections", () => {
+  it("offers a topic for each group", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const nav = screen.getByRole("navigation", { name: /settings sections/i });
+    for (const label of ["General", "Repositories", "Notifications", "Cleanup", "Views"]) {
+      expect(within(nav).getByRole("button", { name: label })).toBeTruthy();
+    }
+  });
+
+  it("marks the chosen topic as current", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const nav = screen.getByRole("navigation", { name: /settings sections/i });
+    const notifications = within(nav).getByRole("button", { name: "Notifications" });
+    expect(notifications.getAttribute("aria-current")).toBeNull();
+    fireEvent.click(notifications);
+    expect(notifications.getAttribute("aria-current")).toBe("page");
+  });
+
+  /// The constraint from the issue: a reorganisation that HIDES a
+  /// control is a regression.
+  ///
+  /// Panels are hidden with CSS, never unmounted and never with the
+  /// `hidden` attribute -- that attribute removes them from the
+  /// accessibility tree, so a screen reader could not reach a setting
+  /// until the right topic was clicked. Both wrong approaches were
+  /// tried and both were caught by the existing tests failing to find
+  /// controls by role.
+  it("keeps every control reachable whichever topic is selected", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    // On "General" by default, yet a Notifications control is present.
+    expect(screen.getByRole("checkbox", { name: /desktop notifications/i })).toBeTruthy();
+    // ...and a Repositories one.
+    expect(screen.getByLabelText(/directories to scan/i)).toBeTruthy();
   });
 });

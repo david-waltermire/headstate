@@ -74,7 +74,30 @@ export function agentPrompt(pr: AgentContext): string {
     );
   }
 
+  // HOW to start, last, because it is what the agent does first and a
+  // reader scanning back finds it at the end.
+  //
+  // A worktree rather than a checkout in place: every destructive-
+  // adjacent thing this app does works in one, and an agent switching
+  // the user's current checkout to a PR branch is a surprise they did
+  // not ask for -- especially with uncommitted work present.
+  out.push(
+    "",
+    "Work in a new git worktree, not the current checkout:",
+    `  git fetch origin ${pr.head_ref}`,
+    `  git worktree add ../${worktreeName(pr)} ${pr.head_ref}`,
+  );
+
   return out.join("\n");
+}
+
+/// A directory name for the PR's worktree.
+///
+/// Derived from the PR number rather than the branch: a branch name can
+/// contain slashes, which would nest the worktree somewhere unexpected,
+/// and the number is what the prompt already refers to throughout.
+function worktreeName(pr: AgentContext): string {
+  return `pr-${pr.number}`;
 }
 
 /// Widen a list row or a detail into the shape `agentPrompt` needs.

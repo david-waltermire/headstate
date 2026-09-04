@@ -25,6 +25,12 @@ ALLOWED='octocat|pktstorm|tauri-apps|shadcn-ui|rust-lang|actions|dtolnay|Swatine
 # identifiers, not internal tracker references.
 ALLOWED_TICKET_PREFIX='RUSTSEC|CVE|GHSA'
 
+# Mail domains that cannot carry a private address by construction.
+# GitHub's no-reply domain exists so a commit is attributed without
+# exposing anyone's real mailbox -- the opposite of what this check
+# is looking for.
+ALLOWED_EMAIL_DOMAIN='users\.noreply\.github\.com'
+
 # Lockfiles are machine-generated dependency graphs naming hundreds of
 # upstream repos; they are not a leak vector for private names.
 EXCLUDES=(':!scripts/check-privacy.sh' ':!yarn.lock' ':!src-tauri/Cargo.lock')
@@ -136,7 +142,8 @@ ssh_any=$(scan 'ssh://git@[A-Za-z0-9][-A-Za-z0-9.]*[a-zA-Z]/[A-Za-z0-9][-A-Za-z0
 # `@<digit>` (asset-scale filenames like `trayTemplate@2x.png`).
 emails=$(scan '[A-Za-z][A-Za-z0-9._%+-]*@[A-Za-z][-A-Za-z0-9.]*\.[A-Za-z]{2,6}' \
          | grep -vE '^git@' \
-         | sed -E 's/^[^@]+@//' || true)
+         | sed -E 's/^[^@]+@//' \
+         | grep -vE "^($ALLOWED_EMAIL_DOMAIN)$" || true)
 
 # Local checkout paths that name a real project directory.
 #

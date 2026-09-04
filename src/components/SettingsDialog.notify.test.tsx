@@ -82,8 +82,14 @@ describe("notification settings", () => {
 
   // The behaviour is otherwise undiscoverable: nothing in the UI said
   // the app sends notifications at all.
-  it("says what the app notifies about", () => {
+  /// The wording was "only when a pull request newly BREAKS", which was
+  /// accurate while every notification was breakage. Ready-for-review
+  /// (#436) is good news, so the promise is now about the TRANSITION
+  /// rather than the direction -- and that is the part users rely on:
+  /// no repeats, and nothing on first launch.
+  it("says notifications fire on a change, not repeatedly", () => {
     show();
-    expect(screen.getByText(/only when a pull request newly breaks/i)).toBeTruthy();
+    expect(screen.getByText(/only when something newly changes/i)).toBeTruthy();
+    expect(screen.getByText(/never on first launch/i)).toBeTruthy();
   });
 });

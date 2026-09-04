@@ -1,6 +1,41 @@
 use super::model::{Ecosystem, EcosystemReport, Outdated, ProjectReport};
-use super::{detect, tools, version};
+use super::{detect, swift, terraform, tools, version};
 use std::path::Path;
+
+/// Whether this project's Yarn is version 1.
+///
+/// `yarn outdated` was REMOVED in Yarn 2. On a Berry project it is not
+/// even a recognised command -- Yarn reports `Couldn't find a script
+/// named "outdated"` and **exits 0**, so the existing error handling
+/// never fired and an empty result rendered as "you are up to date".
+///
+/// There is no non-interactive replacement: `yarn npm outdated` does not
+/// exist, and `yarn upgrade-interactive` is a full-screen UI.
+///
+/// `yarn --version` is resolved per project by Corepack from
+/// `packageManager`, so this asks in the project directory rather than
+/// assuming one global Yarn.
+///
+/// Unknown counts as NOT version 1: Berry is the default for anything
+/// new, and guessing v1 restores the silent-empty-list failure.
+fn yarn_is_v1(bin: &Path, repo: &Path) -> bool {
+    std::process::Command::new(bin)
+        .arg("--version")
+        .current_dir(repo)
+        .env("PATH", tools::child_path(bin))
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .split('.')
+                .next()?
+                .parse::<u32>()
+                .ok()
+        })
+        .is_some_and(|major| major == 1)
+}
 
 /// Check one repository, one ecosystem.
 ///
@@ -19,31 +54,82 @@ pub fn check(repo: &Path, eco: Ecosystem) -> EcosystemReport {
     // Saying so is the point. An empty list would read as "up to date",
     // which is the same inversion a missing tool would produce, and this
     // module exists to refuse it.
+    // Terraform answers from a FILE plus the registry, never a command.
+    //
+    // `terraform providers` reports the constraints (`>= 5.0.0`) and
+    // does not diff, so there is nothing to spawn and parse. The lock
+    // file carries the resolved versions, and `enrich` fills in the
+    // latest asynchronously afterwards.
+    if eco == Ecosystem::Terraform {
+        return EcosystemReport {
+            ecosystem: eco,
+            outdated: terraform::pinned(repo),
+            error: None,
+        };
+    }
+
+    // Swift answers from a FILE plus the Git host, never a command.
+    //
+    // No command reports outdated Xcode-managed dependencies, which is
+    // what this used to say and stop at. But Swift packages are Git
+    // repositories and their versions are TAGS, so `Package.resolved`
+    // plus a tag listing answers the question -- see `packages::swift`.
     if eco == Ecosystem::Swift {
         return EcosystemReport {
             ecosystem: eco,
-            outdated: Vec::new(),
-            error: Some(
-                "Swift packages are not checked yet: no command reports outdated \
-                 Xcode-managed dependencies."
-                    .into(),
-            ),
+            outdated: swift::pinned(repo),
+            error: None,
         };
     }
 
     let fallbacks = tools::fallback_dirs();
     let refs: Vec<&str> = fallbacks.iter().map(String::as_str).collect();
-    let Some(bin) = tools::find(eco.program(), &refs) else {
+    let Some(mut bin) = tools::find(eco.program(), &refs) else {
         return missing_tool(eco);
     };
 
+    // Yarn Berry has no outdated command, so the CHECK runs through npm.
+    //
+    // `npm outdated` reads package.json and queries the registry; it
+    // does not care which resolver installed the tree, and it does not
+    // need npm to have installed anything. Verified on a real Yarn 4.9
+    // project: 98 packages reported, correct current/latest.
+    //
+    // Only the check. The version npm reports as latest is a registry
+    // fact and true either way, but the constraint Yarn would WRITE is
+    // Yarn's business -- the requested-vs-resolved distinction #409
+    // phase 1 established.
+    if eco == Ecosystem::Yarn && !yarn_is_v1(&bin, repo) {
+        let Some(npm) = tools::find("npm", &refs) else {
+            return EcosystemReport {
+                ecosystem: eco,
+                outdated: Vec::new(),
+                // A real "cannot check", not an empty list: this
+                // ecosystem's own tool cannot answer and the stand-in is
+                // absent.
+                error: Some(
+                    "Yarn 2+ has no command that reports outdated packages, and npm \
+                     -- which can read this project -- was not found."
+                        .into(),
+                ),
+            };
+        };
+        bin = npm;
+    }
+
     let args: &[&str] = match eco {
         Ecosystem::Npm => &["outdated", "--json"],
+        // Same flags either way: `yarn outdated --json` (v1) and
+        // `npm outdated --json` take the same arguments and produce
+        // output `parse_npm` already handles for both.
         Ecosystem::Yarn => &["outdated", "--json"],
         Ecosystem::Poetry => &["show", "--outdated"],
         Ecosystem::Uv => &["pip", "list", "--outdated", "--format", "json"],
         Ecosystem::Dotnet => &["list", "package", "--outdated"],
         Ecosystem::Cocoapods => &["outdated"],
+        // Neither reaches here: both return early above, because
+        // neither has a command that answers the question.
+        Ecosystem::Terraform => &["version"],
         // Swift never reaches here -- `check` returns early for it,
         // because there is no command that answers the question.
         Ecosystem::Swift => &["--version"],
@@ -118,11 +204,40 @@ fn missing_tool(eco: Ecosystem) -> EcosystemReport {
 /// that has some, which is the exact inversion this module is built to
 /// avoid.
 ///
-/// So a failure requires all three: nothing parsed, a non-zero status,
-/// AND no output to have parsed. Output that produced no rows is a
-/// format question, not a run failure.
+/// So a failure requires nothing parsed AND a non-zero status, plus
+/// either no output at all or output that is visibly not a result.
+///
+/// The "visibly not a result" case is real: `yarn outdated` on Yarn 2+
+/// exits 1 and writes `Usage Error: Couldn't find a script named
+/// "outdated"` to STDOUT. Requiring empty stdout let that through as
+/// zero results, so every Berry project reported "no updates" -- the
+/// inversion this function exists to prevent, arriving by a route it
+/// did not cover.
 fn is_real_failure(nothing_parsed: bool, status_ok: bool, stdout: &str) -> bool {
-    nothing_parsed && !status_ok && stdout.trim().is_empty()
+    let out = stdout.trim();
+    nothing_parsed && !status_ok && (out.is_empty() || is_usage_error(out))
+}
+
+/// Output that is a tool complaining rather than a result.
+///
+/// Deliberately narrow: it must not match a legitimate empty result, so
+/// this looks for the shape of a CLI's own refusal at the very start of
+/// the output, never anywhere within it.
+fn is_usage_error(stdout: &str) -> bool {
+    // First line only. `starts_with` on the whole string would behave
+    // the same for every input seen here -- both reject a match on a
+    // later line -- but taking the line explicitly says what is meant
+    // and does not depend on that coincidence holding.
+    let head = stdout.lines().next().unwrap_or_default().trim_start();
+    // Strip the ANSI colour codes Yarn writes even when redirected.
+    let plain: String = head
+        .split('\u{1b}')
+        .map(|part| part.split_once('m').map_or(part, |(_, rest)| rest))
+        .collect();
+    let lowered = plain.to_ascii_lowercase();
+    lowered.starts_with("usage error")
+        || lowered.starts_with("unknown syntax error")
+        || lowered.starts_with("error: unknown command")
 }
 
 /// Every project in a repository, with its ecosystems checked.
@@ -159,8 +274,8 @@ pub fn parse(stdout: &str, eco: Ecosystem, repo: &Path) -> Vec<Outdated> {
         Ecosystem::Poetry => parse_poetry(stdout),
         Ecosystem::Dotnet => parse_dotnet(stdout, repo),
         Ecosystem::Cocoapods => parse_cocoapods(stdout),
-        // Handled before any command runs.
-        Ecosystem::Swift => Vec::new(),
+        // Both handled before any command runs: neither has one.
+        Ecosystem::Swift | Ecosystem::Terraform => Vec::new(),
     }
 }
 
@@ -471,18 +586,38 @@ Project `Api` has the following updates
         assert!(!is_real_failure(true, true, ""));
     }
 
-    /// Swift must say it cannot check, not report an empty list.
+    /// Swift IS checked now, from `Package.resolved` plus the Git host's
+    /// tags -- #434.
     ///
-    /// An empty list reads as "up to date", which is the same inversion
-    /// a missing tool would produce -- and on an iOS repository that
-    /// would be a confident wrong answer about every dependency it has.
+    /// The old assertion here was that it reported "cannot check". That
+    /// was accurate about COMMANDS (nothing diffs Xcode-managed
+    /// dependencies) and wrong about the question: Swift versions are
+    /// git tags, and the resolved file names both the pin and its source
+    /// URL.
+    ///
+    /// A repository with no resolved file still reports NOTHING rather
+    /// than an error: there is genuinely nothing pinned, which is a real
+    /// empty rather than a failed check.
     #[test]
-    fn swift_states_that_it_cannot_check_rather_than_reporting_nothing() {
+    fn swift_reports_its_pins_rather_than_refusing() {
         let t = tempfile::TempDir::new().unwrap();
         let r = check(t.path(), Ecosystem::Swift);
-        assert!(r.outdated.is_empty());
-        let msg = r.error.expect("Swift must not report an empty success");
-        assert!(msg.contains("not checked"), "{msg}");
+        assert!(r.outdated.is_empty(), "no resolved file, nothing pinned");
+        assert!(r.error.is_none(), "an absent file is not a failure");
+
+        // With one, the pin is reported -- and left UNCOMPARED until
+        // enrichment, never claimed to be current.
+        std::fs::write(
+            t.path().join("Package.resolved"),
+            r#"{"pins":[{"identity":"x",
+               "location":"https://github.com/octocat/example.git",
+               "state":{"revision":"abc","version":"1.2.3"}}],"version":3}"#,
+        )
+        .unwrap();
+        let r = check(t.path(), Ecosystem::Swift);
+        assert_eq!(r.outdated.len(), 1);
+        assert_eq!(r.outdated[0].current, "1.2.3");
+        assert_eq!(r.outdated[0].bump, crate::packages::model::Bump::Unknown);
     }
 
     #[test]
@@ -549,5 +684,92 @@ mod e2e {
                 );
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod berry {
+    use super::*;
+
+    /// The REAL bytes Yarn 4 writes, colour codes and all, captured from
+    /// `yarn outdated --json` on a Yarn 4.9 project. Yarn colours its
+    /// output even when redirected, so a naive prefix check misses it.
+    const YARN_BERRY_USAGE: &str =
+        "\u{1b}[31m\u{1b}[1mUsage Error\u{1b}[22m\u{1b}[39m: Couldn't find a script named \"outdated\".\n";
+
+    #[test]
+    fn a_yarn_berry_usage_error_is_a_failure_not_zero_updates() {
+        assert!(
+            is_usage_error(YARN_BERRY_USAGE),
+            "the real Yarn Berry output must be recognised"
+        );
+        // Exits 1 and writes to STDOUT, so the old rule -- which
+        // required empty stdout -- let this through as "no updates".
+        assert!(is_real_failure(true, false, YARN_BERRY_USAGE));
+    }
+
+    /// The inversion this must never reintroduce: `npm outdated` exits 1
+    /// precisely WHEN there are updates.
+    #[test]
+    fn a_non_zero_exit_with_real_output_is_not_a_failure() {
+        let real = r#"{"lodash":{"current":"4.17.20","latest":"4.17.21"}}"#;
+        assert!(!is_real_failure(false, false, real));
+    }
+
+    /// A genuinely empty result stays a non-failure.
+    #[test]
+    fn an_honestly_empty_result_is_not_a_failure() {
+        assert!(!is_usage_error("{}"));
+        assert!(!is_real_failure(true, true, "{}"));
+    }
+
+    /// Anchored to the FIRST line, so a later line that happens to begin
+    /// with those words is not mistaken for the tool refusing.
+    ///
+    /// Pretty-printed JSON is the realistic case: `npm outdated --json`
+    /// emits one key per line, and a package or field could legitimately
+    /// start with "usage error".
+    #[test]
+    fn the_words_on_a_later_line_are_not_a_usage_error() {
+        let pretty = "{\n  \"pkg\": {\n\"usage error handling\": 1\n  }\n}";
+        assert!(
+            !is_usage_error(pretty),
+            "only the first line may declare a refusal"
+        );
+        // And a real result that merely mentions them stays a result.
+        assert!(!is_real_failure(false, false, pretty));
+
+        // The case that makes the anchoring load-bearing rather than
+        // decorative: output whose FIRST line is blank, with the words
+        // further down. Matching the whole string would call this a
+        // refusal; matching the first line does not.
+        let later = "\n{\"a\":1}\nusage error: not a refusal, just text\n";
+        assert!(!is_usage_error(later));
+    }
+}
+
+/// End-to-end against a REAL Yarn Berry project. Ignored by default: it
+/// needs npm, a project on this machine, and the network.
+///
+/// `HEADSTATE_YARN_REPO=/path cargo test -- --ignored yarn_e2e`
+#[cfg(test)]
+mod yarn_e2e {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a real Yarn Berry project and network access"]
+    fn a_yarn_berry_project_reports_updates() {
+        let Ok(repo) = std::env::var("HEADSTATE_YARN_REPO") else {
+            eprintln!("set HEADSTATE_YARN_REPO to run this");
+            return;
+        };
+        let report = check(Path::new(&repo), Ecosystem::Yarn);
+        eprintln!("error: {:?}", report.error);
+        eprintln!("outdated: {}", report.outdated.len());
+        assert!(report.error.is_none(), "{:?}", report.error);
+        assert!(
+            !report.outdated.is_empty(),
+            "a Berry project with outdated packages must report them"
+        );
     }
 }

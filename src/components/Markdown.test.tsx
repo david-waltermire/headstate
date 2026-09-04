@@ -62,3 +62,52 @@ describe("Markdown", () => {
     expect(() => render(<Markdown>{""}</Markdown>)).not.toThrow();
   });
 });
+
+/// #438: paragraphs and tables rendered squished together, and blank
+/// lines looked ignored.
+///
+/// They were parsed correctly all along -- `prose-headstate` was applied
+/// to the wrapper and never DEFINED anywhere, so every block element
+/// fell back to the CSS reset, which strips margins.
+describe("vertical rhythm", () => {
+  /// Asserting on the CLASS rather than on computed style: jsdom
+  /// computes no layout, so a margin assertion would pass either way.
+  it("gives paragraphs a margin, so blank lines are visible", () => {
+    const { container } = render(<Markdown>{"First para.\n\nSecond para."}</Markdown>);
+    const ps = container.querySelectorAll("p");
+    expect(ps).toHaveLength(2);
+    for (const p of ps) expect(p.className).toMatch(/my-\d/);
+  });
+
+  it("spaces tables and collapses their borders", () => {
+    const md = "| a | b |\n| - | - |\n| 1 | 2 |";
+    const { container } = render(<Markdown>{md}</Markdown>);
+    const table = container.querySelector("table");
+    expect(table?.className).toMatch(/border-collapse/);
+    expect(table?.parentElement?.className).toMatch(/my-\d/);
+  });
+
+  it("spaces lists and their items", () => {
+    const { container } = render(<Markdown>{"- one\n- two"}</Markdown>);
+    const ul = container.querySelector("ul");
+    expect(ul?.className).toMatch(/my-\d/);
+    expect(ul?.className).toMatch(/space-y-\d/);
+  });
+
+  /// A heading belongs to what FOLLOWS it, so it needs more space above
+  /// than below -- equal margins make it float between two sections.
+  it("gives headings more space above than below", () => {
+    const { container } = render(<Markdown>{"## Heading\n\nBody."}</Markdown>);
+    const h2 = container.querySelector("h2");
+    expect(h2?.className).toMatch(/mt-5/);
+    expect(h2?.className).toMatch(/mb-2/);
+  });
+
+  it("spaces block quotes and code blocks", () => {
+    const { container } = render(
+      <Markdown>{"> quoted\n\n```\ncode\n```"}</Markdown>,
+    );
+    expect(container.querySelector("blockquote")?.className).toMatch(/my-\d/);
+    expect(container.querySelector("pre")?.className).toMatch(/my-\d/);
+  });
+});

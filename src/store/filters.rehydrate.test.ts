@@ -54,7 +54,8 @@ describe("rehydrating a store older than the current View union", () => {
     const { renderHook } = await import("@testing-library/react");
     useFilters.setState({
       view: "docker",
-      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {} } as never,
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {},
+  branches: {} } as never,
     });
     const { result } = renderHook(() => useActiveFilters());
     // This is the exact read App makes before calling `.sort` on it.

@@ -135,6 +135,15 @@ pub fn ecosystems(repo: &Path) -> Vec<Ecosystem> {
         out.push(Ecosystem::Cocoapods);
     }
 
+    // Terraform, if any lock file exists ANYWHERE in the repo rather
+    // than only in this directory. A Terraform repository is commonly
+    // many rooted modules -- `modules/*/`, `environments/*/` -- each
+    // with its own lock, and matching only the project directory finds
+    // nothing on a real one.
+    if !crate::packages::terraform::pinned(repo).is_empty() {
+        out.push(Ecosystem::Terraform);
+    }
+
     // Swift: a package of its own, or dependencies Xcode manages.
     //
     // The Xcode case is the one that matters for iOS repositories, and

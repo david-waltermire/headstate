@@ -518,6 +518,28 @@ impl GitHubClient {
         Ok(())
     }
 
+    /// A REST POST that CARRIES a body and returns the response.
+    ///
+    /// Creating a pull request needs both: the request describes what to
+    /// open, and the response holds the URL -- which is the only thing
+    /// the user actually wants back.
+    pub(super) async fn rest_post_json(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, ClientError> {
+        let response = self.octocrab._post(path, Some(body)).await?;
+        // `_post` returns the raw response; the JSON has to be read from
+        // it. A body that will not parse is an error rather than an
+        // empty object: silently returning nothing would lose the URL
+        // and look like success.
+        let parsed: serde_json::Value = self.octocrab.body_to_string(response).await.map_or_else(
+            |_| serde_json::Value::Null,
+            |text| serde_json::from_str(&text).unwrap_or(serde_json::Value::Null),
+        );
+        Ok(parsed)
+    }
+
     /// Like `graphql_mutation`, but hands back the `data` object.
     ///
     /// Most mutations only need "did it fail", so `graphql_mutation`

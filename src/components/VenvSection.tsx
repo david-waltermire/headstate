@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import type { Venv, VenvState } from "@/types/pr";
-import { useRemoveVenvs, useUiPrefs, useVenvs, useVenvSizes } from "@/api/hooks";
+import { useRemoveVenvs, useVenvs, useVenvSizes } from "@/api/hooks";
 import { formatSize } from "@/lib/worktrees";
+import { relativeSeconds } from "@/lib/time";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { HelpButton } from "./HelpButton";
 
@@ -28,10 +29,20 @@ const STALE_SECS = 90 * 24 * 60 * 60;
 /// on changed nothing a user could see -- the checkbox stayed disabled
 /// and the row could never be selected. `live` is never removable at
 /// either layer.
-function isRemovable(v: Venv, state: VenvState, allowStale: boolean): boolean {
+function isRemovable(v: Venv, state: VenvState): boolean {
   if (v.path.length === 0) return false;
-  if (state === "orphaned") return true;
-  return state === "stale" && allowStale;
+  // Orphaned OR stale. No setting.
+  //
+  // Stale used to require `remove_stale_venvs`, on the reasoning that a
+  // 90-day threshold is a guess about intent. True for AUTOMATIC
+  // cleanup; wrong here. Ticking a specific row and confirming in a
+  // dialog IS the intent, and no other artifact asks twice -- a Rust
+  // `target` costs minutes to rebuild and has no gate, while a
+  // virtualenv is `poetry install`.
+  //
+  // `live` stays unremovable: its project exists and is in use, which
+  // is a fact rather than a threshold.
+  return state === "orphaned" || state === "stale";
 }
 
 /// The state a row displays, once its idle time is known.
@@ -57,17 +68,29 @@ const TONE: Record<VenvState, string> = {
 /// caches" across two views would make a user check two places for one
 /// answer.
 export function VenvSection() {
-  const { data: venvs = [] } = useVenvs(true);
-  const { sizes, idle, measuring } = useVenvSizes(venvs, venvs.length > 0);
+  // `isLoading` as well as the data: the `= []` default made "still
+  // scanning" and "there are none" the SAME value, and the early
+  // return below then removed the section entirely. On a real machine
+  // the scan takes 26 SECONDS -- measured, walking 28,144 directories --
+  // so the page was indistinguishable from one with no virtualenvs for
+  // almost half a minute, which is exactly how it was reported.
+  const { data: venvs = [], isLoading } = useVenvs(true);
+  const { sizes, idle, measuring, pending, total } = useVenvSizes(venvs, venvs.length > 0);
   const [checked, setChecked] = useState<Set<string>>(new Set());
-  // The same setting the backend reads. Without it the two layers
-  // disagree and the UI silently refuses what the backend would allow.
-  const { prefs } = useUiPrefs();
-  const allowStale = prefs?.remove_stale_venvs ?? false;
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const remove = useRemoveVenvs();
 
+  // Say the scan is running rather than rendering nothing. The
+  // artifacts list already does this; this section did not.
+  if (isLoading) {
+    return (
+      <p className="px-1 py-2 text-xs text-[#8b949e]" aria-live="polite">
+        Looking for Poetry virtualenvs…
+      </p>
+    );
+  }
+  // Only once the scan has ANSWERED does an empty list mean "none".
   if (venvs.length === 0) return null;
 
   const rows = [...venvs]
@@ -86,8 +109,12 @@ export function VenvSection() {
           {orphans.length} orphaned{measuring ? "" : ` · ${formatSize(orphanBytes)}`}
         </span>
         {measuring ? (
+          // COUNTED, not a bare "measuring…". Sizing is chunked now, so
+          // there is real progress to report -- and a bare word on a
+          // pass that took 73 seconds is indistinguishable from being
+          // stuck, which is how it was reported.
           <span aria-live="polite" className="text-xs text-[#58a6ff]">
-            measuring…
+            measuring — {total - pending} of {total}
           </span>
         ) : null}
         <HelpButton topic="poetry-venvs" />
@@ -195,7 +222,7 @@ export function VenvSection() {
 
       <ul className="flex flex-col gap-1">
         {rows.map(({ v, state }) => {
-          const removable = isRemovable(v, state, allowStale);
+          const removable = isRemovable(v, state);
           return (
             <li
               key={v.path}
@@ -218,9 +245,7 @@ export function VenvSection() {
                 aria-label={
                   removable
                     ? `Select ${v.project} virtualenv`
-                    : state === "stale"
-                      ? `${v.project} virtualenv is stale: enable "Also allow removing stale virtualenvs" in Settings`
-                      : `${v.project} virtualenv cannot be removed: its project still exists`
+                    : `${v.project} virtualenv cannot be removed: its project still exists and is in use`
                 }
                 className="shrink-0 disabled:opacity-30"
               />
@@ -233,6 +258,18 @@ export function VenvSection() {
                   which is what lets someone disagree with the label. */}
               <span className="min-w-0 flex-1 truncate font-mono text-xs text-[#8b949e]">
                 {v.source ?? "no project directory found"}
+              </span>
+              {/* AGE, for the same reason the artifacts list got it in
+                  #417: size cannot rank these rows. The idle time was
+                  already being fetched and used ONLY to compute the
+                  stale badge -- the number itself was never shown, so
+                  "is this old enough to delete" had no answer on screen.
+
+                  Unknown renders as an em dash, never as "just now":
+                  reading not-yet-measured as brand new would hide
+                  exactly the venvs worth removing. */}
+              <span className="w-24 shrink-0 text-right text-xs text-[#8b949e]">
+                {idle.has(v.path) ? relativeSeconds(idle.get(v.path) ?? 0) : "—"}
               </span>
               <span className="w-20 shrink-0 text-right text-xs tabular-nums text-[#8b949e]">
                 {sizes.has(v.path) ? formatSize(sizes.get(v.path) ?? 0) : "—"}

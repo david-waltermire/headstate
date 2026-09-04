@@ -6,7 +6,8 @@ import { applyFilters, needsMyReview } from "@/lib/derive";
 import { useFilters } from "@/store/filters";
 import { ReviewChips } from "./ReviewChips";
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} } as const;
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {},
+  branches: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} } as const;
 const pr = (over: Partial<PullRequest>): PullRequest => ({ ...PR_FIXTURES[0], ...over });
 
 const PRS: PullRequest[] = [

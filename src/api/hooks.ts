@@ -11,6 +11,7 @@ import type {
   PullRequest,
   Venv,
   Worktree,
+  WorktreeRepo,
 } from "../types/pr";
 import type { PrActionName } from "./tauri";
 import {
@@ -26,6 +27,7 @@ import {
   getPrDetail,
   getWorktreeDirs,
   classifyWorktrees,
+  listBranches,
   listWorktrees,
   removeWorktree,
   pullCheckout,
@@ -487,10 +489,19 @@ export function useReviewPr() {
           prev === undefined ? prev : withOwnReview(prev, viewer, state),
         );
       }
-      // AWAITED, unlike the list refresh. The button stays busy until the
-      // detail view reflects the click, rather than until an unrelated
-      // list finishes.
-      await qc.refetchQueries({ queryKey: ["pr-detail", repo, number] });
+      // NOT refetched here, and that is the whole point.
+      //
+      // The seed above writes the verdict we know landed. Immediately
+      // awaiting a refetch of THE SAME KEY replaced it with GitHub's
+      // pre-approval review set -- inside the exact lag window the seed
+      // exists to cover. So the button reverted to "Approve" for an
+      // approval that had succeeded, and only corrected itself when
+      // something else refetched later: clicking Merge, or leaving the
+      // PR and coming back.
+      //
+      // The seed is authoritative rather than optimistic (the mutation
+      // rejects a PENDING review), so there is nothing to confirm. The
+      // next natural fetch overwrites it once GitHub agrees.
       await refreshPrs(qc);
     });
 }
@@ -587,9 +598,25 @@ export function useArtifactSizes(artifacts: Artifact[], enabled: boolean) {
   const groups = [...byRepo.entries()].sort(([a], [b]) => a.localeCompare(b));
 
   const results = useQueries({
-    queries: groups.map(([repo, paths]) => ({
-      queryKey: ["artifact-sizes", repo, paths.length],
-      queryFn: () => timeCall(`size_artifacts[${repo}] n=${paths.length}`, () => sizeArtifacts(paths)),
+    queries: groups.map(([repo, paths], i) => ({
+      // Keyed on the repo alone, NOT on `paths.length`.
+      //
+      // With the count in the key, removing one directory changed every
+      // surviving group's key too -- so the cache had nothing for the
+      // new keys and all of them refetched at once. That is the storm
+      // this is fixing; dropping removed entries from the cache
+      // achieves nothing if the key they were cached under no longer
+      // exists.
+      //
+      // The query function still closes over the current `paths`, so a
+      // group whose membership changed re-measures on its next natural
+      // fetch rather than never.
+      queryKey: ["artifact-sizes", repo],
+      queryFn: () =>
+        // The GROUP INDEX in the log label, never the path. This log is
+        // meant to be sent to someone, and Settings promises it carries
+        // "counts and timings only -- never repository names".
+        timeCall(`size_artifacts[#${i}] n=${paths.length}`, () => sizeArtifacts(paths)),
       enabled,
       staleTime: 5 * 60 * 1000,
     })),
@@ -622,8 +649,28 @@ export function useRemoveArtifacts() {
   const qc = useQueryClient();
   return async (paths: string[]) => {
     const out = await removeArtifacts(paths);
+    // The SCAN is invalidated: a removed directory must leave the list.
     await qc.invalidateQueries({ queryKey: ["artifacts"] });
-    await qc.invalidateQueries({ queryKey: ["artifact-sizes"] });
+    // The SIZES are not.
+    //
+    // Invalidating them re-walked every group on the machine. Measured
+    // on a real removal: 54 concurrent `size_artifacts` calls all
+    // finishing around 17.8s, with groups of TWO directories taking
+    // 17.6s -- contention, not measurement. The 20.4s "freeze" after a
+    // deletion was this, not `remove_dir_all` and not rendering.
+    //
+    // A removal is the one operation whose effect on other rows is
+    // known to be nil: the removed directories are gone and the rest
+    // are untouched. So the removed entries are dropped from the cached
+    // results and everything else stands. `useRemoveWorktrees` already
+    // does exactly this.
+    const gone = new Set(out.filter((o) => o.error === null).map((o) => o.path));
+    if (gone.size > 0) {
+      qc.setQueriesData<[string, number, number | null][]>(
+        { queryKey: ["artifact-sizes"] },
+        (old) => old?.filter(([path]) => !gone.has(path)),
+      );
+    }
     return out;
   };
 }
@@ -637,9 +684,31 @@ export function useVenvs(enabled: boolean) {
     queryKey: ["venvs"],
     queryFn: SCAN_VENVS_FN,
     enabled,
-    staleTime: 60 * 1000,
+    // 30 MINUTES, not 60 seconds.
+    //
+    // A one-minute staleTime on a scan that takes 9-40 SECONDS means
+    // the page spends most of its life re-measuring. Measured on a real
+    // machine: rescans at 18:28, 18:31, 18:34, 18:37 -- each 9-40s of
+    // scan followed by up to 73s of sizing, so the list never settled
+    // and sizes never appeared to populate.
+    //
+    // Virtualenvs do not appear and disappear on a one-minute cadence.
+    // The manual refresh and the post-removal invalidation are what
+    // update this promptly; the timer only needs to catch drift.
+    staleTime: 30 * 60 * 1000,
+    // A background refetch mid-session restarts the whole cycle for no
+    // benefit -- the data is minutes old at worst.
+    refetchOnWindowFocus: false,
   });
 }
+
+/// How many virtualenvs one sizing request measures.
+///
+/// Small enough that a stalled entry holds up few others, large enough
+/// that the IPC round trips do not dominate. Four matches the backend's
+/// concurrency cap, so a chunk maps to one permit rather than queueing
+/// against itself.
+const VENV_CHUNK = 4;
 
 /// Sizes and idle times for virtualenvs.
 ///
@@ -649,23 +718,57 @@ export function useVenvs(enabled: boolean) {
 /// fragment the cache.
 export function useVenvSizes(venvs: Venv[], enabled: boolean) {
   const paths = venvs.map((v) => v.path);
-  const q = useQuery({
-    // Keyed on the PATHS, not their count. Two different sets of the
-    // same size shared a cache entry, so removing one venv and adding
-    // another served the old sizes.
-    queryKey: ["venv-sizes", ...paths],
-    queryFn: () => timeCall(`size_venvs n=${paths.length}`, () => sizeVenvs(paths)),
-    enabled: enabled && paths.length > 0,
-    staleTime: 5 * 60 * 1000,
+
+  // CHUNKED, so results land progressively.
+  //
+  // This was one query over every virtualenv, which meant one silent
+  // wait: measured on a real machine at up to 73 seconds with a single
+  // boolean `measuring` and nothing on screen changing. Worse, one
+  // unreadable path -- a network mount, a permission wall -- stalled
+  // every other row behind it.
+  //
+  // Chunks rather than one query per venv: 13 separate IPC round trips
+  // for 13 directories is its own cost, and the backend already logs
+  // per-venv timings for the "which one is slow" question. Four is
+  // small enough that a stalled chunk holds up at most three others.
+  const chunks: string[][] = [];
+  for (let i = 0; i < paths.length; i += VENV_CHUNK) {
+    chunks.push(paths.slice(i, i + VENV_CHUNK));
+  }
+
+  const results = useQueries({
+    queries: chunks.map((chunk, i) => ({
+      // Keyed on the chunk's OWN paths, not its index. An index would
+      // reuse a cache entry for a different set after a removal --
+      // the same trap `artifact-sizes` hit with `paths.length`.
+      queryKey: ["venv-sizes", ...chunk],
+      queryFn: () => timeCall(`size_venvs[#${i}] n=${chunk.length}`, () => sizeVenvs(chunk)),
+      enabled: enabled && chunk.length > 0,
+      // Matched to the scan. Sizing walks every virtualenv, and a short
+      // window meant it re-ran almost as often as it finished.
+      staleTime: 30 * 60 * 1000,
+      refetchOnWindowFocus: false,
+    })),
   });
 
   const sizes = new Map<string, number>();
   const idle = new Map<string, number>();
-  for (const [path, bytes, secs] of q.data ?? []) {
-    sizes.set(path, bytes);
-    if (secs !== null) idle.set(path, secs);
+  for (const r of results) {
+    for (const [path, bytes, secs] of r.data ?? []) {
+      sizes.set(path, bytes);
+      if (secs !== null) idle.set(path, secs);
+    }
   }
-  return { sizes, idle, measuring: q.isFetching };
+  return {
+    sizes,
+    idle,
+    measuring: results.some((r) => r.isFetching),
+    /// How many chunks have not answered yet, and how many there are.
+    /// The pair is what makes a partially-filled page legible rather
+    /// than looking stuck -- the same thing `useArtifactSizes` reports.
+    pending: results.filter((r) => r.isFetching).length,
+    total: results.length,
+  };
 }
 
 /// Remove virtualenvs, then refresh what is left.
@@ -997,8 +1100,36 @@ export function useRemoveWorktrees() {
       const removed = new Set(
         outcomes.filter((o) => o.error === null).map((o) => o.path),
       );
-      qc.setQueryData<Worktree[]>(["worktree-safety", repoPath], (old) =>
+      // EVERY cached classification, not just `repoPath`'s.
+      //
+      // The bulk button's targets come from what is DISPLAYED, which on
+      // the all-repositories view spans many repos -- while this only
+      // ever updated the selected one. So worktrees in other
+      // repositories were really removed, the toast correctly said so,
+      // and their rows came straight back because their cache still
+      // held them. `repoPath` is also "" when nothing is selected, and
+      // then this updated a key that does not exist at all.
+      //
+      // Filtering every cached list by path is safe regardless of which
+      // repository a path belongs to: a path that is not in a list
+      // leaves it unchanged.
+      qc.setQueriesData<Worktree[]>({ queryKey: ["worktree-safety"] }, (old) =>
         old?.filter((w) => !removed.has(w.path)),
+      );
+      // The base listing too, and by EDITING it rather than only
+      // invalidating.
+      //
+      // The page renders `classified ?? selected?.worktrees` -- so when
+      // the classification has not arrived (or was cleared), it falls
+      // back to this list. Invalidation alone leaves the stale rows on
+      // screen until the refetch lands, which is what "the same 3
+      // worktrees are still listed" was: they really were removed, and
+      // the fallback was still serving them.
+      qc.setQueryData<WorktreeRepo[]>(["worktrees"], (old) =>
+        old?.map((r) => ({
+          ...r,
+          worktrees: r.worktrees.filter((w) => !removed.has(w.path)),
+        })),
       );
       void qc.invalidateQueries({ queryKey: ["worktrees"] });
       return outcomes;
@@ -1533,5 +1664,21 @@ export function useMergedDetail() {
     queryKey: ["merged-detail"],
     queryFn: getMergedDetail,
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+/// Branches for one repository, fetched only when it is selected.
+///
+/// Measured at ~9s on a 675-branch repository, most of it the patch-id
+/// comparison that finds squash merges. Scanning every repository up
+/// front is not an option, and `staleTime` is deliberately short: the
+/// answer is about deletability, and a stale "safe to delete" is the
+/// one wrong answer that costs work.
+export function useBranches(repoPath: string | undefined) {
+  return useQuery({
+    queryKey: ["branches", repoPath],
+    queryFn: () => listBranches(repoPath!),
+    enabled: !!repoPath,
+    staleTime: 10_000,
   });
 }

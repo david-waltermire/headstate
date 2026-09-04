@@ -116,7 +116,8 @@ const wt = (over: Partial<Worktree>): Worktree => ({
   ...over,
 });
 
-const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} } as const;
+const EMPTY = { "my-prs": {}, "to-review": {}, worktrees: {},
+  branches: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} } as const;
 
 describe("WorktreesPage", () => {
   beforeEach(() => {
@@ -359,7 +360,8 @@ describe("WorktreesPage", () => {
       sizesTotal: 2,
     });
     useFilters.setState({
-      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} },
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {},
+  branches: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} },
       view: "worktrees",
     } as never);
     render(<WorktreesPage />);
@@ -377,7 +379,8 @@ describe("WorktreesPage", () => {
       sizesTotal: 1,
     });
     useFilters.setState({
-      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} },
+      filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {},
+  branches: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} },
       view: "worktrees",
     } as never);
     render(<WorktreesPage />);
@@ -943,6 +946,79 @@ describe("WorktreesPage", () => {
     // contexts, both the main checkout. The tests that lived here
     // asserted a feature that had matched nothing since it shipped.
 
+    /// Reported: the modal stayed open after a successful bulk removal,
+    /// with no sign anything had happened, while the count silently
+    /// ticked down behind it.
+    it("closes the dialog after a successful removal", async () => {
+      state.classified = threeSafe();
+      removeManyFn.mockResolvedValueOnce([
+        { path: "/code/a", error: null },
+        { path: "/code/b", error: null },
+      ]);
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^remove 2 worktrees$/i }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    /// #477: the dialog must close when the removal STARTS, not when it
+    /// finishes.
+    ///
+    /// Removing ~100 worktrees is around 30 seconds, and the modal sat
+    /// over the whole app for all of it. The two tests either side of
+    /// this one only assert the dialog closes eventually, which the old
+    /// code also did -- this one holds the promise open and asserts the
+    /// dialog is already gone while the work is still running.
+    it("closes the dialog while the removal is still running", async () => {
+      state.classified = threeSafe();
+      let finish!: (v: { path: string; error: string | null }[]) => void;
+      removeManyFn.mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^remove 2 worktrees$/i }));
+
+      // Still running -- and the dialog is already gone.
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(removeManyFn).toHaveBeenCalledTimes(1);
+
+      // And the work still completes and reports, unblocked.
+      finish([
+        { path: "/code/a", error: null },
+        { path: "/code/b", error: null },
+      ]);
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    });
+
+    /// The error is in a toast; a modal left open on top of it hides the
+    /// message that explains what went wrong.
+    it("closes the dialog when the removal fails outright", async () => {
+      state.classified = threeSafe();
+      removeManyFn.mockRejectedValueOnce("git exploded");
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^remove 2 worktrees$/i }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    /// `bulkBusy` existed and nothing read it, so a slow removal showed
+    /// an unchanging button and looked inert.
+    it("says it is working while the removal runs", async () => {
+      state.classified = threeSafe();
+      let settle: (v: { path: string; error: string | null }[]) => void = () => {};
+      removeManyFn.mockImplementationOnce(() => new Promise((res) => { settle = res; }));
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^remove 2 worktrees$/i }));
+
+      await screen.findByRole("button", { name: /removing/i });
+      settle([{ path: "/code/a", error: null }, { path: "/code/b", error: null }]);
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
     it("counts only the safe rows, in the label", () => {
       state.classified = threeSafe();
       render(<WorktreesPage />);
@@ -1101,7 +1177,8 @@ describe("WorktreesPage", () => {
     const showAll = () => {
       state.repos = twoRepos;
       useFilters.setState({
-        filtersByView: { ...EMPTY, worktrees: {} },
+        filtersByView: { ...EMPTY, worktrees: {},
+  branches: {} },
         view: "worktrees",
         panel: "list",
       });
@@ -1141,7 +1218,8 @@ describe("WorktreesPage", () => {
         { identity: null, name: "a", path: "/code/a", worktrees: [wt({ path: "/w/a", size_bytes: null })] },
       ];
       useFilters.setState({
-        filtersByView: { ...EMPTY, worktrees: {} },
+        filtersByView: { ...EMPTY, worktrees: {},
+  branches: {} },
         view: "worktrees",
         panel: "list",
       });

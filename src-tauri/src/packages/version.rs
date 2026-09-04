@@ -63,7 +63,7 @@ pub fn bump(current: &str, latest: &str) -> Bump {
 /// rest. A pre-release suffix that changes ordering (`1.0rc1` < `1.0`) is
 /// exactly the case where "we cannot tell" beats a guess, and equal
 /// numeric parts already answer Unknown.
-fn numeric_parts(v: &str) -> Option<Vec<u64>> {
+pub(super) fn numeric_parts(v: &str) -> Option<Vec<u64>> {
     // Strip what people put in front of versions: `v1.2.3`, `^1.2.3`,
     // `~1.2.3`, `>=1.2.3`. PEP 440 epochs (`1!2.0`) are dropped down to
     // the release segment, which is what is comparable across schemes.
