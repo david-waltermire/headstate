@@ -89,18 +89,58 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+      # A THROWAWAY key when the real one is unavailable.
+      #
+      # GitHub withholds repository secrets from workflows triggered by
+      # a fork pull request, so `TAURI_SIGNING_PRIVATE_KEY` arrives
+      # empty and `tauri build` refuses to bundle -- failing this job on
+      # every outside contribution, including one that changed only the
+      # README. A contributor cannot fix that from their branch.
+      #
+      # The key here only has to be VALID, not the real one: this job
+      # builds a bundle to check it builds, runs check-toast-css.sh
+      # against it, and discards it. Nothing is uploaded or published,
+      # so a signature made here can never reach a user.
+      #
+      # The release is unaffected and cannot be: `release.yml` is a
+      # separate workflow that reads the secret directly and HARD-FAILS
+      # when it is missing ("updates would be unusable"), and tags are
+      # cut from main, never from a fork. A throwaway key cannot reach
+      # a published artifact through this path.
+      - name: Provide a signing key when secrets are unavailable
+        id: signing
+        shell: bash
+        env:
+          REAL_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REAL_KEY:-}" ]; then
+            echo "key=$REAL_KEY" >> "$GITHUB_OUTPUT"
+            echo "Using the repository signing key."
+          else
+            # `-p ''` makes a key with no password, matching the empty
+            # password the build step passes.
+            yarn tauri signer generate -w "$RUNNER_TEMP/ci.key" -p '' >/dev/null
+            {
+              echo "key<<KEYEOF"
+              cat "$RUNNER_TEMP/ci.key"
+              echo
+              echo "KEYEOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "No signing secret (fork pull request); generated a throwaway key."
+          fi
+
       - name: Build the app bundle
         env:
-          # Needed here too, not just in the release workflow: once
-          # `tauri.conf.json` carries an updater public key, `tauri
-          # build` refuses to produce a bundle without the matching
-          # private key -- "A public key has been found, but no private
-          # key". Found by this very job failing on the updater PR.
+          # Once `tauri.conf.json` carries an updater public key, `tauri
+          # build` refuses to produce a bundle without a matching private
+          # key -- "A public key has been found, but no private key".
+          # Found by this very job failing on the updater PR.
           #
           # Signing in CI also means the bundle this job builds is the
           # same shape the release builds, rather than a variant that
           # only compiles here.
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.signing.outputs.key }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: yarn tauri build --bundles app
 

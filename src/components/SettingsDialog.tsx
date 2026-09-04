@@ -94,7 +94,31 @@ export function SettingsDialog({
           Without it a tall settings list pushed OK and Cancel below the
           window edge on an unmaximised window -- not merely hard to
           reach, invisible and unclickable. */}
-      <DialogContent className="flex max-w-lg flex-col">
+      {/* FIXED in both dimensions, like macOS System Settings.
+          Only the content pane scrolls.
+
+          Width: `max-w-lg` was 32rem, chosen when this was one column.
+          The topic menu then took 9rem of it and left ~20rem for
+          controls, which squeezed every row -- the poll-interval label
+          and its select, the cleanup granularity rows. `max-w-3xl`
+          gives the content pane roughly the width it had before the
+          menu existed.
+
+          Height: the dialog had a max but no fixed height, so it sized
+          to whichever topic was showing and jumped on every switch --
+          moving the window under the cursor, so the topic just clicked
+          could end up somewhere else. `h-[32rem]` holds it still.
+
+          Sizing to the tallest topic would also stop the jumping, but
+          pads every short topic with dead space and changes again the
+          moment a setting is added. A fixed frame does not. */}
+      {/* `sm:max-w-3xl` as well as `max-w-3xl`: the base
+          `DialogContent` carries `sm:max-w-sm`, and tailwind-merge
+          treats a responsive variant as a different key -- so a bare
+          `max-w-3xl` loses to it above 640px and the dialog would come
+          out NARROWER than the 32rem it started at. Verified against
+          twMerge rather than assumed. */}
+      <DialogContent className="flex h-[32rem] max-w-3xl flex-col sm:max-w-3xl">
         <DialogTitle>Settings</DialogTitle>
 
         {/* TWO PANES: topics on the left, the chosen one on the right.
