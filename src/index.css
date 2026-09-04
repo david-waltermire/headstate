@@ -146,6 +146,18 @@
     }
   html {
     @apply font-sans;
+    /* Native form controls are painted by the ENGINE, not by the classes
+     * on them. With no declared scheme the engine assumes light and
+     * paints a light widget, while the control keeps the near-white text
+     * colour it was given -- white on light, so the value vanishes. The
+     * poll-interval dropdown rendered as an empty box for exactly this
+     * reason.
+     *
+     * Declaring it is not a new preference: `<html class="dark">` means
+     * the app is already dark-only, and this tells the engine so.
+     * Preferred over `appearance: none`, which would hand styling back
+     * to CSS but drop the platform's dropdown indicator with it. */
+    color-scheme: dark;
     }
 }
 /* Always-visible scrollbars.
