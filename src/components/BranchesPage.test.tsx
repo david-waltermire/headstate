@@ -122,36 +122,92 @@ describe("BranchesPage", () => {
     expect(screen.getByLabelText("wip").hasAttribute("disabled")).toBe(true);
   });
 
-  it("deletes the selected local branches", async () => {
+  it("deletes the selected local branches through the scope modal", async () => {
     show();
     await screen.findByText("done");
     fireEvent.click(screen.getByLabelText("done"));
-    fireEvent.click(screen.getByRole("button", { name: /delete 1 local/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^delete 1…/i }));
+
+    // The modal asks where, and a local-only selection has one answer.
+    expect(await screen.findByText(/where should these be deleted/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /delete 1 branch locally/i }));
 
     await waitFor(() => expect(delLocal).toHaveBeenCalledTimes(1));
     expect(delLocal).toHaveBeenCalledWith("/code/app", ["done"]);
     expect(delRemote).not.toHaveBeenCalled();
   });
 
-  /// Deleting on the remote is a push to shared state. It must never
-  /// be reachable by the control that deletes a local ref.
-  it("keeps remote deletion on a separate control from local deletion", async () => {
-    listFn.mockResolvedValue([
-      branch({ name: "origin/shipped", location: "remote" }),
-    ]);
+  /// #472: one action for the whole merged set, selecting exactly what
+  /// ticking each row by hand would select.
+  it("selects every merged branch and no unmerged one", async () => {
+    show();
+    await screen.findByText("done");
+    fireEvent.click(screen.getByRole("button", { name: /select all 1 merged/i }));
+
+    expect((screen.getByLabelText("done") as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText("wip") as HTMLInputElement).checked).toBe(false);
+  });
+
+  /// A remote-only selection has no local side, so "locally" is not
+  /// offered -- an option with nothing to act on is how a user clicks
+  /// it and is told nothing happened.
+  it("offers only the remote scope for a remote-only selection", async () => {
+    listFn.mockResolvedValue([branch({ name: "origin/shipped", location: "remote" })]);
     show();
     await screen.findByText("origin/shipped");
     fireEvent.click(screen.getByLabelText("origin/shipped"));
+    fireEvent.click(screen.getByRole("button", { name: /^delete 1…/i }));
 
-    // The local button is present but has nothing local to act on.
-    expect(
-      screen.getByRole("button", { name: /delete 0 local/i }).hasAttribute("disabled"),
-    ).toBe(true);
+    await screen.findByText(/where should these be deleted/i);
+    expect(screen.getByText(/on the remote only/i)).toBeTruthy();
+    expect(screen.queryByText(/^locally only$/i)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /delete 1 on the remote/i }));
+    fireEvent.click(screen.getByRole("button", { name: /delete 1 branch on the remote/i }));
     await waitFor(() => expect(delRemote).toHaveBeenCalledTimes(1));
     expect(delRemote).toHaveBeenCalledWith("/code/app", ["origin/shipped"]);
     expect(delLocal).not.toHaveBeenCalled();
+  });
+
+  /// #473: a tracked branch exists in both places. Deleting it
+  /// "locally" only used to be the ONLY thing offered, leaving the
+  /// remote branch alive while the user believed it was cleaned up.
+  it("deletes a tracked branch in both places when asked to", async () => {
+    listFn.mockResolvedValue([
+      branch({ name: "shipped", location: "tracked", upstream: "origin/shipped" }),
+    ]);
+    show();
+    await screen.findByText("shipped");
+    fireEvent.click(screen.getByLabelText("shipped"));
+    fireEvent.click(screen.getByRole("button", { name: /^delete 1…/i }));
+
+    await screen.findByText(/where should these be deleted/i);
+    fireEvent.click(screen.getByText(/both here and on the remote/i));
+    fireEvent.click(
+      screen.getByRole("button", { name: /delete 1 branch locally and on the remote/i }),
+    );
+
+    await waitFor(() => expect(delLocal).toHaveBeenCalledTimes(1));
+    expect(delLocal).toHaveBeenCalledWith("/code/app", ["shipped"]);
+    // The UPSTREAM name, not the local one.
+    expect(delRemote).toHaveBeenCalledWith("/code/app", ["origin/shipped"]);
+  });
+
+  /// Local deletion is recoverable from the reflog; a remote one is
+  /// not. The default must never be the irreversible option.
+  it("defaults a tracked branch to the local-only scope", async () => {
+    listFn.mockResolvedValue([
+      branch({ name: "shipped", location: "tracked", upstream: "origin/shipped" }),
+    ]);
+    show();
+    await screen.findByText("shipped");
+    fireEvent.click(screen.getByLabelText("shipped"));
+    fireEvent.click(screen.getByRole("button", { name: /^delete 1…/i }));
+
+    await screen.findByText(/where should these be deleted/i);
+    fireEvent.click(screen.getByRole("button", { name: /delete 1 branch locally$/i }));
+
+    await waitFor(() => expect(delLocal).toHaveBeenCalledTimes(1));
+    expect(delRemote).not.toHaveBeenCalled();
   });
 
   /// A refusal names the branch AND the reason: a bare count tells the
@@ -163,7 +219,9 @@ describe("BranchesPage", () => {
     show();
     await screen.findByText("done");
     fireEvent.click(screen.getByLabelText("done"));
-    fireEvent.click(screen.getByRole("button", { name: /delete 1 local/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^delete 1…/i }));
+    await screen.findByText(/where should these be deleted/i);
+    fireEvent.click(screen.getByRole("button", { name: /delete 1 branch locally/i }));
 
     await waitFor(() =>
       expect(toasts.error).toHaveBeenCalledWith("Could not delete done", {

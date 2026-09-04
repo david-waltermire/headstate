@@ -1,10 +1,13 @@
 import { useMemo, useState } from "react";
+import { Questionnaire } from "@shadcn/react/questionnaire";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useBranches } from "@/api/hooks";
 import { deleteBranches, deleteRemoteBranches } from "@/api/tauri";
 import { useActiveFilters } from "@/store/filters";
 import type { Branch, Deletable } from "@/types/pr";
+import { type Scope, scopeLabel, scopesFor, targetsFor } from "@/lib/branchDelete";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 
 /// Why a branch is or is not deletable, in words.
 ///
@@ -48,27 +51,19 @@ export function BranchesPage() {
   const qc = useQueryClient();
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const [asking, setAsking] = useState(false);
 
   const branches = useMemo(() => data ?? [], [data]);
   const deletable = useMemo(() => branches.filter(isDeletable), [branches]);
 
-  // Local and remote are counted separately because they are deleted
-  // by separate actions: one removes a ref here, the other pushes a
-  // deletion everyone else sees.
-  const pickedLocal = useMemo(
-    () =>
-      [...picked].filter((n) =>
-        branches.some((b) => b.name === n && b.location !== "remote"),
-      ),
+  // The selected BRANCHES, not their names: deciding where a deletion
+  // can happen needs each one's location and upstream, which a name
+  // alone does not carry. #473 came from splitting on names.
+  const chosen = useMemo(
+    () => branches.filter((b) => picked.has(b.name)),
     [picked, branches],
   );
-  const pickedRemote = useMemo(
-    () =>
-      [...picked].filter((n) =>
-        branches.some((b) => b.name === n && b.location === "remote"),
-      ),
-    [picked, branches],
-  );
+  const scopes = useMemo(() => scopesFor(chosen), [chosen]);
 
   const toggle = (name: string) =>
     setPicked((prev) => {
@@ -88,17 +83,27 @@ export function BranchesPage() {
     }
   };
 
-  const run = (
-    fn: (repoPath: string, names: string[]) => Promise<{ name: string; error: string | null }[]>,
-    names: string[],
-  ) => {
-    if (!repo || names.length === 0) return;
+  /// Perform a deletion at the chosen scope.
+  ///
+  /// "Both" is TWO backend calls against two different things, and
+  /// they are reported together but not merged: a tracked branch whose
+  /// local ref went and whose remote push failed must say so, or the
+  /// user is left believing the same thing #473 made them believe.
+  const run = (scope: Scope) => {
+    if (!repo) return;
+    const t = targetsFor(chosen, scope);
+    if (t.local.length === 0 && t.remote.length === 0) return;
+
     setBusy(true);
-    fn(repo, names).then(
-      (outcomes) => {
+    setAsking(false);
+    Promise.all([
+      t.local.length > 0 ? deleteBranches(repo, t.local) : Promise.resolve([]),
+      t.remote.length > 0 ? deleteRemoteBranches(repo, t.remote) : Promise.resolve([]),
+    ]).then(
+      ([local, remote]) => {
         setBusy(false);
         setPicked(new Set());
-        report(outcomes);
+        report([...local, ...remote]);
         void qc.invalidateQueries({ queryKey: ["branches", repo] });
       },
       (e: unknown) => {
@@ -137,38 +142,53 @@ export function BranchesPage() {
         {branches.length} branch{branches.length === 1 ? "" : "es"} · {deletable.length} merged
       </p>
 
-      {picked.size > 0 ? (
-        <div className="flex flex-wrap items-center gap-2 rounded border border-[#30363d] bg-[#161b22] p-2">
-          <span className="text-[#8b949e]">{picked.size} selected</span>
-          <button
-            type="button"
-            disabled={busy || pickedLocal.length === 0}
-            onClick={() => run(deleteBranches, pickedLocal)}
-            className="rounded border border-[#30363d] px-2 py-1 text-xs text-[#e6edf3] hover:bg-[#21262d] disabled:opacity-40"
-          >
-            Delete {pickedLocal.length} local
-          </button>
-          {/* Its own control, in its own colour, saying "remote" in the
-              label. This pushes a deletion to a shared remote, which no
-              local reflog can undo -- it must not be reachable by the
-              same click as a local ref. */}
-          <button
-            type="button"
-            disabled={busy || pickedRemote.length === 0}
-            onClick={() => run(deleteRemoteBranches, pickedRemote)}
-            className="rounded border border-[#f85149]/40 px-2 py-1 text-xs text-[#f85149] hover:bg-[#f85149]/10 disabled:opacity-40"
-          >
-            Delete {pickedRemote.length} on the remote
-          </button>
-          <button
-            type="button"
-            onClick={() => setPicked(new Set())}
-            className="ml-auto text-xs text-[#8b949e] hover:text-[#e6edf3]"
-          >
-            Clear
-          </button>
-        </div>
-      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        {/* Selects exactly what ticking every deletable row by hand
+            would select -- the same `merged` gate, not a second
+            definition that could drift from it. */}
+        <button
+          type="button"
+          disabled={busy || deletable.length === 0}
+          onClick={() => setPicked(new Set(deletable.map((b) => b.name)))}
+          className="rounded border border-[#30363d] px-2 py-1 text-xs text-[#e6edf3] hover:bg-[#21262d] disabled:opacity-40"
+        >
+          Select all {deletable.length} merged
+        </button>
+        {picked.size > 0 ? (
+          <>
+            <span className="text-xs text-[#8b949e]">{picked.size} selected</span>
+            {/* ONE button. Where the deletion happens is a question the
+                modal asks, because a tracked branch exists in two
+                places and two side-by-side buttons could not express
+                "both" -- they filed it under "local" and left the
+                remote branch alive (#473). */}
+            <button
+              type="button"
+              disabled={busy || scopes.length === 0}
+              onClick={() => setAsking(true)}
+              className="rounded border border-[#30363d] px-2 py-1 text-xs text-[#e6edf3] hover:bg-[#21262d] disabled:opacity-40"
+            >
+              Delete {picked.size}…
+            </button>
+            <button
+              type="button"
+              onClick={() => setPicked(new Set())}
+              className="text-xs text-[#8b949e] hover:text-[#e6edf3]"
+            >
+              Clear
+            </button>
+          </>
+        ) : null}
+      </div>
+
+      <DeleteScopeDialog
+        open={asking}
+        onOpenChange={setAsking}
+        chosen={chosen}
+        scopes={scopes}
+        busy={busy}
+        onConfirm={run}
+      />
 
       <ul className="space-y-1">
         {branches.map((b) => {
@@ -208,5 +228,127 @@ export function BranchesPage() {
         })}
       </ul>
     </div>
+  );
+}
+
+/// Asks WHERE to delete, rather than making the user pick a button
+/// that guesses.
+///
+/// The scope question exists because a tracked branch is two things.
+/// Before this, the view offered "local" and "remote" as separate
+/// controls and quietly filed tracked branches under local -- deleting
+/// the ref here and leaving the branch on the remote, which then
+/// reappeared as remote-only (#473).
+function DeleteScopeDialog({
+  open,
+  onOpenChange,
+  chosen,
+  scopes,
+  busy,
+  onConfirm,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  chosen: Branch[];
+  scopes: Scope[];
+  busy: boolean;
+  onConfirm: (s: Scope) => void;
+}) {
+  // Defaults to the safest option that applies. Local deletion is
+  // recoverable from the reflog; a remote deletion is not, so it is
+  // never what a distracted Enter press does.
+  const [chosenScope, setScope] = useState<Scope | null>(null);
+  // A held choice that no longer applies must not survive: selecting a
+  // tracked branch, choosing "both", then changing the selection to
+  // remote-only branches would otherwise leave "both" active and send
+  // names to a call that cannot use them.
+  const scope: Scope =
+    chosenScope !== null && scopes.includes(chosenScope)
+      ? chosenScope
+      : (scopes[0] ?? "local");
+
+  const describe = (s: Scope) => {
+    switch (s) {
+      case "local":
+        return "Removes the branch here. Recoverable from the reflog.";
+      case "remote":
+        return "Pushes a deletion to the remote. Everyone loses it, and no local reflog can undo that.";
+      case "both":
+        return "Removes it here and on the remote. The remote half cannot be undone.";
+    }
+  };
+
+  const targets = targetsFor(chosen, scope);
+  const label = scopeLabel(scope, targets);
+  // Saying so in the confirm state, not only in the option text: with
+  // one control instead of two, the words are what carry the warning
+  // the separate red button used to.
+  const touchesRemote = targets.remote.length > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>
+          Delete {chosen.length} branch{chosen.length === 1 ? "" : "es"}
+        </DialogTitle>
+        <Questionnaire.Root>
+          <Questionnaire.Item name="scope" required>
+            <Questionnaire.Title className="mt-2 text-sm text-[#e6edf3]">
+              Where should these be deleted?
+            </Questionnaire.Title>
+            <Questionnaire.Choices className="mt-3 space-y-2">
+              {scopes.map((s) => (
+                <Questionnaire.Choice
+                  key={s}
+                  value={s}
+                  checked={scope === s}
+                  onChange={() => setScope(s)}
+                  className="flex cursor-pointer items-start gap-2 rounded border border-[#30363d] p-2 hover:bg-[#161b22]"
+                >
+                  <Questionnaire.ChoiceInput className="mt-1" />
+                  <span>
+                    <Questionnaire.ChoiceLabel className="block text-sm text-[#e6edf3]">
+                      {s === "local"
+                        ? "Locally only"
+                        : s === "remote"
+                          ? "On the remote only"
+                          : "Both here and on the remote"}
+                    </Questionnaire.ChoiceLabel>
+                    <span className="block text-xs text-[#8b949e]">{describe(s)}</span>
+                  </span>
+                </Questionnaire.Choice>
+              ))}
+            </Questionnaire.Choices>
+          </Questionnaire.Item>
+        </Questionnaire.Root>
+
+        <p className="mt-3 text-xs text-[#8b949e]">
+          Each branch is re-checked before deletion, so anything that changed since
+          the scan is skipped.
+        </p>
+
+        <div className="mt-4 flex items-center gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onConfirm(scope)}
+            className={`rounded px-3 py-1 text-xs disabled:opacity-40 ${
+              touchesRemote
+                ? "border border-[#f85149]/40 text-[#f85149] hover:bg-[#f85149]/10"
+                : "border border-[#30363d] text-[#e6edf3] hover:bg-[#21262d]"
+            }`}
+          >
+            {label}
+          </button>
+          <button
+            type="button"
+            onClick={() => onOpenChange(false)}
+            className="text-xs text-[#8b949e] hover:text-[#e6edf3]"
+          >
+            Cancel
+          </button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

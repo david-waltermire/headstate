@@ -364,4 +364,49 @@ mod tests {
             .unwrap();
         assert!(!String::from_utf8_lossy(&refs.stdout).trim().is_empty());
     }
+
+    /// A tracked branch deleted in BOTH places.
+    ///
+    /// #473: the view filed tracked branches under "local" and never
+    /// offered the remote half, so the local ref went and the remote
+    /// branch stayed -- and, its local ref now gone, it came back in
+    /// the list as remote-only. The user believed it was cleaned up.
+    ///
+    /// The backend already supports this; what it needs is a caller
+    /// that passes the branch name to one function and the UPSTREAM
+    /// name to the other. This proves that pairing works.
+    #[test]
+    fn a_tracked_branch_can_be_deleted_in_both_places() {
+        let (_t, repo) = fixture();
+        run(&repo, &["checkout", "-q", "-b", "shipped"]);
+        commit(&repo, "shipped-work");
+        run(&repo, &["push", "-q", "-u", "origin", "shipped"]);
+        squash_merge(&repo, "shipped");
+
+        // As the view sees it: one branch, location Tracked.
+        let listed = scan::scan(&repo).unwrap();
+        let b = listed.iter().find(|b| b.name == "shipped").unwrap();
+        assert_eq!(b.location, super::super::model::Location::Tracked);
+        let upstream = b
+            .upstream
+            .clone()
+            .expect("a tracked branch has an upstream");
+
+        let local = delete_local(repo.to_str().unwrap(), &["shipped".to_string()]);
+        assert_eq!(local[0].error, None, "{:?}", local[0]);
+        let remote = delete_remote(repo.to_str().unwrap(), &[upstream]);
+        assert_eq!(remote[0].error, None, "{:?}", remote[0]);
+
+        assert!(!branch_exists(&repo, "shipped"));
+        let refs = Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["ls-remote", "--heads", "origin", "shipped"])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&refs.stdout).trim().is_empty(),
+            "the remote branch must be gone too -- this is the #473 failure"
+        );
+    }
 }
