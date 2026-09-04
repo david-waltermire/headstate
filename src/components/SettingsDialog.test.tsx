@@ -209,6 +209,29 @@ describe("the settings sections", () => {
     }
   });
 
+  /// #485: the frame is fixed in BOTH dimensions, like macOS System
+  /// Settings, so switching topics does not resize the window under
+  /// the cursor.
+  ///
+  /// Asserted on the resolved class list because that is what the bug
+  /// was: `max-w-lg` left ~20rem for controls once the 9rem topic menu
+  /// took its share, and no height at all meant the dialog sized to
+  /// whichever panel was showing.
+  it("has a fixed frame that does not resize with the topic", () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const panel = screen.getByRole("dialog");
+    const cls = panel.className;
+
+    expect(cls).toMatch(/\bh-\[32rem\]/);
+    expect(cls).toMatch(/\bmax-w-3xl\b/);
+    // The base DialogContent carries `sm:max-w-sm`, and tailwind-merge
+    // keeps a responsive variant alongside a bare one -- so without an
+    // explicit `sm:` override the dialog is NARROWER above 640px than
+    // before this change.
+    expect(cls).toMatch(/\bsm:max-w-3xl\b/);
+    expect(cls).not.toMatch(/\bsm:max-w-sm\b/);
+  });
+
   it("marks the chosen topic as current", () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
     const nav = screen.getByRole("navigation", { name: /settings sections/i });

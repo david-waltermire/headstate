@@ -177,7 +177,21 @@ fn is_multi_reference(err: &str) -> bool {
 /// sufficient -- the daemon drops the image, and its digests with it,
 /// when the last tag goes.
 fn remove_by_references(id: &str, original: &str) -> Result<(), String> {
-    let refs = references(id)?;
+    remove_by_references_with(id, original, &|args| docker(args))
+}
+
+/// The untag path with the docker invocation injected.
+///
+/// Exists so a test can drive the REAL logic against a stand-in binary
+/// and assert on the arguments it receives. Replaying the calls by hand
+/// instead would assert nothing: verified by mutation -- with that
+/// version, replacing this whole path with `rmi --force` still passed.
+fn remove_by_references_with(
+    id: &str,
+    original: &str,
+    run: &dyn Fn(&[&str]) -> Result<String, String>,
+) -> Result<(), String> {
+    let refs = references_with(id, run)?;
     if refs.is_empty() {
         // Nothing to untag means the conflict came from somewhere this
         // cannot address, so the daemon's own words stand.
@@ -186,10 +200,11 @@ fn remove_by_references(id: &str, original: &str) -> Result<(), String> {
 
     let mut failures = Vec::new();
     for r in &refs {
-        if let Err(e) = docker(&["rmi", r]) {
+        if let Err(e) = run(&["rmi", r]) {
             failures.push(format!("{r}: {e}"));
         }
     }
+
     if failures.is_empty() {
         Ok(())
     } else {
@@ -198,8 +213,11 @@ fn remove_by_references(id: &str, original: &str) -> Result<(), String> {
 }
 
 /// The tags this image can be addressed by.
-fn references(id: &str) -> Result<Vec<String>, String> {
-    let out = docker(&[
+fn references_with(
+    id: &str,
+    run: &dyn Fn(&[&str]) -> Result<String, String>,
+) -> Result<Vec<String>, String> {
+    let out = run(&[
         "image",
         "inspect",
         id,
@@ -273,8 +291,13 @@ mod remove_tests {
     ///
     /// A string test cannot catch that: mutation testing showed the
     /// whole untag path could be replaced with `rmi --force` and every
-    /// other test still passed. This runs the real code against a
-    /// stand-in docker that records its arguments.
+    /// other test still passed. So this drives the real removal against
+    /// a stand-in docker that records its arguments.
+    ///
+    /// The binary is INJECTED via `docker_at`. An earlier version set
+    /// `HEADSTATE_DOCKER` with `temp_env`, which is a process-global
+    /// mutation -- the #481 hazard -- and it failed on ubuntu CI while
+    /// passing locally.
     #[cfg(unix)]
     #[test]
     fn removal_never_passes_force_to_docker() {
@@ -283,18 +306,15 @@ mod remove_tests {
         let tmp = tempfile::TempDir::new().unwrap();
         let log = tmp.path().join("args.log");
         let bin = tmp.path().join("docker");
-        // Refuses `rmi <id>` the way a real daemon does, answers
-        // `inspect` with two references, and accepts the untags.
         std::fs::write(
             &bin,
             format!(
-                "#!/bin/sh\necho \"$@\" >> {log}\n\
-                 case \"$1 $2\" in\n\
-                 \"image inspect\") echo 'octocat/example:v1'; echo 'octocat/example:latest'; exit 0;;\n\
-                 esac\n\
-                 case \"$2\" in\n\
-                 deadbeef) echo 'Error response from daemon: conflict: unable to delete deadbeef (must be forced) - image is referenced in multiple repositories' >&2; exit 1;;\n\
-                 esac\n\
+                "#!/bin/sh\n\
+                 echo \"$@\" >> {log}\n\
+                 if [ \"$1 $2\" = \"image inspect\" ]; then\n\
+                 echo 'octocat/example:v1'\n\
+                 echo 'octocat/example:latest'\n\
+                 fi\n\
                  exit 0\n",
                 log = log.display()
             ),
@@ -302,9 +322,12 @@ mod remove_tests {
         .unwrap();
         std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-        temp_env::with_var("HEADSTATE_DOCKER", Some(bin.to_str().unwrap()), || {
-            let _ = remove_image("deadbeef");
-        });
+        // Drives the REAL untag path -- not a replay of its calls.
+        // With a replay, replacing this whole path with `rmi --force`
+        // still passed every test.
+        let bin2 = bin.clone();
+        let run = move |args: &[&str]| crate::docker::cli::docker_at(&bin2, args);
+        let _ = remove_by_references_with("deadbeef", "conflict", &run);
 
         let recorded = std::fs::read_to_string(&log).unwrap_or_default();
         assert!(
