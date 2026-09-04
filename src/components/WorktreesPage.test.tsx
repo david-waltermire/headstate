@@ -961,6 +961,38 @@ describe("WorktreesPage", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     });
 
+    /// #477: the dialog must close when the removal STARTS, not when it
+    /// finishes.
+    ///
+    /// Removing ~100 worktrees is around 30 seconds, and the modal sat
+    /// over the whole app for all of it. The two tests either side of
+    /// this one only assert the dialog closes eventually, which the old
+    /// code also did -- this one holds the promise open and asserts the
+    /// dialog is already gone while the work is still running.
+    it("closes the dialog while the removal is still running", async () => {
+      state.classified = threeSafe();
+      let finish!: (v: { path: string; error: string | null }[]) => void;
+      removeManyFn.mockReturnValueOnce(
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      );
+      render(<WorktreesPage />);
+      fireEvent.click(screen.getByRole("button", { name: /remove 2 safe worktrees/i }));
+      fireEvent.click(screen.getByRole("button", { name: /^remove 2 worktrees$/i }));
+
+      // Still running -- and the dialog is already gone.
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(removeManyFn).toHaveBeenCalledTimes(1);
+
+      // And the work still completes and reports, unblocked.
+      finish([
+        { path: "/code/a", error: null },
+        { path: "/code/b", error: null },
+      ]);
+      await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    });
+
     /// The error is in a toast; a modal left open on top of it hides the
     /// message that explains what went wrong.
     it("closes the dialog when the removal fails outright", async () => {

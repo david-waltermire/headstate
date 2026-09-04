@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Safety } from "@/types/pr";
-import {
-  formatSize,
-  isSafe,
-  pathBasename,
-  prForWorktree,
-  safetyReason,
-  safetyTone,
-} from "./worktrees";
+import { formatSize, isSafe, pathBasename, prForWorktree, safetyReason, safetyTone, totalSize } from "./worktrees";
 
 describe("isSafe", () => {
   // Only `safe` is deletable. Everything else is disabled rather than
@@ -133,5 +126,32 @@ describe("prForWorktree", () => {
   it("makes no match for a detached worktree", () => {
     const prs = [pr("octocat/api", "feat/x", 1)];
     expect(prForWorktree(prs, "octocat/api", "")).toBeNull();
+  });
+});
+
+describe("totalSize", () => {
+  const w = (size_bytes: number | null) => ({ size_bytes });
+
+  /// THE bug: `reduce(...) || null` turned a real zero into "unknown",
+  /// rendering as `—` where `0 B` was the answer.
+  it("reports a measured total of zero as zero, not as unknown", () => {
+    expect(totalSize([w(0), w(0)])).toBe(0);
+  });
+
+  /// The other half: an unmeasured set also summed to 0 and showed the
+  /// same dash, so "still measuring" was indistinguishable from
+  /// "nothing to reclaim". Sizing is slow, which is why this appeared
+  /// only sometimes.
+  it("reports nothing-measured as unknown", () => {
+    expect(totalSize([w(null), w(null)])).toBeNull();
+    expect(totalSize([])).toBeNull();
+  });
+
+  it("sums what is known and ignores what is not", () => {
+    expect(totalSize([w(100), w(null), w(50)])).toBe(150);
+  });
+
+  it("is a real total when everything is measured", () => {
+    expect(totalSize([w(1024), w(2048)])).toBe(3072);
   });
 });

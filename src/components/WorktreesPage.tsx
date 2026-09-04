@@ -20,6 +20,7 @@ import {
 } from "../api/hooks";
 import {
   formatSize,
+  totalSize,
   canClaudify,
   isPending,
   isSafe,
@@ -942,12 +943,15 @@ export function WorktreesPage() {
               {/* Sizes are already computed, and reclaimed space is the
                   number that makes this decision -- it is why the view
                   exists. */}
-              Reclaims {formatSize(
-                shown
-                  .filter((w) => isSafe(w.safety))
-                  .reduce((n, w) => n + (w.size_bytes ?? 0), 0) || null,
-              )}
-              . Each is re-checked before deletion, so anything that changed
+              {/* "Still measuring" and "nothing to reclaim" are
+                  different answers and used to share one dash. */}
+              {(() => {
+                const total = totalSize(shown.filter((w) => isSafe(w.safety)));
+                return total === null
+                  ? "Sizes are still being measured."
+                  : `Reclaims ${formatSize(total)}.`;
+              })()}{" "}
+              Each is re-checked before deletion, so anything that changed
               since the scan is skipped.
             </p>
             {/* The third system this page could never reach. Docker
@@ -980,16 +984,22 @@ export function WorktreesPage() {
                 type="button"
                 onClick={() => {
                   const targets = shownSafe.map((w) => w.path);
-                  // BUSY, and then CLOSED. Neither was set: the dialog
-                  // stayed open with an unchanging button while the
-                  // removal ran, so it looked like the click did
-                  // nothing -- and then the count silently ticked down
-                  // underneath as the list updated behind the modal.
+                  // Closed NOW, not when the batch finishes.
+                  //
+                  // It used to close in `.then()`, so the modal sat over
+                  // the app for the whole removal -- around 30 seconds
+                  // for ~100 worktrees -- and nothing else could be
+                  // used. The work does not need the dialog: progress
+                  // is already on the toolbar button ("Removed 12 of
+                  // 40…"), the outcomes arrive as a toast, and the
+                  // promise runs to completion regardless of what is on
+                  // screen. So the user asked for a deletion and gets
+                  // their app back.
                   setBulkBusy(true);
+                  setBulkOpen(false);
                   removeMany(selected?.path ?? "", targets).then(
                     (outcomes) => {
                       setBulkBusy(false);
-                      setBulkOpen(false);
                       const failed = outcomes.filter((o) => o.error !== null);
                       const ok = outcomes.length - failed.length;
                       // Never a bare "done": a worktree that went dirty
@@ -1007,10 +1017,6 @@ export function WorktreesPage() {
                     },
                     (e: unknown) => {
                       setBulkBusy(false);
-                      // Closed on failure too: the error is in the
-                      // toast, and leaving a modal open over it hides
-                      // the very message that explains what happened.
-                      setBulkOpen(false);
                       toast.error("The bulk removal could not run", {
                         description: typeof e === "string" ? e : undefined,
                       });
