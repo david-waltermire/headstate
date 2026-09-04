@@ -135,7 +135,83 @@ pub fn remove_image(id: &str) -> Result<(), String> {
     }
     // No `--force`. A refusal means something depends on it, and forcing
     // past that is how a running stack loses its image mid-session.
-    docker(&["rmi", id]).map(|_| ())
+    match docker(&["rmi", id]) {
+        Ok(_) => Ok(()),
+        // An image carrying several references refuses removal by ID.
+        // Remove the REFERENCES instead: the image goes when the last
+        // one does, which is what the user asked for, without `--force`
+        // silencing the in-use refusal too.
+        Err(e) if is_multi_reference(&e) => remove_by_references(id, &e),
+        Err(e) => Err(e),
+    }
+}
+
+/// Whether a refusal is the several-references one.
+///
+/// Matched on the daemon's own wording. Deliberately narrow: every
+/// OTHER "must be forced" refusal means something depends on the
+/// image, and those must keep failing.
+fn is_multi_reference(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("must be forced") && e.contains("referenced in multiple repositories")
+}
+
+/// Remove an image by untagging each of its references.
+///
+/// MEASURED, not assumed. `docker rmi <id>` refuses an image with
+/// several references; removing each reference by name untags them in
+/// turn and the daemon deletes the image once the last one is gone.
+/// Verified against a real daemon: three references removed one by
+/// one, image gone, no `--force` anywhere.
+///
+/// Only TAGS are removed, though digests are what usually cause the
+/// conflict. A pulled image carries a `RepoDigest` per repository name
+/// alongside its tags, and the daemon counts those toward "multiple
+/// repositories" -- which is why this fires on images whose tags all
+/// share one name.
+///
+/// Digests cannot be removed this way. Measured: `rmi` on a digest ref
+/// of a locally-tagged image answers "No such image", and a first
+/// version of this that passed digests through reported failure for an
+/// image it had just successfully deleted. Removing the tags is
+/// sufficient -- the daemon drops the image, and its digests with it,
+/// when the last tag goes.
+fn remove_by_references(id: &str, original: &str) -> Result<(), String> {
+    let refs = references(id)?;
+    if refs.is_empty() {
+        // Nothing to untag means the conflict came from somewhere this
+        // cannot address, so the daemon's own words stand.
+        return Err(original.to_string());
+    }
+
+    let mut failures = Vec::new();
+    for r in &refs {
+        if let Err(e) = docker(&["rmi", r]) {
+            failures.push(format!("{r}: {e}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+/// The tags this image can be addressed by.
+fn references(id: &str) -> Result<Vec<String>, String> {
+    let out = docker(&[
+        "image",
+        "inspect",
+        id,
+        "--format",
+        "{{range .RepoTags}}{{println .}}{{end}}",
+    ])?;
+    Ok(out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && *l != "<none>:<none>")
+        .map(str::to_string)
+        .collect())
 }
 
 /// Remove several images, reporting each independently.
@@ -150,4 +226,100 @@ pub fn remove_images(ids: &[String]) -> Vec<RemovalOutcome> {
             error: remove_image(id).err(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod remove_tests {
+    use super::*;
+
+    /// The daemon's exact wording, captured from a real failure:
+    ///
+    ///   conflict: unable to delete 9b531bc8882c (must be forced)
+    ///   - image is referenced in multiple repositories
+    #[test]
+    fn the_several_references_refusal_is_recognised() {
+        let real = "Error response from daemon: conflict: unable to delete \
+                    9b531bc8882c (must be forced) - image is referenced in \
+                    multiple repositories";
+        assert!(is_multi_reference(real));
+    }
+
+    /// THE distinction this fix rests on. Every other "must be forced"
+    /// refusal means something DEPENDS on the image, and untagging
+    /// references would not help -- those must keep failing rather
+    /// than being routed into the untag path.
+    #[test]
+    fn an_in_use_refusal_is_not_treated_as_a_reference_conflict() {
+        let in_use = "Error response from daemon: conflict: unable to delete \
+                      9b531bc8882c (cannot be forced) - image is being used by \
+                      running container abc123";
+        assert!(!is_multi_reference(in_use));
+
+        let stopped = "Error response from daemon: conflict: unable to delete \
+                       9b531bc8882c (must be forced) - image is being used by \
+                       stopped container abc123";
+        assert!(
+            !is_multi_reference(stopped),
+            "a container refusal says 'must be forced' too, and is NOT this case"
+        );
+
+        let child = "Error response from daemon: conflict: unable to delete \
+                     9b531bc8882c (must be forced) - image has dependent child images";
+        assert!(!is_multi_reference(child));
+    }
+
+    /// `--force` must never appear, because it silences the IN-USE
+    /// refusal as well as the reference one.
+    ///
+    /// A string test cannot catch that: mutation testing showed the
+    /// whole untag path could be replaced with `rmi --force` and every
+    /// other test still passed. This runs the real code against a
+    /// stand-in docker that records its arguments.
+    #[cfg(unix)]
+    #[test]
+    fn removal_never_passes_force_to_docker() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let log = tmp.path().join("args.log");
+        let bin = tmp.path().join("docker");
+        // Refuses `rmi <id>` the way a real daemon does, answers
+        // `inspect` with two references, and accepts the untags.
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> {log}\n\
+                 case \"$1 $2\" in\n\
+                 \"image inspect\") echo 'octocat/example:v1'; echo 'octocat/example:latest'; exit 0;;\n\
+                 esac\n\
+                 case \"$2\" in\n\
+                 deadbeef) echo 'Error response from daemon: conflict: unable to delete deadbeef (must be forced) - image is referenced in multiple repositories' >&2; exit 1;;\n\
+                 esac\n\
+                 exit 0\n",
+                log = log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        temp_env::with_var("HEADSTATE_DOCKER", Some(bin.to_str().unwrap()), || {
+            let _ = remove_image("deadbeef");
+        });
+
+        let recorded = std::fs::read_to_string(&log).unwrap_or_default();
+        assert!(
+            !recorded.contains("--force") && !recorded.contains(" -f"),
+            "removal must never force; docker was called with:\n{recorded}"
+        );
+        assert!(
+            recorded.contains("octocat/example:v1") && recorded.contains("octocat/example:latest"),
+            "both references must be untagged; docker was called with:\n{recorded}"
+        );
+    }
+
+    #[test]
+    fn an_unrelated_error_is_not_a_reference_conflict() {
+        assert!(!is_multi_reference("No such image: nope:latest"));
+        assert!(!is_multi_reference(""));
+    }
 }
