@@ -104,6 +104,18 @@ pub fn docker(args: &[&str]) -> Result<String, String> {
     run_bounded(&bin, args)
 }
 
+/// Run a specific docker binary, bounded.
+///
+/// Exposed so a test can point at a stand-in WITHOUT setting
+/// `HEADSTATE_DOCKER` process-wide. That mutation is the #481 hazard:
+/// environment variables are global, so a concurrent test can observe
+/// or clobber them. It made `removal_never_passes_force_to_docker`
+/// fail on ubuntu CI while passing locally.
+#[cfg(test)]
+pub(crate) fn docker_at(bin: &Path, args: &[&str]) -> Result<String, String> {
+    run_bounded(bin, args)
+}
+
 fn run_bounded(bin: &Path, args: &[&str]) -> Result<String, String> {
     let mut child = Command::new(bin)
         .args(args)
