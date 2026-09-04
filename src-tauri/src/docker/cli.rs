@@ -44,16 +44,41 @@ pub fn find_docker() -> Option<PathBuf> {
 /// `find_docker` with the fallback list injected, so the fallback branch
 /// is testable without depending on what is installed on the runner.
 pub fn find_docker_in(fallbacks: &[&str]) -> Option<PathBuf> {
+    find_docker_with(
+        fallbacks,
+        std::env::var("PATH").ok().as_deref(),
+        std::env::var("HEADSTATE_DOCKER").ok().as_deref(),
+    )
+}
+
+/// The same search with the ENVIRONMENT injected too.
+///
+/// Exists because the test for this used `temp_env` to clear `PATH`,
+/// and `PATH` is process-GLOBAL: under `--test-threads=8` every other
+/// test spawning `git` in that window got a PATH with no git in it and
+/// failed with ENOENT. Reproduced deliberately -- 877 spawn failures on
+/// a thread doing nothing but `git --version` while this ran (#481).
+///
+/// `temp_env` cannot prevent that. Its mutex serialises `temp_env`
+/// callers against each other, not against the rest of the suite
+/// reading the same global.
+///
+/// So the test passes the environment in rather than editing everyone's.
+pub fn find_docker_with(
+    fallbacks: &[&str],
+    path: Option<&str>,
+    explicit: Option<&str>,
+) -> Option<PathBuf> {
     let exe = format!("docker{}", std::env::consts::EXE_SUFFIX);
 
-    if let Ok(explicit) = std::env::var("HEADSTATE_DOCKER") {
+    if let Some(explicit) = explicit {
         let p = PathBuf::from(explicit);
         if p.is_file() {
             return Some(p);
         }
     }
-    if let Ok(path) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&path) {
+    if let Some(path) = path {
+        for dir in std::env::split_paths(path) {
             let candidate = dir.join(&exe);
             if candidate.is_file() {
                 return Some(candidate);
@@ -188,15 +213,13 @@ mod tests {
         let empty = std::env::temp_dir().join(format!("hs-dk-empty-{}", std::process::id()));
         std::fs::create_dir_all(&empty).unwrap();
 
-        temp_env::with_vars(
-            [
-                ("PATH", Some(empty.to_str().unwrap())),
-                ("HEADSTATE_DOCKER", None),
-            ],
-            || {
-                let fallbacks = [tmp.to_str().unwrap()];
-                assert_eq!(find_docker_in(&fallbacks), Some(want.clone()));
-            },
+        // The environment is INJECTED, not edited. Editing it changed
+        // PATH for every other thread in the suite -- see
+        // `find_docker_with`.
+        let fallbacks = [tmp.to_str().unwrap()];
+        assert_eq!(
+            find_docker_with(&fallbacks, empty.to_str(), None),
+            Some(want.clone())
         );
         std::fs::remove_dir_all(&tmp).ok();
         std::fs::remove_dir_all(&empty).ok();
@@ -210,12 +233,9 @@ mod tests {
         let b = std::env::temp_dir().join(format!("hs-dk-b-{}", std::process::id()));
         fake_docker(&a);
         let want = fake_docker(&b);
-        temp_env::with_vars(
-            [
-                ("PATH", Some(a.to_str().unwrap())),
-                ("HEADSTATE_DOCKER", Some(want.to_str().unwrap())),
-            ],
-            || assert_eq!(find_docker_in(&[]), Some(want.clone())),
+        assert_eq!(
+            find_docker_with(&[], a.to_str(), want.to_str()),
+            Some(want.clone())
         );
         std::fs::remove_dir_all(&a).ok();
         std::fs::remove_dir_all(&b).ok();
