@@ -7,7 +7,8 @@ import { PR_FIXTURES } from "../fixtures/prs";
 afterEach(() => {
   cleanup();
   useFilters.getState().reset();
-  useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} } });
+  useFilters.setState({ filtersByView: { "my-prs": {}, "to-review": {}, worktrees: {},
+  branches: {}, docker: {}, artifacts: {}, packages: {}, "claude-md": {} } });
 });
 
 /// The Reviews trigger rendered `${filters.review}` directly, so choosing
@@ -22,6 +23,7 @@ describe("FilterBar review trigger", () => {
         "my-prs": { review: "changes_requested" },
         "to-review": {},
         worktrees: {},
+  branches: {},
         docker: {}, artifacts: {}, packages: {}, "claude-md": {},
       },
     });
@@ -36,6 +38,7 @@ describe("FilterBar review trigger", () => {
         "my-prs": { review: "review_required" },
         "to-review": {},
         worktrees: {},
+  branches: {},
         docker: {}, artifacts: {}, packages: {}, "claude-md": {},
       },
     });

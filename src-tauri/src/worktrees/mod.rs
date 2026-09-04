@@ -13,7 +13,7 @@
 
 mod assess;
 mod model;
-mod scan;
+pub(crate) mod scan;
 
 pub use assess::{assess, Assessment};
 pub use model::{Repo, Worktree};

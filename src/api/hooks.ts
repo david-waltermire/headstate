@@ -27,6 +27,7 @@ import {
   getPrDetail,
   getWorktreeDirs,
   classifyWorktrees,
+  listBranches,
   listWorktrees,
   removeWorktree,
   pullCheckout,
@@ -1663,5 +1664,21 @@ export function useMergedDetail() {
     queryKey: ["merged-detail"],
     queryFn: getMergedDetail,
     staleTime: 5 * 60 * 1000,
+  });
+}
+
+/// Branches for one repository, fetched only when it is selected.
+///
+/// Measured at ~9s on a 675-branch repository, most of it the patch-id
+/// comparison that finds squash merges. Scanning every repository up
+/// front is not an option, and `staleTime` is deliberately short: the
+/// answer is about deletability, and a stale "safe to delete" is the
+/// one wrong answer that costs work.
+export function useBranches(repoPath: string | undefined) {
+  return useQuery({
+    queryKey: ["branches", repoPath],
+    queryFn: () => listBranches(repoPath!),
+    enabled: !!repoPath,
+    staleTime: 10_000,
   });
 }

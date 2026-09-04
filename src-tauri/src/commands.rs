@@ -2134,3 +2134,43 @@ mod tests {
         assert!(AUTH_ERR.contains("gh auth login"));
     }
 }
+
+/// Every branch in a repository, classified.
+///
+/// Blocking git work -- measured at ~9s on a 675-branch repository --
+/// so it goes to a blocking thread rather than an async worker.
+#[tauri::command]
+pub async fn list_branches(repo_path: String) -> Result<Vec<crate::branches::Branch>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::branches::scan(std::path::Path::new(&repo_path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Delete local branches, re-checking each one at delete time.
+#[tauri::command]
+pub async fn delete_branches(
+    repo_path: String,
+    names: Vec<String>,
+) -> Result<Vec<crate::branches::DeleteOutcome>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::branches::delete_local(&repo_path, &names))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete branches ON THE REMOTE.
+///
+/// A separate command from `delete_branches` on purpose: this pushes to
+/// shared state, and there is no reflog on the other side to recover a
+/// mistake from. Keeping it distinct means the UI cannot reach it by
+/// the same control.
+#[tauri::command]
+pub async fn delete_remote_branches(
+    repo_path: String,
+    names: Vec<String>,
+) -> Result<Vec<crate::branches::DeleteOutcome>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::branches::delete_remote(&repo_path, &names))
+        .await
+        .map_err(|e| e.to_string())
+}

@@ -9,6 +9,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Artifact,
+  Branch,
+  DeleteOutcome,
   ClaudeFile,
   ProjectReport,
   RunReport,
@@ -488,3 +490,22 @@ export const scanClaudeMd = (repoPath: string) =>
 
 /// The text of one file, for rendering.
 export const readClaudeMd = (path: string) => invoke<string>("read_claude_md", { path });
+
+/// Every branch in a repository, classified.
+///
+/// Slow by nature -- ~9s on a 675-branch repository, most of it the
+/// patch-id comparison that finds squash merges. The caller shows a
+/// loading state rather than pretending this is instant.
+export const listBranches = (repoPath: string) =>
+  invoke<Branch[]>("list_branches", { repoPath });
+
+/// Delete local branches. Each one is re-checked at delete time.
+export const deleteBranches = (repoPath: string, names: string[]) =>
+  invoke<DeleteOutcome[]>("delete_branches", { repoPath, names });
+
+/// Delete branches ON THE REMOTE.
+///
+/// Deliberately a different function from `deleteBranches`: this is a
+/// push to shared state that no reflog can undo.
+export const deleteRemoteBranches = (repoPath: string, names: string[]) =>
+  invoke<DeleteOutcome[]>("delete_remote_branches", { repoPath, names });

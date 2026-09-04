@@ -32,6 +32,7 @@ import { ClaudeMdPage } from "./components/ClaudeMdPage";
 import { RepoPickerSidebar } from "./components/RepoPickerSidebar";
 import { DockerPage } from "./components/DockerPage";
 import { DockerSidebar } from "./components/DockerSidebar";
+import { BranchesPage } from "./components/BranchesPage";
 import { WorktreesPage } from "./components/WorktreesPage";
 import { QueryError, errorMessage } from "./components/QueryError";
 import { RepoSidebar } from "./components/RepoSidebar";
@@ -214,7 +215,10 @@ export default function App() {
         <ArtifactSidebar reviewingCount={reviewingCount} />
       ) : view === "docker" ? (
         <DockerSidebar viewCounts={{ "to-review": reviewingCount }} />
-      ) : view === "worktrees" ? (
+      ) : view === "worktrees" || view === "branches" ? (
+        // Same repository list: Branches acts on the same checkouts
+        // Worktrees does, so a second sidebar would be the same rows
+        // under a different name.
         <WorktreeSidebar viewCounts={{ "to-review": reviewingCount }} />
       ) : (
         <RepoSidebar prs={source} viewCounts={{ "to-review": reviewingCount }} />
@@ -238,6 +242,8 @@ export default function App() {
                 ? "Docker images"
                 : view === "worktrees"
                   ? "Worktrees"
+                : view === "branches"
+                  ? "Branches"
                 : panel === "stats"
                   ? "Stats"
                   : "Pull requests"}
@@ -256,7 +262,11 @@ export default function App() {
           </div>
         </header>
 
-        {selectedPr && view !== "worktrees" ? (
+        {/* Local-state views never render a PR detail: a pull request
+            selected earlier in My PRs would otherwise take over the
+            page, and neither Worktrees nor Branches has any notion of
+            a selected PR to go back to. */}
+        {selectedPr && view !== "worktrees" && view !== "branches" ? (
           <div className="p-4">
             <PrDetailView
               repo={selectedPr.repo}
@@ -279,6 +289,10 @@ export default function App() {
         ) : view === "worktrees" ? (
           <div className="p-4">
             <WorktreesPage />
+          </div>
+        ) : view === "branches" ? (
+          <div className="p-4">
+            <BranchesPage />
           </div>
         ) : panel === "stats" ? (
           <div className="p-4">

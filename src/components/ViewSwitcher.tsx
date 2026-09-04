@@ -1,13 +1,4 @@
-import {
-  Container,
-  ChevronDown,
-  Eye,
-  FolderGit2,
-  GitPullRequest,
-  HardDrive,
-  Package,
-  FileText,
-} from "lucide-react";
+import { ChevronDown, Container, Eye, FileText, FolderGit2, GitBranch, GitPullRequest, HardDrive, Package } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type View, useFilters } from "../store/filters";
 import { useUiPrefs } from "../api/hooks";
@@ -16,6 +7,7 @@ const VIEWS: { id: View; label: string; Icon: typeof GitPullRequest }[] = [
   { id: "my-prs", label: "My pull requests", Icon: GitPullRequest },
   { id: "to-review", label: "To review", Icon: Eye },
   { id: "worktrees", label: "Worktrees", Icon: FolderGit2 },
+  { id: "branches", label: "Branches", Icon: GitBranch },
   { id: "docker", label: "Docker", Icon: Container },
   { id: "artifacts", label: "Artifacts", Icon: HardDrive },
   { id: "packages", label: "Package updates", Icon: Package },

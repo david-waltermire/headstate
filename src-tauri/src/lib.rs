@@ -1,5 +1,6 @@
 pub mod artifacts;
 pub mod auth;
+pub mod branches;
 pub mod caches;
 pub mod claudemd;
 pub mod cleanup;
@@ -147,6 +148,9 @@ pub fn run() {
             commands::set_worktree_dirs,
             commands::list_worktrees,
             commands::classify_worktrees,
+            commands::list_branches,
+            commands::delete_branches,
+            commands::delete_remote_branches,
             commands::remove_worktree,
             commands::remove_worktrees,
             commands::docker_state,

@@ -18,7 +18,10 @@ use std::process::Command;
 /// which already treats a git failure as "cannot say", never "safe".
 const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-pub(super) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+/// Shared with `branches`, which needs the same timeout contract: a
+/// git call that hangs must become "cannot say", never "safe to
+/// delete".
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let child = Command::new("git")
         .arg("-C")
         .arg(dir)

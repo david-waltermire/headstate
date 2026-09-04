@@ -643,3 +643,41 @@ export interface ProjectReport {
   label: string;
   reports: EcosystemReport[];
 }
+
+/// Why a branch may or may not be deleted.
+///
+/// Reports the fact rather than a verdict, so the UI can say WHY a
+/// branch is not deletable instead of only greying out a control.
+export type Deletable =
+  /// `squash` comes from comparing patch-ids -- a content comparison,
+  /// not a graph one. Measured on a real repository, 489 of 536 merged
+  /// branches were squashes, so it is the common case, not the exotic
+  /// one, and the UI says which.
+  | { kind: "merged"; how: "ancestor" | "squash" }
+  | { kind: "defaultBranch" }
+  | { kind: "checkedOut"; path: string }
+  | { kind: "unmerged"; ahead: number }
+  | { kind: "pending" }
+  | { kind: "unknown"; reason: string };
+
+export interface Branch {
+  name: string;
+  /// The three cases clean up differently, which is why this is one
+  /// value rather than a pair of booleans: deleting a tracked pair is
+  /// two operations against two different things.
+  location: "local" | "remote" | "tracked";
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  /// ISO 8601, as git reports it.
+  committed: string;
+  author: string;
+  tip: string;
+  deletable: Deletable;
+}
+
+export interface DeleteOutcome {
+  name: string;
+  /// `null` on success; the reason otherwise.
+  error: string | null;
+}
