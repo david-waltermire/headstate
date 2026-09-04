@@ -114,10 +114,46 @@ fn reject_flaglike(field: &str, value: &str) -> Result<(), String> {
 /// takes no version, so it moves to whatever the Podfile's constraints
 /// allow. That is why the applied version is read back afterwards
 /// instead of assumed.
-pub fn update_args(eco: Ecosystem, name: &str, version: &str) -> Vec<String> {
+/// Whether the manifest pinned this package to an EXACT version.
+///
+/// A production dependency list that says `4.17.20` means it: the point
+/// of a pin is that the version does not move on its own. npm's default
+/// widens that to `^4.17.21` on update, which quietly converts a pinned
+/// project into a floating one -- measured, and the reason `--save-exact`
+/// exists.
+///
+/// But applying `--save-exact` unconditionally is the opposite mistake:
+/// a project that deliberately wrote `^4.17.20` would be NARROWED to a
+/// pin it never asked for. Verified both ways against real npm.
+///
+/// So the manifest's own style decides. Absent or unreadable counts as
+/// NOT pinned, which leaves npm's default behaviour -- the conservative
+/// direction, since it changes nothing about how this worked before.
+fn was_pinned(dir: &Path, eco: Ecosystem, name: &str) -> bool {
+    let Some(current) = read_constraint(dir, eco, name) else {
+        return false;
+    };
+    // A pin is a bare version: no range operator of any kind.
+    !current.is_empty()
+        && current.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && !current.contains([' ', '|', '-', '*', 'x'])
+}
+
+pub fn update_args(dir: &Path, eco: Ecosystem, name: &str, version: &str) -> Vec<String> {
     let s = |v: &str| v.to_string();
     match eco {
+        // `--save-exact` only when the manifest was already exact, so
+        // an upgrade keeps the style the project chose rather than
+        // imposing one.
+        Ecosystem::Npm if was_pinned(dir, eco, name) => {
+            vec![s("install"), s("--save-exact"), format!("{name}@{version}")]
+        }
         Ecosystem::Npm => vec![s("install"), format!("{name}@{version}")],
+        // Yarn Berry's equivalent. `yarn up` writes a range by default
+        // for the same reason npm does.
+        Ecosystem::Yarn if was_pinned(dir, eco, name) => {
+            vec![s("up"), s("--exact"), format!("{name}@{version}")]
+        }
         Ecosystem::Yarn => vec![s("up"), format!("{name}@{version}")],
         Ecosystem::Poetry => vec![s("add"), format!("{name}@{version}")],
         Ecosystem::Uv => vec![s("add"), format!("{name}=={version}")],
@@ -181,7 +217,7 @@ pub fn apply_one(dir: &Path, eco: Ecosystem, name: &str, version: &str) -> Resul
     let bin = tools::find(eco.program(), &refs)
         .ok_or_else(|| format!("{} is not installed", eco.program()))?;
 
-    let args = update_args(eco, name, version);
+    let args = update_args(dir, eco, name, version);
     let out = std::process::Command::new(&bin)
         .args(&args)
         // Same reason as the update check: an interpreted tool starts a
@@ -491,15 +527,101 @@ mod tests {
             (Ecosystem::Poetry, "lodash@4.17.21"),
             (Ecosystem::Uv, "lodash==4.17.21"),
         ] {
-            let args = update_args(eco, "lodash", "4.17.21");
+            let args = update_args(Path::new("/nonexistent"), eco, "lodash", "4.17.21");
             assert!(
                 args.iter().any(|a| a == expect),
                 "{eco:?} args {args:?} missing {expect}"
             );
         }
-        let dotnet = update_args(Ecosystem::Dotnet, "Serilog", "3.1.1");
+        let dotnet = update_args(
+            Path::new("/nonexistent"),
+            Ecosystem::Dotnet,
+            "Serilog",
+            "3.1.1",
+        );
         assert!(dotnet.contains(&"--version".to_string()));
         assert!(dotnet.contains(&"3.1.1".to_string()));
+    }
+
+    /// A pinned manifest STAYS pinned.
+    ///
+    /// Production dependency lists that say `4.17.20` mean it. npm's
+    /// default widens that to `^4.17.21` on update, quietly converting
+    /// a pinned project into a floating one -- measured against real
+    /// npm, and the reason this exists.
+    #[test]
+    fn an_exact_version_is_kept_exact() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            t.path().join("package.json"),
+            r#"{"dependencies":{"lodash":"4.17.20"}}"#,
+        )
+        .unwrap();
+        let args = update_args(t.path(), Ecosystem::Npm, "lodash", "4.17.21");
+        assert!(
+            args.iter().any(|a| a == "--save-exact"),
+            "a pinned manifest must stay pinned: {args:?}"
+        );
+    }
+
+    /// And the opposite mistake is not made.
+    ///
+    /// Applying `--save-exact` unconditionally NARROWS a project that
+    /// deliberately wrote a range into a pin it never asked for --
+    /// verified against real npm, which does exactly that.
+    #[test]
+    fn a_range_is_not_narrowed_into_a_pin() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            t.path().join("package.json"),
+            r#"{"dependencies":{"lodash":"^4.17.20"}}"#,
+        )
+        .unwrap();
+        let args = update_args(t.path(), Ecosystem::Npm, "lodash", "4.17.21");
+        assert!(
+            !args.iter().any(|a| a == "--save-exact"),
+            "a range must stay a range: {args:?}"
+        );
+    }
+
+    /// Yarn Berry writes a range by default for the same reason.
+    #[test]
+    fn yarn_keeps_an_exact_version_exact() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            t.path().join("package.json"),
+            r#"{"dependencies":{"lodash":"4.17.20"}}"#,
+        )
+        .unwrap();
+        let args = update_args(t.path(), Ecosystem::Yarn, "lodash", "4.17.21");
+        assert!(args.iter().any(|a| a == "--exact"), "{args:?}");
+    }
+
+    /// An unreadable manifest leaves the tool's own default, which is
+    /// what this did before -- the conservative direction.
+    #[test]
+    fn an_unknown_constraint_changes_nothing() {
+        let t = tempfile::TempDir::new().unwrap();
+        let args = update_args(t.path(), Ecosystem::Npm, "lodash", "4.17.21");
+        assert!(!args.iter().any(|a| a == "--save-exact"), "{args:?}");
+    }
+
+    /// The other range forms must not be read as pins.
+    #[test]
+    fn every_range_form_counts_as_a_range() {
+        for constraint in ["^1.0.0", "~1.0.0", ">=1.0.0", "1.x", "1.0.0 - 2.0.0", "*"] {
+            let t = tempfile::TempDir::new().unwrap();
+            std::fs::write(
+                t.path().join("package.json"),
+                format!(r#"{{"dependencies":{{"lodash":"{constraint}"}}}}"#),
+            )
+            .unwrap();
+            let args = update_args(t.path(), Ecosystem::Npm, "lodash", "4.17.21");
+            assert!(
+                !args.iter().any(|a| a == "--save-exact"),
+                "{constraint} is a range, not a pin: {args:?}"
+            );
+        }
     }
 
     /// Each command names ONE package. A blunt `npm update` would move
@@ -514,7 +636,7 @@ mod tests {
             Ecosystem::Dotnet,
             Ecosystem::Cocoapods,
         ] {
-            let args = update_args(eco, "lodash", "4.17.21");
+            let args = update_args(Path::new("/nonexistent"), eco, "lodash", "4.17.21");
             assert!(
                 args.iter().any(|a| a.contains("lodash")),
                 "{eco:?} does not name the package: {args:?}"
@@ -929,15 +1051,13 @@ mod real {
         // pinned request as a caret RANGE. If this ever equals the
         // requested string, npm changed its behaviour and the report
         // needs revisiting.
+        // The manifest was PINNED (`4.17.20`), so the update must keep
+        // it pinned. Before `--save-exact` npm wrote `^4.17.21` here,
+        // silently converting a pinned project into a floating one.
         assert_eq!(
             r.resolved_constraint.as_deref(),
-            Some("^4.17.21"),
-            "npm should record a caret range, not the requested pin"
-        );
-        assert_ne!(
-            r.resolved_constraint.as_deref(),
-            Some(r.requested.as_str()),
-            "resolved must not be assumed equal to requested"
+            Some("4.17.21"),
+            "a pinned manifest must stay pinned, not become a caret range"
         );
     }
 }
