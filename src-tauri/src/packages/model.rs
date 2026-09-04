@@ -11,6 +11,13 @@ pub enum Ecosystem {
     Dotnet,
     /// CocoaPods, detected from a `Podfile`.
     Cocoapods,
+    /// Terraform providers, from `.terraform.lock.hcl`.
+    ///
+    /// The only ecosystem here that needs NO tool installed. The lock
+    /// file carries the resolved version in plain text, and the newest
+    /// comes from the registry over HTTP -- so unlike every other one,
+    /// a missing `terraform` binary cannot make this report nothing.
+    Terraform,
     /// Swift packages, whether a `Package.swift` or Xcode-managed.
     ///
     /// Xcode-managed dependencies have NO CLI that reports outdated
@@ -31,6 +38,8 @@ impl Ecosystem {
             Ecosystem::Uv => "uv",
             Ecosystem::Dotnet => "dotnet",
             Ecosystem::Cocoapods => "pod",
+            // Never spawned; see the variant's comment.
+            Ecosystem::Terraform => "terraform",
             Ecosystem::Swift => "swift",
         }
     }
@@ -44,6 +53,7 @@ impl Ecosystem {
             Ecosystem::Uv => "uv add <pkg>==<version>",
             Ecosystem::Dotnet => "dotnet add package <pkg> --version <version>",
             Ecosystem::Cocoapods => "pod update <pkg>",
+            Ecosystem::Terraform => "raise the version constraint, then terraform init -upgrade",
             Ecosystem::Swift => "update the version rule in Xcode, or Package.swift",
         }
     }
@@ -54,6 +64,7 @@ impl Ecosystem {
             Ecosystem::Npm | Ecosystem::Yarn => "package.json",
             Ecosystem::Poetry | Ecosystem::Uv => "pyproject.toml",
             Ecosystem::Cocoapods => "Podfile",
+            Ecosystem::Terraform => ".terraform.lock.hcl",
             Ecosystem::Swift => "Package.resolved",
             // .NET is a glob, handled by the detector rather than here.
             Ecosystem::Dotnet => "",

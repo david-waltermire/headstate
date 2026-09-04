@@ -680,8 +680,26 @@ pub async fn scan_artifacts(app: AppHandle) -> Result<Vec<crate::artifacts::Arti
 /// entry: asking a second question of the same `metadata()` call is
 /// free, and it is the ONLY signal that a build is currently writing
 /// there. Build output is gitignored, so no git check can see it.
+/// How many sizing walks may run at once.
+///
+/// These are disk-bound, and the frontend fires one per repository
+/// group -- 54 concurrently on a real machine. Measured there: groups of
+/// TWO directories took 17.6 seconds, which is contention rather than
+/// work, and it blocked an artifact removal behind it for 20 seconds.
+///
+/// A cap makes the total no slower (the disk is the bottleneck either
+/// way) while leaving the blocking pool free for everything else --
+/// which is what actually made the UI look frozen.
+static SIZE_LIMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
 #[tauri::command]
 pub async fn size_artifacts(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u64>)>, String> {
+    // Held for the whole walk. `acquire` only fails if the semaphore is
+    // closed, which never happens for a static.
+    let _permit = SIZE_LIMIT
+        .acquire()
+        .await
+        .map_err(|e| format!("could not schedule the measurement: {e}"))?;
     tauri::async_runtime::spawn_blocking(move || {
         // DIAGNOSTIC LOGGING (Settings > diagnostic log). Per-directory,
         // for the same reason as `size_venvs`: the total says the batch
@@ -778,6 +796,12 @@ pub async fn scan_venvs(app: AppHandle) -> Result<Vec<crate::caches::Venv>, Stri
 /// directory's own mtime reports a year-old venv as days old.
 #[tauri::command]
 pub async fn size_venvs(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u64>)>, String> {
+    // Shares the artifact cap: both walk the same disk, and a venv batch
+    // competing with a 54-way artifact fan-out is the same contention.
+    let _permit = SIZE_LIMIT
+        .acquire()
+        .await
+        .map_err(|e| format!("could not schedule the measurement: {e}"))?;
     tauri::async_runtime::spawn_blocking(move || {
         // DIAGNOSTIC LOGGING (Settings > diagnostic log).
         //
@@ -794,16 +818,14 @@ pub async fn size_venvs(paths: Vec<String>) -> Result<Vec<(String, u64, Option<u
                 let each = std::time::Instant::now();
                 let (bytes, idle) = crate::caches::measure(std::path::Path::new(&p));
                 crate::diag!(
-                    "[diag] size_venvs {}/{} {}ms {}",
+                    "[diag] size_venvs {}/{} {}ms",
                     i + 1,
                     total,
-                    each.elapsed().as_millis(),
-                    // The basename, not the path: the full path is a
-                    // project name on someone's disk.
-                    std::path::Path::new(&p)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_default()
+                    each.elapsed().as_millis() // Deliberately NO name, not even a basename: a venv
+                                               // directory is `<project>-<hash>-py3.13`, so the
+                                               // basename IS the project name. The index answers
+                                               // "which one was slow" without naming it, and
+                                               // Settings promises this log carries no such names.
                 );
                 (p, bytes, idle)
             })
@@ -830,12 +852,26 @@ pub async fn remove_venvs(
     app: AppHandle,
     paths: Vec<String>,
 ) -> Result<Vec<crate::caches::VenvRemoval>, String> {
-    // The policy is read from SETTINGS, never from the request. Whether
-    // a stale venv may be removed is the user's standing decision, and a
-    // caller that could pass its own would make the opt-in decorative.
+    // MANUAL removal is not gated by a setting.
+    //
+    // This used to read `remove_stale_venvs`, on the reasoning that a
+    // staleness threshold is a guess about intent. That argument holds
+    // for AUTOMATIC cleanup, where the app acts on its own -- and it was
+    // wrong here. The user is looking at a list, ticking a specific row,
+    // and confirming in a dialog: the tick IS the intent, and no other
+    // artifact asks permission twice. A Rust `target` costs minutes to
+    // rebuild and has no such gate; a virtualenv is `poetry install`.
+    //
+    // `RemovalPolicy` remains for automatic cleanup, which still needs a
+    // threshold it can be conservative about.
+    //
+    // The safety that matters is untouched and lives in `remove_venv`:
+    // re-verified at delete time, symlinks refused, containment inside
+    // Poetry's cache enforced. Those are facts about the path rather
+    // than guesses about intent.
     let prefs = get_ui_prefs(app.clone());
     let policy = crate::caches::RemovalPolicy {
-        allow_stale: prefs.remove_stale_venvs,
+        allow_stale: true,
         stale_days: crate::poll::stale_venv_days(&prefs),
     };
     let roots = get_worktree_dirs(app);
@@ -968,7 +1004,17 @@ pub fn set_cleanup_prefs(
 pub async fn check_packages(
     repo_path: String,
 ) -> Result<Vec<crate::packages::ProjectReport>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    // TWO PHASES.
+    //
+    // The blocking pass spawns each ecosystem's tool and parses its
+    // output. Terraform and Swift have no such tool, so they come back
+    // with `latest == current` and `Bump::Unknown`, and `registry::
+    // enrich` fills those in over HTTP afterwards.
+    //
+    // Split this way rather than made async throughout because the
+    // subprocess work must stay off the event loop, and the network work
+    // must not sit inside a blocking task.
+    let mut reports = tauri::async_runtime::spawn_blocking(move || {
         let reports = crate::packages::run::check_repo(std::path::Path::new(&repo_path));
         // Counts only -- never package names, which would put a private
         // dependency list in a log meant to be shared.
@@ -984,7 +1030,89 @@ pub async fn check_packages(
         reports
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+
+    // Phase two. Only touches rows whose ecosystem needs a registry, and
+    // a failed lookup leaves the row at `Bump::Unknown` rather than
+    // claiming it is current.
+    crate::packages::registry::enrich(&mut reports).await;
+
+    Ok(reports)
+}
+
+/// Push an update run's branch and open a pull request.
+///
+/// PHASE 2, and the first command in this app that writes to a shared
+/// remote. Everything before it was local: worktrees, removals and
+/// applies are all undoable by the user alone, and this is not.
+///
+/// Takes a report from `apply_package_updates` rather than doing the
+/// work itself, so the user has seen what landed before anything is
+/// pushed. That separation is the point of the phasing.
+#[tauri::command]
+pub async fn open_update_pr(
+    client: State<'_, GhClient>,
+    repo_path: String,
+    report: crate::packages::apply::RunReport,
+) -> Result<String, String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+
+    // Nothing applied, nothing to open. A pull request with an empty
+    // diff is noise, and GitHub refuses it anyway ("No commits
+    // between") -- better to say so before pushing.
+    if report.results.iter().all(|r| r.error.is_some()) {
+        return Err("no updates were applied, so there is nothing to open".into());
+    }
+
+    // Only ecosystems whose resolved constraint can be READ BACK.
+    //
+    // The body's whole value is stating what actually landed. Poetry,
+    // uv, .NET and CocoaPods report `resolved_constraint` as None --
+    // reading those manifests safely needs a real TOML/XML parser -- so
+    // a description would have to say "not verified" about every row,
+    // which is not a description worth opening a pull request with.
+    //
+    // Refused BEFORE the push, so a run that cannot be described does
+    // not leave a branch on the remote.
+    if !report
+        .ecosystems
+        .iter()
+        .all(|e| crate::packages::pr::can_describe(*e))
+    {
+        return Err(
+            "a pull request can only be opened for npm and yarn so far: the other \
+             ecosystems do not report what version actually landed, and the \
+             description would have to guess."
+                .into(),
+        );
+    }
+
+    let worktree = std::path::PathBuf::from(&report.worktree);
+    let base = crate::packages::apply::default_branch(&worktree)
+        .ok_or("could not determine the default branch from origin/HEAD")?;
+    let slug = crate::worktrees::repo_identity(&repo_path)
+        .ok_or("could not determine owner/repo from the git remote")?;
+
+    // Committed, pushed, THEN opened. A failure at any step leaves the
+    // worktree in place with its changes intact, which is what phase 1
+    // already delivered -- so a partial run costs nothing that was not
+    // already there.
+    crate::packages::apply::commit_all(&worktree, &crate::packages::pr::title(&report.results))?;
+    crate::packages::apply::push_branch(&worktree, &report.branch)?;
+
+    let url = client
+        .create_pull_request(
+            &slug,
+            &report.branch,
+            &base,
+            &crate::packages::pr::title(&report.results),
+            &crate::packages::pr::body(&report),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    log::info!("opened {url} from {}", report.branch);
+    Ok(url)
 }
 
 /// The updates as markdown, for handing to an agent.
@@ -1032,6 +1160,36 @@ pub async fn apply_package_updates(
         Err(e) => log::warn!("update run in {repo_path} refused: {e}"),
     }
     result
+}
+
+/// Reveal the diagnostic log in the file manager.
+///
+/// A command rather than the opener plugin's `open-url`: that is
+/// ACL-gated to the http/https scope (see `capabilities/default.json`),
+/// and revealing a local file would need a new grant. App commands
+/// registered through `generate_handler!` are not ACL-gated, so this
+/// keeps the capability surface unchanged.
+///
+/// Returns the PATH on success, so the caller can show it even where
+/// revealing is unsupported -- being told where the file is beats a
+/// button that silently does nothing.
+#[tauri::command]
+pub fn reveal_log(app: AppHandle) -> Result<String, String> {
+    use tauri::Manager;
+    let dir = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| format!("could not locate the log directory: {e}"))?;
+    let file = dir.join("headstate.log");
+    let shown = file.to_string_lossy().into_owned();
+    // Reveal the FILE, not just the directory, so the user does not have
+    // to find it among rotated siblings.
+    match tauri_plugin_opener::reveal_item_in_dir(&file) {
+        Ok(()) => Ok(shown),
+        // The path is still useful when revealing is unsupported, so
+        // this reports where to look rather than only that it failed.
+        Err(e) => Err(format!("could not open {shown}: {e}")),
+    }
 }
 
 /// Every CLAUDE.md in a repository, with its import tree resolved.
@@ -1975,4 +2133,44 @@ mod tests {
     fn auth_error_names_the_command_that_fixes_it() {
         assert!(AUTH_ERR.contains("gh auth login"));
     }
+}
+
+/// Every branch in a repository, classified.
+///
+/// Blocking git work -- measured at ~9s on a 675-branch repository --
+/// so it goes to a blocking thread rather than an async worker.
+#[tauri::command]
+pub async fn list_branches(repo_path: String) -> Result<Vec<crate::branches::Branch>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::branches::scan(std::path::Path::new(&repo_path))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Delete local branches, re-checking each one at delete time.
+#[tauri::command]
+pub async fn delete_branches(
+    repo_path: String,
+    names: Vec<String>,
+) -> Result<Vec<crate::branches::DeleteOutcome>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::branches::delete_local(&repo_path, &names))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Delete branches ON THE REMOTE.
+///
+/// A separate command from `delete_branches` on purpose: this pushes to
+/// shared state, and there is no reflog on the other side to recover a
+/// mistake from. Keeping it distinct means the UI cannot reach it by
+/// the same control.
+#[tauri::command]
+pub async fn delete_remote_branches(
+    repo_path: String,
+    names: Vec<String>,
+) -> Result<Vec<crate::branches::DeleteOutcome>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::branches::delete_remote(&repo_path, &names))
+        .await
+        .map_err(|e| e.to_string())
 }

@@ -261,3 +261,23 @@ export function worktreeSignal(
   }
   return null;
 }
+
+/// The total size of a set of worktrees, distinguishing "not measured
+/// yet" from "measured, and it is zero".
+///
+/// The bug this replaces summed with `?? 0` and then wrote `|| null`:
+///
+///     .reduce((n, w) => n + (w.size_bytes ?? 0), 0) || null
+///
+/// `0` is falsy, so a genuine zero became null and rendered as `—`.
+/// Worse, an unmeasured set also summed to 0 and rendered the same
+/// way, so "still measuring" and "nothing to reclaim" were one symbol.
+/// Sizing is the slow half of the scan, which is why the dash appeared
+/// only sometimes -- it depended on whether sizing had caught up.
+///
+/// Returns null ONLY when nothing in the set has a known size.
+export function totalSize(items: { size_bytes: number | null }[]): number | null {
+  const measured = items.filter((w) => w.size_bytes !== null);
+  if (measured.length === 0) return null;
+  return measured.reduce((n, w) => n + (w.size_bytes ?? 0), 0);
+}

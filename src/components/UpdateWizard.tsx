@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import type { Ecosystem, Outdated, RunReport } from "@/types/pr";
-import { applyPackageUpdates } from "@/api/tauri";
+import { ExternalLink } from "./ExternalLink";
+import { applyPackageUpdates, openUpdatePr } from "@/api/tauri";
 import {
   Dialog,
   DialogContent,
@@ -16,8 +17,16 @@ import {
 /// reports what is outdated for Xcode-managed dependencies, so there is
 /// no version to move to. Stated in the UI rather than silently omitted,
 /// because a package that quietly cannot be selected reads as a bug.
+/// Ecosystems the backend refuses, with the reason shown to the user.
+///
+/// Must match `packages::apply::supported`. Terraform was missing here
+/// while the backend refused it -- so every Terraform row was
+/// selectable, counted toward the button, and failed at apply time with
+/// an error the user could have been told about before clicking.
 const CANNOT_APPLY: Partial<Record<Ecosystem, string>> = {
   swift: "Swift packages must be updated in Xcode or Package.swift.",
+  terraform:
+    "Terraform provider versions are a constraint in your .tf source, not something a lockfile edit can change.",
 };
 
 /// Applies dependency updates in a fresh worktree.
@@ -42,12 +51,30 @@ export function UpdateWizard({
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<RunReport | null>(null);
 
-  const key = (p: Outdated) => `${p.ecosystem}:${p.name}`;
+  /// Identifies a ROW, not a package.
+  ///
+  /// This was `ecosystem:name`, which is not unique: one repository
+  /// declares the same dependency in several manifests, so every row
+  /// for that name shared one checkbox -- ticking one ticked them all,
+  /// and React saw duplicate keys. `manifest` is what actually
+  /// distinguishes them.
+  const key = (p: Outdated) => `${p.ecosystem}:${p.manifest}:${p.name}`;
 
   const { applicable, blocked } = useMemo(() => {
     const applicable: Outdated[] = [];
     const blocked: Outdated[] = [];
     for (const p of packages) {
+      // A row whose latest EQUALS its current is not an update.
+      //
+      // `registry::enrich` leaves a provider at `latest == current` with
+      // `bump: "unknown"` when its registry lookup fails -- deliberately,
+      // so one unreachable host cannot turn a repository into a false
+      // all-clear. But the wizard rendered that identically to a real
+      // update, offering "2.8.0 → 2.8.0" as something to apply.
+      if (p.bump === "unknown" && p.current === p.latest) {
+        blocked.push(p);
+        continue;
+      }
       (CANNOT_APPLY[p.ecosystem] ? blocked : applicable).push(p);
     }
     return { applicable, blocked };
@@ -100,9 +127,29 @@ export function UpdateWizard({
         </p>
 
         {report ? (
-          <Report report={report} />
+          <Report report={report} repo={repo} />
         ) : (
           <>
+            {applicable.length > 1 ? (
+              <div className="flex items-center gap-3 border-b border-[#30363d] pb-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setSelected(new Set(applicable.map(key)))}
+                  className="text-[#4493f8] hover:underline"
+                >
+                  Select all {applicable.length}
+                </button>
+                {selected.size > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setSelected(new Set())}
+                    className="text-[#8b949e] hover:text-[#e6edf3]"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <div className="space-y-1">
               {applicable.map((p) => {
                 const k = key(p);
@@ -123,8 +170,17 @@ export function UpdateWizard({
                         });
                       }}
                     />
-                    <span className="text-[#e6edf3]">{p.name}</span>
-                    <span className="text-xs text-[#8b949e]">
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[#e6edf3]">{p.name}</span>
+                      {/* Which manifest, so two rows for one dependency
+                          are told apart. Without it the list showed the
+                          same name twice with different versions and no
+                          way to attribute either to a file. */}
+                      <span className="block truncate text-[10px] text-[#6e7681]">
+                        {p.manifest}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs text-[#8b949e]">
                       {p.current} → {p.latest}
                     </span>
                   </label>
@@ -145,7 +201,8 @@ export function UpdateWizard({
                 {blocked.map((p) => (
                   <p key={key(p)} className="text-xs text-[#8b949e]">
                     <span className="text-[#e6edf3]">{p.name}</span> —{" "}
-                    {CANNOT_APPLY[p.ecosystem]}
+                    {CANNOT_APPLY[p.ecosystem] ??
+                      "The latest version could not be determined, so there is nothing to update to."}
                   </p>
                 ))}
               </div>
@@ -182,7 +239,33 @@ export function UpdateWizard({
 /// they genuinely differ: npm rewrites a pinned `4.17.21` request into
 /// `^4.17.21`, a range rather than a pin. Echoing back the requested
 /// version would look like a report while telling the user nothing.
-function Report({ report }: { report: RunReport }) {
+function Report({ report, repo }: { report: RunReport; repo: string }) {
+  const [opening, setOpening] = useState(false);
+  const [url, setUrl] = useState<string | null>(null);
+
+  const applied = report.results.filter((r) => r.error === null).length;
+  // Only where the resolved constraint can be read back. The other
+  // ecosystems report it as null, so the description would have to say
+  // "not verified" about every row.
+  const describable = report.ecosystems.every((e) => e === "npm" || e === "yarn");
+
+  const open = () => {
+    setOpening(true);
+    openUpdatePr(repo, report).then(
+      (u) => {
+        setOpening(false);
+        setUrl(u);
+        toast.success("Pull request opened", { description: u });
+      },
+      (e: unknown) => {
+        setOpening(false);
+        toast.error("Could not open the pull request", {
+          description: typeof e === "string" ? e : undefined,
+        });
+      },
+    );
+  };
+
   return (
     <div className="space-y-3 text-sm">
       <p className="text-[#8b949e]">
@@ -190,6 +273,33 @@ function Report({ report }: { report: RunReport }) {
         <br />
         Branch: <code className="text-[#e6edf3]">{report.branch}</code>
       </p>
+
+      {/* The one action here that leaves this machine. Everything above
+          is a local worktree the user can delete; this pushes a branch
+          and opens a pull request. */}
+      {url !== null ? (
+        <p className="text-xs">
+          <ExternalLink href={url} className="text-[#4493f8] hover:underline">
+            {url}
+          </ExternalLink>
+        </p>
+      ) : applied > 0 && describable ? (
+        <button
+          type="button"
+          disabled={opening}
+          onClick={open}
+          className="rounded border border-[#238636]/40 px-3 py-1 text-xs text-[#3fb950] hover:bg-[#238636]/10 disabled:opacity-50"
+        >
+          {opening ? "Opening…" : "Push and open a pull request"}
+        </button>
+      ) : applied > 0 ? (
+        // Said, not hidden. A missing button reads as a bug, where the
+        // reason is a real limitation worth knowing.
+        <p className="text-xs text-[#8b949e]">
+          A pull request can only be opened for npm and yarn so far — the other
+          ecosystems do not report which version actually landed.
+        </p>
+      ) : null}
       {report.results.map((r) => (
         <div key={r.name} className="rounded border border-[#30363d] p-2">
           <p className="text-[#e6edf3]">{r.name}</p>

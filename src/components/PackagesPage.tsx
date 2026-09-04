@@ -22,6 +22,7 @@ const ECOSYSTEM_LABEL: Record<Ecosystem, string> = {
   uv: "uv",
   dotnet: ".NET",
   cocoapods: "CocoaPods",
+  terraform: "Terraform",
   swift: "Swift",
 };
 

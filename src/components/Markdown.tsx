@@ -20,7 +20,7 @@ import remarkGfm from "remark-gfm";
 /// comment learning the reader's IP.
 export function Markdown({ children }: { children: string }) {
   return (
-    <div className="prose-headstate text-sm leading-relaxed text-[#e6edf3]">
+    <div className="text-sm leading-relaxed text-[#e6edf3]">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSanitize]}
@@ -42,20 +42,39 @@ export function Markdown({ children }: { children: string }) {
           pre: ({ ...props }) => (
             <pre
               {...props}
-              className="overflow-x-auto rounded border border-[#30363d] bg-[#161b22] p-3 text-xs"
+              className="my-3 overflow-x-auto rounded border border-[#30363d] bg-[#161b22] p-3 text-xs"
             />
           ),
           img: ({ ...props }) => (
             <img {...props} alt={props.alt ?? ""} className="max-w-full rounded" />
           ),
-          ul: ({ ...props }) => <ul {...props} className="list-disc pl-5" />,
-          ol: ({ ...props }) => <ol {...props} className="list-decimal pl-5" />,
-          h1: ({ ...props }) => <h1 {...props} className="mt-3 text-base font-semibold" />,
-          h2: ({ ...props }) => <h2 {...props} className="mt-3 text-sm font-semibold" />,
-          h3: ({ ...props }) => <h3 {...props} className="mt-2 text-sm font-semibold" />,
+          // VERTICAL RHYTHM. `prose-headstate` on the wrapper was
+          // never defined anywhere -- it appears once, on that div, with
+          // no matching rule -- so every block element fell back to the
+          // CSS reset, which strips margins. The blank lines in the
+          // source WERE parsed; the resulting <p>s just had nothing
+          // between them.
+          p: ({ ...props }) => <p {...props} className="my-2" />,
+          ul: ({ ...props }) => <ul {...props} className="my-2 list-disc space-y-1 pl-5" />,
+          ol: ({ ...props }) => <ol {...props} className="my-2 list-decimal space-y-1 pl-5" />,
+          blockquote: ({ ...props }) => (
+            <blockquote
+              {...props}
+              className="my-2 border-l-2 border-[#30363d] pl-3 text-[#8b949e]"
+            />
+          ),
+          hr: ({ ...props }) => <hr {...props} className="my-4 border-[#30363d]" />,
+          // A heading needs more space ABOVE than below: it belongs to
+          // the text that follows it, and equal margins make it float
+          // between two sections instead of introducing one.
+          h1: ({ ...props }) => <h1 {...props} className="mb-2 mt-5 text-base font-semibold" />,
+          h2: ({ ...props }) => <h2 {...props} className="mb-2 mt-5 text-sm font-semibold" />,
+          h3: ({ ...props }) => <h3 {...props} className="mb-1 mt-4 text-sm font-semibold" />,
           table: ({ ...props }) => (
-            <div className="overflow-x-auto">
-              <table {...props} className="text-xs" />
+            // `border-collapse`, or every cell's border doubles against
+            // its neighbour's and the table reads as a heavy grid.
+            <div className="my-3 overflow-x-auto">
+              <table {...props} className="w-full border-collapse text-xs" />
             </div>
           ),
           td: ({ ...props }) => <td {...props} className="border border-[#30363d] px-2 py-1" />,

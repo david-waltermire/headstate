@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Outdated, RunReport } from "@/types/pr";
 
 const applyFn = vi.hoisted(() => vi.fn<(...a: unknown[]) => Promise<RunReport>>());
+const prFn = vi.hoisted(() => vi.fn<(...a: unknown[]) => Promise<string>>());
 const toasts = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
@@ -10,7 +11,7 @@ const toasts = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({ toast: toasts }));
-vi.mock("../api/tauri", () => ({ applyPackageUpdates: applyFn }));
+vi.mock("../api/tauri", () => ({ applyPackageUpdates: applyFn, openUpdatePr: prFn }));
 
 import { UpdateWizard } from "./UpdateWizard";
 
@@ -31,9 +32,11 @@ const show = (packages: Outdated[]) =>
 describe("UpdateWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    prFn.mockResolvedValue("https://github.com/octocat/hello-world/pull/7");
     applyFn.mockResolvedValue({
       worktree: "/code/app/.worktrees/update-lodash",
       branch: "headstate/update-lodash",
+      ecosystems: ["npm"],
       results: [
         {
           name: "lodash",
@@ -104,6 +107,7 @@ describe("UpdateWizard", () => {
     applyFn.mockResolvedValue({
       worktree: "/w",
       branch: "b",
+      ecosystems: ["npm"],
       results: [
         {
           name: "lodash",
@@ -126,6 +130,7 @@ describe("UpdateWizard", () => {
     applyFn.mockResolvedValue({
       worktree: "/w",
       branch: "b",
+      ecosystems: ["npm"],
       results: [
         {
           name: "lodash",
@@ -160,5 +165,137 @@ describe("UpdateWizard", () => {
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: /Apply/ }));
     await waitFor(() => expect(toasts.error).toHaveBeenCalled());
+  });
+
+  /// #478: one repository declares the same dependency in several
+  /// manifests, so `ecosystem:name` was not a unique row identity --
+  /// ticking one checkbox ticked every row with that name.
+  it("gives each manifest its own checkbox for the same package", () => {
+    const dup = (manifest: string, current: string): Outdated => ({
+      ...pkg("registry.terraform.io/hashicorp/aws"),
+      manifest,
+      current,
+    });
+    show([dup("a/main.tf", "5.100.0"), dup("b/main.tf", "5.90.0")]);
+
+    const boxes = screen.getAllByRole("checkbox");
+    expect(boxes).toHaveLength(2);
+    fireEvent.click(boxes[0]);
+    expect((boxes[0] as HTMLInputElement).checked).toBe(true);
+    expect((boxes[1] as HTMLInputElement).checked).toBe(false);
+  });
+
+  /// Two rows for one dependency are indistinguishable without saying
+  /// which file each came from.
+  it("names the manifest each row belongs to", () => {
+    show([pkg("lodash")]);
+    expect(screen.getByText("package.json")).toBeTruthy();
+  });
+
+  it("selects and clears every applicable package", () => {
+    show([pkg("lodash"), pkg("express")]);
+    fireEvent.click(screen.getByRole("button", { name: /select all 2/i }));
+    for (const b of screen.getAllByRole("checkbox")) {
+      expect((b as HTMLInputElement).checked).toBe(true);
+    }
+    fireEvent.click(screen.getByRole("button", { name: /^clear$/i }));
+    for (const b of screen.getAllByRole("checkbox")) {
+      expect((b as HTMLInputElement).checked).toBe(false);
+    }
+  });
+
+  /// The backend refuses Terraform (`apply::supported`), but the UI
+  /// listed it as applicable -- so every Terraform row was selectable,
+  /// counted toward the button, and failed at apply time with a reason
+  /// the user could have been given before clicking.
+  it("does not offer Terraform providers as applicable", () => {
+    show([pkg("registry.terraform.io/hashicorp/aws", "terraform")]);
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    expect(screen.getByText(/constraint in your .tf source/i)).toBeTruthy();
+  });
+
+  /// The `2.8.0 → 2.8.0` rows in the report. `registry::enrich` leaves
+  /// a provider at `latest == current` with `bump: "unknown"` when its
+  /// lookup FAILS -- meaning "cannot compare", not "up to date". The
+  /// wizard rendered that identically to a real update.
+  it("does not offer a row whose latest could not be determined", () => {
+    const unknown: Outdated = {
+      ...pkg("registry.terraform.io/hashicorp/archive"),
+      ecosystem: "npm",
+      current: "2.8.0",
+      latest: "2.8.0",
+      bump: "unknown",
+    };
+    show([unknown]);
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    expect(screen.getByText(/could not be determined/i)).toBeTruthy();
+  });
+
+  describe("opening a pull request from the report", () => {
+    const runToReport = async () => {
+      show([pkg("lodash")]);
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(screen.getByRole("button", { name: /apply/i }));
+      await screen.findByText("headstate/update-lodash");
+    };
+
+    it("pushes and opens a pull request, then shows the link", async () => {
+      await runToReport();
+
+      fireEvent.click(screen.getByRole("button", { name: /push and open a pull request/i }));
+
+      await waitFor(() => expect(prFn).toHaveBeenCalledTimes(1));
+      expect(prFn).toHaveBeenCalledWith(
+        "/code/app",
+        expect.objectContaining({ branch: "headstate/update-lodash" }),
+      );
+      // The URL is what the user needs next, so it stays on the page and is
+      // not merely announced in a toast that disappears.
+      expect(
+        await screen.findByText("https://github.com/octocat/hello-world/pull/7"),
+      ).toBeTruthy();
+    });
+
+    it("reports a failure instead of pretending the pull request opened", async () => {
+      prFn.mockRejectedValue("no upstream remote");
+      await runToReport();
+
+      fireEvent.click(screen.getByRole("button", { name: /push and open a pull request/i }));
+
+      await waitFor(() =>
+        expect(toasts.error).toHaveBeenCalledWith(
+          "Could not open the pull request",
+          { description: "no upstream remote" },
+        ),
+      );
+      expect(screen.queryByText(/pull\/7/)).toBeNull();
+    });
+
+    it("explains, rather than hides, why an unverifiable ecosystem gets no button", async () => {
+      applyFn.mockResolvedValue({
+        worktree: "/code/app/.worktrees/update-boto3",
+        branch: "headstate/update-boto3",
+        ecosystems: ["poetry"],
+        results: [
+          {
+            name: "boto3",
+            requested: "2.0.0",
+            changed_files: ["requirements.txt"],
+            output: "",
+            resolved_constraint: null,
+            error: null,
+          },
+        ],
+      });
+      show([pkg("boto3", "poetry")]);
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(screen.getByRole("button", { name: /apply/i }));
+      await screen.findByText("headstate/update-boto3");
+
+      expect(
+        screen.queryByRole("button", { name: /push and open a pull request/i }),
+      ).toBeNull();
+      expect(screen.getByText(/only be opened for npm and yarn/i)).toBeTruthy();
+    });
   });
 });

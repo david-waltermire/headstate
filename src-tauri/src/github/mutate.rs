@@ -317,6 +317,51 @@ impl GitHubClient {
         .await
     }
 
+    /// Open a pull request, returning its URL.
+    ///
+    /// REST rather than GraphQL: `createPullRequest` needs the
+    /// repository's node ID, which would be an extra round trip to look
+    /// up from an `owner/repo` we already have. The REST endpoint takes
+    /// the slug directly.
+    ///
+    /// This is the first thing this app does that creates something on
+    /// GitHub rather than acting on something already there. GitHub's
+    /// own refusal is returned verbatim -- "No commits between main and
+    /// x" and "A pull request already exists" are both display-ready and
+    /// both actionable, where a reworded version would lose which one it
+    /// was.
+    pub async fn create_pull_request(
+        &self,
+        repo: &str,
+        head: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<String, ClientError> {
+        let payload = serde_json::json!({
+            "title": title,
+            "head": head,
+            "base": base,
+            "body": body,
+        });
+        let data = self
+            .rest_post_json(&format!("/repos/{repo}/pulls"), &payload)
+            .await?;
+        // The URL is the whole point of the return value. Its absence
+        // means the response was not what was expected, which is worth
+        // saying rather than returning an empty string that reads as a
+        // successful no-op.
+        data.get("html_url")
+            .and_then(|u| u.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| {
+                // Not `Api`: nothing failed at the transport level.
+                // GitHub answered, and the answer was not the shape a
+                // created pull request has.
+                ClientError::NotJson("pull request response without an html_url".into())
+            })
+    }
+
     /// Apply an action to a pull request.
     ///
     /// Returns the GitHub error verbatim on refusal -- a rejected merge

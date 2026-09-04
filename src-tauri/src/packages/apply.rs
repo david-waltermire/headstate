@@ -47,6 +47,18 @@ pub enum Unsupported {
 /// deciding it should be updated.
 pub fn supported(eco: Ecosystem) -> Result<(), Unsupported> {
     match eco {
+        // Refused for the same reason as Swift, by a different route:
+        // a provider version lives as a CONSTRAINT in `.tf` source, and
+        // `terraform init -upgrade` moves it only as far as that
+        // constraint allows. Applying an update means editing the
+        // constraint, which is a source change rather than a lockfile
+        // one -- and guessing at someone's version policy is not this
+        // command's job.
+        Ecosystem::Terraform => Err(Unsupported::NoCommand(
+            "Terraform providers cannot be updated here: the version is a \
+             constraint in your .tf source, not something a lockfile edit \
+             can change.",
+        )),
         Ecosystem::Swift => Err(Unsupported::NoCommand(
             "Swift packages cannot be updated here: nothing reports what is \
              outdated, so there is no version to move to. Update the version \
@@ -102,16 +114,54 @@ fn reject_flaglike(field: &str, value: &str) -> Result<(), String> {
 /// takes no version, so it moves to whatever the Podfile's constraints
 /// allow. That is why the applied version is read back afterwards
 /// instead of assumed.
-pub fn update_args(eco: Ecosystem, name: &str, version: &str) -> Vec<String> {
+/// Whether the manifest pinned this package to an EXACT version.
+///
+/// A production dependency list that says `4.17.20` means it: the point
+/// of a pin is that the version does not move on its own. npm's default
+/// widens that to `^4.17.21` on update, which quietly converts a pinned
+/// project into a floating one -- measured, and the reason `--save-exact`
+/// exists.
+///
+/// But applying `--save-exact` unconditionally is the opposite mistake:
+/// a project that deliberately wrote `^4.17.20` would be NARROWED to a
+/// pin it never asked for. Verified both ways against real npm.
+///
+/// So the manifest's own style decides. Absent or unreadable counts as
+/// NOT pinned, which leaves npm's default behaviour -- the conservative
+/// direction, since it changes nothing about how this worked before.
+fn was_pinned(dir: &Path, eco: Ecosystem, name: &str) -> bool {
+    let Some(current) = read_constraint(dir, eco, name) else {
+        return false;
+    };
+    // A pin is a bare version: no range operator of any kind.
+    !current.is_empty()
+        && current.chars().next().is_some_and(|c| c.is_ascii_digit())
+        && !current.contains([' ', '|', '-', '*', 'x'])
+}
+
+pub fn update_args(dir: &Path, eco: Ecosystem, name: &str, version: &str) -> Vec<String> {
     let s = |v: &str| v.to_string();
     match eco {
+        // `--save-exact` only when the manifest was already exact, so
+        // an upgrade keeps the style the project chose rather than
+        // imposing one.
+        Ecosystem::Npm if was_pinned(dir, eco, name) => {
+            vec![s("install"), s("--save-exact"), format!("{name}@{version}")]
+        }
         Ecosystem::Npm => vec![s("install"), format!("{name}@{version}")],
+        // Yarn Berry's equivalent. `yarn up` writes a range by default
+        // for the same reason npm does.
+        Ecosystem::Yarn if was_pinned(dir, eco, name) => {
+            vec![s("up"), s("--exact"), format!("{name}@{version}")]
+        }
         Ecosystem::Yarn => vec![s("up"), format!("{name}@{version}")],
         Ecosystem::Poetry => vec![s("add"), format!("{name}@{version}")],
         Ecosystem::Uv => vec![s("add"), format!("{name}=={version}")],
         Ecosystem::Dotnet => vec![s("add"), s("package"), s(name), s("--version"), s(version)],
         // No version argument exists for `pod update`.
         Ecosystem::Cocoapods => vec![s("update"), s(name)],
+        // Unreachable: `supported` refuses Terraform first.
+        Ecosystem::Terraform => vec![s("version")],
         // Unreachable: `supported` refuses Swift before this is called.
         // Kept total rather than panicking, because a panic here would
         // take down the whole command for a case the caller already
@@ -167,7 +217,7 @@ pub fn apply_one(dir: &Path, eco: Ecosystem, name: &str, version: &str) -> Resul
     let bin = tools::find(eco.program(), &refs)
         .ok_or_else(|| format!("{} is not installed", eco.program()))?;
 
-    let args = update_args(eco, name, version);
+    let args = update_args(dir, eco, name, version);
     let out = std::process::Command::new(&bin)
         .args(&args)
         // Same reason as the update check: an interpreted tool starts a
@@ -246,6 +296,106 @@ fn changed_files(dir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Commit everything the update wrote.
+///
+/// `git add -A` rather than a list of expected files: a resolver decides
+/// what it rewrites, and phase 1 exists precisely because that is not
+/// predictable. A lockfile the tool touched and this did not know to
+/// stage would leave the branch inconsistent with the checkout it came
+/// from.
+///
+/// The worktree was created for this run and contains nothing else, so
+/// there is no unrelated work to sweep up.
+///
+/// Identity comes from `-c` flags: a CI machine or a fresh container may
+/// have no git identity configured, and the commit must not fail for
+/// that.
+pub fn commit_all(dir: &Path, message: &str) -> Result<(), String> {
+    let add = std::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if !add.status.success() {
+        return Err(String::from_utf8_lossy(&add.stderr).trim().to_string());
+    }
+
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Headstate",
+            "-c",
+            "user.email=headstate@users.noreply.github.com",
+            "commit",
+            "-q",
+            "-m",
+            message,
+        ])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // "nothing to commit" is not a failure to report as one: the apply
+    // succeeded and changed nothing, which the report already says and
+    // the caller already refuses to push.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if stdout.contains("nothing to commit") || stderr.contains("nothing to commit") {
+        return Err("the update changed no files, so there is nothing to commit".into());
+    }
+    Err(stderr.trim().to_string())
+}
+
+/// Push the run's branch to `origin`.
+///
+/// The FIRST thing this app sends to a shared remote. Everything before
+/// it -- worktrees, removals, applies -- was local and undoable by the
+/// user alone.
+///
+/// `--set-upstream` so the branch is tracked, and no `--force` of any
+/// kind: the branch was created fresh by `create_worktree`, which
+/// refuses an existing name, so there is nothing to overwrite. If a
+/// remote branch of that name somehow exists, git's refusal is the right
+/// outcome and is returned verbatim.
+pub fn push_branch(dir: &Path, branch: &str) -> Result<(), String> {
+    let out = std::process::Command::new("git")
+        .args(["push", "--set-upstream", "origin", branch])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // git's own message. "Permission denied (publickey)" and "protected
+    // branch hook declined" are both actionable and both lost by a
+    // generic "push failed".
+    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+}
+
+/// The branch a pull request should target.
+///
+/// The remote's default, read from `origin/HEAD` rather than assumed to
+/// be `main`: this app already carries repositories whose default is
+/// `master`, and opening a pull request against a branch that does not
+/// exist fails after the push has already happened.
+pub fn default_branch(dir: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .strip_prefix("origin/")
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+}
+
 /// Create a worktree for an update run.
 ///
 /// Branches from the repository's CURRENT HEAD rather than from a
@@ -319,13 +469,21 @@ pub struct UpdateRequest {
 
 /// The result of a whole run: where the work landed and what each
 /// update did.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunReport {
-    /// The worktree holding the changes. It is LEFT IN PLACE -- phase 1
-    /// does not push, so this path is the deliverable.
+    /// The worktree holding the changes. Left in place: phase 1 does not
+    /// push, and phase 2 leaves it too so a failed push or refused pull
+    /// request costs nothing that was not already there.
     pub worktree: String,
     pub branch: String,
     pub results: Vec<UpdateOutcome>,
+    /// Which ecosystems this run touched.
+    ///
+    /// Carried because opening a pull request is only offered where the
+    /// resolved constraint can be read back -- and the outcomes alone do
+    /// not say which tool produced them.
+    #[serde(default)]
+    pub ecosystems: Vec<Ecosystem>,
 }
 
 /// What happened to one requested update.
@@ -333,7 +491,7 @@ pub struct RunReport {
 /// A per-package result rather than one overall status: updates are
 /// applied in sequence and a failure in the third must not erase the
 /// report of the two that worked.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateOutcome {
     pub name: String,
     pub requested: String,
@@ -412,10 +570,15 @@ pub fn run(repo: &Path, requests: &[UpdateRequest]) -> Result<RunReport, String>
         )
         .collect();
 
+    let mut ecosystems: Vec<Ecosystem> = requests.iter().map(|r| r.ecosystem).collect();
+    ecosystems.sort_by_key(|e| format!("{e:?}"));
+    ecosystems.dedup();
+
     Ok(RunReport {
         worktree: dir.to_string_lossy().into_owned(),
         branch,
         results,
+        ecosystems,
     })
 }
 
@@ -477,15 +640,101 @@ mod tests {
             (Ecosystem::Poetry, "lodash@4.17.21"),
             (Ecosystem::Uv, "lodash==4.17.21"),
         ] {
-            let args = update_args(eco, "lodash", "4.17.21");
+            let args = update_args(Path::new("/nonexistent"), eco, "lodash", "4.17.21");
             assert!(
                 args.iter().any(|a| a == expect),
                 "{eco:?} args {args:?} missing {expect}"
             );
         }
-        let dotnet = update_args(Ecosystem::Dotnet, "Serilog", "3.1.1");
+        let dotnet = update_args(
+            Path::new("/nonexistent"),
+            Ecosystem::Dotnet,
+            "Serilog",
+            "3.1.1",
+        );
         assert!(dotnet.contains(&"--version".to_string()));
         assert!(dotnet.contains(&"3.1.1".to_string()));
+    }
+
+    /// A pinned manifest STAYS pinned.
+    ///
+    /// Production dependency lists that say `4.17.20` mean it. npm's
+    /// default widens that to `^4.17.21` on update, quietly converting
+    /// a pinned project into a floating one -- measured against real
+    /// npm, and the reason this exists.
+    #[test]
+    fn an_exact_version_is_kept_exact() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            t.path().join("package.json"),
+            r#"{"dependencies":{"lodash":"4.17.20"}}"#,
+        )
+        .unwrap();
+        let args = update_args(t.path(), Ecosystem::Npm, "lodash", "4.17.21");
+        assert!(
+            args.iter().any(|a| a == "--save-exact"),
+            "a pinned manifest must stay pinned: {args:?}"
+        );
+    }
+
+    /// And the opposite mistake is not made.
+    ///
+    /// Applying `--save-exact` unconditionally NARROWS a project that
+    /// deliberately wrote a range into a pin it never asked for --
+    /// verified against real npm, which does exactly that.
+    #[test]
+    fn a_range_is_not_narrowed_into_a_pin() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            t.path().join("package.json"),
+            r#"{"dependencies":{"lodash":"^4.17.20"}}"#,
+        )
+        .unwrap();
+        let args = update_args(t.path(), Ecosystem::Npm, "lodash", "4.17.21");
+        assert!(
+            !args.iter().any(|a| a == "--save-exact"),
+            "a range must stay a range: {args:?}"
+        );
+    }
+
+    /// Yarn Berry writes a range by default for the same reason.
+    #[test]
+    fn yarn_keeps_an_exact_version_exact() {
+        let t = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            t.path().join("package.json"),
+            r#"{"dependencies":{"lodash":"4.17.20"}}"#,
+        )
+        .unwrap();
+        let args = update_args(t.path(), Ecosystem::Yarn, "lodash", "4.17.21");
+        assert!(args.iter().any(|a| a == "--exact"), "{args:?}");
+    }
+
+    /// An unreadable manifest leaves the tool's own default, which is
+    /// what this did before -- the conservative direction.
+    #[test]
+    fn an_unknown_constraint_changes_nothing() {
+        let t = tempfile::TempDir::new().unwrap();
+        let args = update_args(t.path(), Ecosystem::Npm, "lodash", "4.17.21");
+        assert!(!args.iter().any(|a| a == "--save-exact"), "{args:?}");
+    }
+
+    /// The other range forms must not be read as pins.
+    #[test]
+    fn every_range_form_counts_as_a_range() {
+        for constraint in ["^1.0.0", "~1.0.0", ">=1.0.0", "1.x", "1.0.0 - 2.0.0", "*"] {
+            let t = tempfile::TempDir::new().unwrap();
+            std::fs::write(
+                t.path().join("package.json"),
+                format!(r#"{{"dependencies":{{"lodash":"{constraint}"}}}}"#),
+            )
+            .unwrap();
+            let args = update_args(t.path(), Ecosystem::Npm, "lodash", "4.17.21");
+            assert!(
+                !args.iter().any(|a| a == "--save-exact"),
+                "{constraint} is a range, not a pin: {args:?}"
+            );
+        }
     }
 
     /// Each command names ONE package. A blunt `npm update` would move
@@ -500,7 +749,7 @@ mod tests {
             Ecosystem::Dotnet,
             Ecosystem::Cocoapods,
         ] {
-            let args = update_args(eco, "lodash", "4.17.21");
+            let args = update_args(Path::new("/nonexistent"), eco, "lodash", "4.17.21");
             assert!(
                 args.iter().any(|a| a.contains("lodash")),
                 "{eco:?} does not name the package: {args:?}"
@@ -772,6 +1021,58 @@ mod tests {
         );
     }
 
+    /// The push must NOT force. The branch is created fresh and refused
+    /// if it exists, so there is nothing legitimate to overwrite -- and
+    /// a force here would be overwriting someone else's work on a shared
+    /// remote.
+    #[test]
+    fn the_push_never_forces() {
+        // Asserted on the arguments rather than by pushing: there is no
+        // remote to push to in a test, and the flag is the whole risk.
+        let src = include_str!("apply.rs");
+        let start = src
+            .find("pub fn push_branch")
+            .expect("push_branch must exist");
+        let body = &src[start..start + 600];
+        assert!(
+            !body.contains("--force") && !body.contains("-f\""),
+            "push_branch must never force"
+        );
+        assert!(body.contains("--set-upstream"), "the branch should track");
+    }
+
+    /// `origin/HEAD` rather than assuming `main`. Opening a pull request
+    /// against a branch that does not exist fails AFTER the push has
+    /// already happened.
+    #[test]
+    fn the_default_branch_comes_from_the_remote() {
+        let tmp = repo();
+        // No `origin/HEAD` in a bare fixture, so this must report
+        // nothing rather than guessing "main".
+        assert_eq!(default_branch(tmp.path()), None);
+    }
+
+    /// A commit with no identity configured fails on a fresh machine,
+    /// which is where this would most often run.
+    #[test]
+    fn committing_needs_no_configured_identity() {
+        let tmp = repo();
+        std::fs::write(tmp.path().join("changed.txt"), "x\n").unwrap();
+        assert!(
+            commit_all(tmp.path(), "test: a change").is_ok(),
+            "the commit must supply its own identity"
+        );
+    }
+
+    /// An apply that changed nothing must not produce an empty commit --
+    /// and must say why rather than failing opaquely.
+    #[test]
+    fn committing_nothing_is_refused_with_a_reason() {
+        let tmp = repo();
+        let err = commit_all(tmp.path(), "test: nothing").unwrap_err();
+        assert!(err.contains("nothing to commit"), "{err}");
+    }
+
     #[test]
     fn run_refuses_an_empty_request() {
         let tmp = repo();
@@ -915,15 +1216,13 @@ mod real {
         // pinned request as a caret RANGE. If this ever equals the
         // requested string, npm changed its behaviour and the report
         // needs revisiting.
+        // The manifest was PINNED (`4.17.20`), so the update must keep
+        // it pinned. Before `--save-exact` npm wrote `^4.17.21` here,
+        // silently converting a pinned project into a floating one.
         assert_eq!(
             r.resolved_constraint.as_deref(),
-            Some("^4.17.21"),
-            "npm should record a caret range, not the requested pin"
-        );
-        assert_ne!(
-            r.resolved_constraint.as_deref(),
-            Some(r.requested.as_str()),
-            "resolved must not be assumed equal to requested"
+            Some("4.17.21"),
+            "a pinned manifest must stay pinned, not become a caret range"
         );
     }
 }

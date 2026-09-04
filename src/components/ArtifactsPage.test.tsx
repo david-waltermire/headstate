@@ -23,7 +23,6 @@ const removeFn = vi.hoisted(() =>
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 vi.mock("../api/hooks", () => ({
-  useUiPrefs: () => ({ prefs: { remove_stale_venvs: false }, set: vi.fn() }),
   useRemoveArtifacts: () => removeFn,
   // The page renders VenvSection, which has its own hooks. Stubbed to
   // empty here rather than exercised: that component has its own test

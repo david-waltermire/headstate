@@ -9,6 +9,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   Artifact,
+  Branch,
+  DeleteOutcome,
   ClaudeFile,
   ProjectReport,
   RunReport,
@@ -63,13 +65,6 @@ export interface UiPrefs {
   /// asking someone to install a special build to produce it is much
   /// worse than a checkbox.
   diagnostic_logging: boolean;
-  /// Whether STALE virtualenvs may be selected for removal (#394).
-  ///
-  /// Orphans never need this: nothing on the machine hashes to them, so
-  /// the verdict is a fact. Stale is a judgement about a project that
-  /// still exists, and the app should not act on a judgement unless the
-  /// user supplied the intent.
-  remove_stale_venvs: boolean;
   /// Days idle before a virtualenv counts as stale. 0 means the default.
   stale_venv_days: number;
 }
@@ -99,6 +94,9 @@ export interface NotifyPrefs {
   enabled: boolean;
   ci_failed: boolean;
   conflicted: boolean;
+  /// Notify when a pull request enters the "Ready for review" set: green
+  /// checks, no blockers, and the user is a requested reviewer.
+  ready_to_review: boolean;
 }
 
 export const getNotifyPrefs = () => invoke<NotifyPrefs>("get_notify_prefs");
@@ -472,8 +470,19 @@ export const packagesMarkdown = (
 /// Create a worktree and apply updates in it. Does NOT push.
 ///
 /// Returns where the work landed and what each update actually did.
+/// Push the run's branch and open a pull request.
+///
+/// The only call in this app that writes to a shared remote. Takes the
+/// report from `applyPackageUpdates` rather than doing the work again,
+/// so the user has seen what landed before anything is pushed.
+export const openUpdatePr = (repoPath: string, report: RunReport) =>
+  invoke<string>("open_update_pr", { repoPath, report });
+
 export const applyPackageUpdates = (repoPath: string, requests: UpdateRequest[]) =>
   invoke<RunReport>("apply_package_updates", { repoPath, requests });
+
+/// Reveal the diagnostic log in the file manager. Returns its path.
+export const revealLog = () => invoke<string>("reveal_log");
 
 /// Every CLAUDE.md in a repository, with its import tree resolved.
 export const scanClaudeMd = (repoPath: string) =>
@@ -481,3 +490,22 @@ export const scanClaudeMd = (repoPath: string) =>
 
 /// The text of one file, for rendering.
 export const readClaudeMd = (path: string) => invoke<string>("read_claude_md", { path });
+
+/// Every branch in a repository, classified.
+///
+/// Slow by nature -- ~9s on a 675-branch repository, most of it the
+/// patch-id comparison that finds squash merges. The caller shows a
+/// loading state rather than pretending this is instant.
+export const listBranches = (repoPath: string) =>
+  invoke<Branch[]>("list_branches", { repoPath });
+
+/// Delete local branches. Each one is re-checked at delete time.
+export const deleteBranches = (repoPath: string, names: string[]) =>
+  invoke<DeleteOutcome[]>("delete_branches", { repoPath, names });
+
+/// Delete branches ON THE REMOTE.
+///
+/// Deliberately a different function from `deleteBranches`: this is a
+/// push to shared state that no reflog can undo.
+export const deleteRemoteBranches = (repoPath: string, names: string[]) =>
+  invoke<DeleteOutcome[]>("delete_remote_branches", { repoPath, names });
