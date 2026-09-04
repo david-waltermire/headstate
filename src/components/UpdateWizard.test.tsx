@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Outdated, RunReport } from "@/types/pr";
 
 const applyFn = vi.hoisted(() => vi.fn<(...a: unknown[]) => Promise<RunReport>>());
+const prFn = vi.hoisted(() => vi.fn<(...a: unknown[]) => Promise<string>>());
 const toasts = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
@@ -10,7 +11,7 @@ const toasts = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({ toast: toasts }));
-vi.mock("../api/tauri", () => ({ applyPackageUpdates: applyFn }));
+vi.mock("../api/tauri", () => ({ applyPackageUpdates: applyFn, openUpdatePr: prFn }));
 
 import { UpdateWizard } from "./UpdateWizard";
 
@@ -31,9 +32,11 @@ const show = (packages: Outdated[]) =>
 describe("UpdateWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    prFn.mockResolvedValue("https://github.com/octocat/hello-world/pull/7");
     applyFn.mockResolvedValue({
       worktree: "/code/app/.worktrees/update-lodash",
       branch: "headstate/update-lodash",
+      ecosystems: ["npm"],
       results: [
         {
           name: "lodash",
@@ -104,6 +107,7 @@ describe("UpdateWizard", () => {
     applyFn.mockResolvedValue({
       worktree: "/w",
       branch: "b",
+      ecosystems: ["npm"],
       results: [
         {
           name: "lodash",
@@ -126,6 +130,7 @@ describe("UpdateWizard", () => {
     applyFn.mockResolvedValue({
       worktree: "/w",
       branch: "b",
+      ecosystems: ["npm"],
       results: [
         {
           name: "lodash",
@@ -160,5 +165,73 @@ describe("UpdateWizard", () => {
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: /Apply/ }));
     await waitFor(() => expect(toasts.error).toHaveBeenCalled());
+  });
+
+  describe("opening a pull request from the report", () => {
+    const runToReport = async () => {
+      show([pkg("lodash")]);
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(screen.getByRole("button", { name: /apply/i }));
+      await screen.findByText("headstate/update-lodash");
+    };
+
+    it("pushes and opens a pull request, then shows the link", async () => {
+      await runToReport();
+
+      fireEvent.click(screen.getByRole("button", { name: /push and open a pull request/i }));
+
+      await waitFor(() => expect(prFn).toHaveBeenCalledTimes(1));
+      expect(prFn).toHaveBeenCalledWith(
+        "/code/app",
+        expect.objectContaining({ branch: "headstate/update-lodash" }),
+      );
+      // The URL is what the user needs next, so it stays on the page and is
+      // not merely announced in a toast that disappears.
+      expect(
+        await screen.findByText("https://github.com/octocat/hello-world/pull/7"),
+      ).toBeTruthy();
+    });
+
+    it("reports a failure instead of pretending the pull request opened", async () => {
+      prFn.mockRejectedValue("no upstream remote");
+      await runToReport();
+
+      fireEvent.click(screen.getByRole("button", { name: /push and open a pull request/i }));
+
+      await waitFor(() =>
+        expect(toasts.error).toHaveBeenCalledWith(
+          "Could not open the pull request",
+          { description: "no upstream remote" },
+        ),
+      );
+      expect(screen.queryByText(/pull\/7/)).toBeNull();
+    });
+
+    it("explains, rather than hides, why an unverifiable ecosystem gets no button", async () => {
+      applyFn.mockResolvedValue({
+        worktree: "/code/app/.worktrees/update-boto3",
+        branch: "headstate/update-boto3",
+        ecosystems: ["poetry"],
+        results: [
+          {
+            name: "boto3",
+            requested: "2.0.0",
+            changed_files: ["requirements.txt"],
+            output: "",
+            resolved_constraint: null,
+            error: null,
+          },
+        ],
+      });
+      show([pkg("boto3", "poetry")]);
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(screen.getByRole("button", { name: /apply/i }));
+      await screen.findByText("headstate/update-boto3");
+
+      expect(
+        screen.queryByRole("button", { name: /push and open a pull request/i }),
+      ).toBeNull();
+      expect(screen.getByText(/only be opened for npm and yarn/i)).toBeTruthy();
+    });
   });
 });

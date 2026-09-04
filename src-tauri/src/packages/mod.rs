@@ -10,6 +10,7 @@ pub mod apply;
 pub mod detect;
 pub mod markdown;
 pub mod model;
+pub mod pr;
 pub mod registry;
 pub mod run;
 pub mod swift;

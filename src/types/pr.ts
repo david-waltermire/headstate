@@ -579,6 +579,9 @@ interface UpdateOutcome {
 
 /// The result of an update run.
 export interface RunReport {
+  /// Which ecosystems the run touched. Opening a pull request is only
+  /// offered where the resolved constraint can be read back.
+  ecosystems: Ecosystem[];
   /// The worktree holding the changes. Phase 1 does not push, so this
   /// path IS the deliverable.
   worktree: string;

@@ -296,6 +296,106 @@ fn changed_files(dir: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Commit everything the update wrote.
+///
+/// `git add -A` rather than a list of expected files: a resolver decides
+/// what it rewrites, and phase 1 exists precisely because that is not
+/// predictable. A lockfile the tool touched and this did not know to
+/// stage would leave the branch inconsistent with the checkout it came
+/// from.
+///
+/// The worktree was created for this run and contains nothing else, so
+/// there is no unrelated work to sweep up.
+///
+/// Identity comes from `-c` flags: a CI machine or a fresh container may
+/// have no git identity configured, and the commit must not fail for
+/// that.
+pub fn commit_all(dir: &Path, message: &str) -> Result<(), String> {
+    let add = std::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if !add.status.success() {
+        return Err(String::from_utf8_lossy(&add.stderr).trim().to_string());
+    }
+
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Headstate",
+            "-c",
+            "user.email=headstate@users.noreply.github.com",
+            "commit",
+            "-q",
+            "-m",
+            message,
+        ])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // "nothing to commit" is not a failure to report as one: the apply
+    // succeeded and changed nothing, which the report already says and
+    // the caller already refuses to push.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if stdout.contains("nothing to commit") || stderr.contains("nothing to commit") {
+        return Err("the update changed no files, so there is nothing to commit".into());
+    }
+    Err(stderr.trim().to_string())
+}
+
+/// Push the run's branch to `origin`.
+///
+/// The FIRST thing this app sends to a shared remote. Everything before
+/// it -- worktrees, removals, applies -- was local and undoable by the
+/// user alone.
+///
+/// `--set-upstream` so the branch is tracked, and no `--force` of any
+/// kind: the branch was created fresh by `create_worktree`, which
+/// refuses an existing name, so there is nothing to overwrite. If a
+/// remote branch of that name somehow exists, git's refusal is the right
+/// outcome and is returned verbatim.
+pub fn push_branch(dir: &Path, branch: &str) -> Result<(), String> {
+    let out = std::process::Command::new("git")
+        .args(["push", "--set-upstream", "origin", branch])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // git's own message. "Permission denied (publickey)" and "protected
+    // branch hook declined" are both actionable and both lost by a
+    // generic "push failed".
+    Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+}
+
+/// The branch a pull request should target.
+///
+/// The remote's default, read from `origin/HEAD` rather than assumed to
+/// be `main`: this app already carries repositories whose default is
+/// `master`, and opening a pull request against a branch that does not
+/// exist fails after the push has already happened.
+pub fn default_branch(dir: &Path) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .strip_prefix("origin/")
+        .map(str::to_string)
+        .filter(|s| !s.is_empty())
+}
+
 /// Create a worktree for an update run.
 ///
 /// Branches from the repository's CURRENT HEAD rather than from a
@@ -369,13 +469,21 @@ pub struct UpdateRequest {
 
 /// The result of a whole run: where the work landed and what each
 /// update did.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunReport {
-    /// The worktree holding the changes. It is LEFT IN PLACE -- phase 1
-    /// does not push, so this path is the deliverable.
+    /// The worktree holding the changes. Left in place: phase 1 does not
+    /// push, and phase 2 leaves it too so a failed push or refused pull
+    /// request costs nothing that was not already there.
     pub worktree: String,
     pub branch: String,
     pub results: Vec<UpdateOutcome>,
+    /// Which ecosystems this run touched.
+    ///
+    /// Carried because opening a pull request is only offered where the
+    /// resolved constraint can be read back -- and the outcomes alone do
+    /// not say which tool produced them.
+    #[serde(default)]
+    pub ecosystems: Vec<Ecosystem>,
 }
 
 /// What happened to one requested update.
@@ -383,7 +491,7 @@ pub struct RunReport {
 /// A per-package result rather than one overall status: updates are
 /// applied in sequence and a failure in the third must not erase the
 /// report of the two that worked.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct UpdateOutcome {
     pub name: String,
     pub requested: String,
@@ -462,10 +570,15 @@ pub fn run(repo: &Path, requests: &[UpdateRequest]) -> Result<RunReport, String>
         )
         .collect();
 
+    let mut ecosystems: Vec<Ecosystem> = requests.iter().map(|r| r.ecosystem).collect();
+    ecosystems.sort_by_key(|e| format!("{e:?}"));
+    ecosystems.dedup();
+
     Ok(RunReport {
         worktree: dir.to_string_lossy().into_owned(),
         branch,
         results,
+        ecosystems,
     })
 }
 
@@ -906,6 +1019,58 @@ mod tests {
             !tmp.path().join(".worktrees").exists(),
             "a refused run must create no worktree"
         );
+    }
+
+    /// The push must NOT force. The branch is created fresh and refused
+    /// if it exists, so there is nothing legitimate to overwrite -- and
+    /// a force here would be overwriting someone else's work on a shared
+    /// remote.
+    #[test]
+    fn the_push_never_forces() {
+        // Asserted on the arguments rather than by pushing: there is no
+        // remote to push to in a test, and the flag is the whole risk.
+        let src = include_str!("apply.rs");
+        let start = src
+            .find("pub fn push_branch")
+            .expect("push_branch must exist");
+        let body = &src[start..start + 600];
+        assert!(
+            !body.contains("--force") && !body.contains("-f\""),
+            "push_branch must never force"
+        );
+        assert!(body.contains("--set-upstream"), "the branch should track");
+    }
+
+    /// `origin/HEAD` rather than assuming `main`. Opening a pull request
+    /// against a branch that does not exist fails AFTER the push has
+    /// already happened.
+    #[test]
+    fn the_default_branch_comes_from_the_remote() {
+        let tmp = repo();
+        // No `origin/HEAD` in a bare fixture, so this must report
+        // nothing rather than guessing "main".
+        assert_eq!(default_branch(tmp.path()), None);
+    }
+
+    /// A commit with no identity configured fails on a fresh machine,
+    /// which is where this would most often run.
+    #[test]
+    fn committing_needs_no_configured_identity() {
+        let tmp = repo();
+        std::fs::write(tmp.path().join("changed.txt"), "x\n").unwrap();
+        assert!(
+            commit_all(tmp.path(), "test: a change").is_ok(),
+            "the commit must supply its own identity"
+        );
+    }
+
+    /// An apply that changed nothing must not produce an empty commit --
+    /// and must say why rather than failing opaquely.
+    #[test]
+    fn committing_nothing_is_refused_with_a_reason() {
+        let tmp = repo();
+        let err = commit_all(tmp.path(), "test: nothing").unwrap_err();
+        assert!(err.contains("nothing to commit"), "{err}");
     }
 
     #[test]

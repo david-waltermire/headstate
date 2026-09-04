@@ -1040,6 +1040,81 @@ pub async fn check_packages(
     Ok(reports)
 }
 
+/// Push an update run's branch and open a pull request.
+///
+/// PHASE 2, and the first command in this app that writes to a shared
+/// remote. Everything before it was local: worktrees, removals and
+/// applies are all undoable by the user alone, and this is not.
+///
+/// Takes a report from `apply_package_updates` rather than doing the
+/// work itself, so the user has seen what landed before anything is
+/// pushed. That separation is the point of the phasing.
+#[tauri::command]
+pub async fn open_update_pr(
+    client: State<'_, GhClient>,
+    repo_path: String,
+    report: crate::packages::apply::RunReport,
+) -> Result<String, String> {
+    let client = client.0.clone().ok_or_else(|| AUTH_ERR.to_string())?;
+
+    // Nothing applied, nothing to open. A pull request with an empty
+    // diff is noise, and GitHub refuses it anyway ("No commits
+    // between") -- better to say so before pushing.
+    if report.results.iter().all(|r| r.error.is_some()) {
+        return Err("no updates were applied, so there is nothing to open".into());
+    }
+
+    // Only ecosystems whose resolved constraint can be READ BACK.
+    //
+    // The body's whole value is stating what actually landed. Poetry,
+    // uv, .NET and CocoaPods report `resolved_constraint` as None --
+    // reading those manifests safely needs a real TOML/XML parser -- so
+    // a description would have to say "not verified" about every row,
+    // which is not a description worth opening a pull request with.
+    //
+    // Refused BEFORE the push, so a run that cannot be described does
+    // not leave a branch on the remote.
+    if !report
+        .ecosystems
+        .iter()
+        .all(|e| crate::packages::pr::can_describe(*e))
+    {
+        return Err(
+            "a pull request can only be opened for npm and yarn so far: the other \
+             ecosystems do not report what version actually landed, and the \
+             description would have to guess."
+                .into(),
+        );
+    }
+
+    let worktree = std::path::PathBuf::from(&report.worktree);
+    let base = crate::packages::apply::default_branch(&worktree)
+        .ok_or("could not determine the default branch from origin/HEAD")?;
+    let slug = crate::worktrees::repo_identity(&repo_path)
+        .ok_or("could not determine owner/repo from the git remote")?;
+
+    // Committed, pushed, THEN opened. A failure at any step leaves the
+    // worktree in place with its changes intact, which is what phase 1
+    // already delivered -- so a partial run costs nothing that was not
+    // already there.
+    crate::packages::apply::commit_all(&worktree, &crate::packages::pr::title(&report.results))?;
+    crate::packages::apply::push_branch(&worktree, &report.branch)?;
+
+    let url = client
+        .create_pull_request(
+            &slug,
+            &report.branch,
+            &base,
+            &crate::packages::pr::title(&report.results),
+            &crate::packages::pr::body(&report),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+    log::info!("opened {url} from {}", report.branch);
+    Ok(url)
+}
+
 /// The updates as markdown, for handing to an agent.
 #[tauri::command]
 pub fn packages_markdown(

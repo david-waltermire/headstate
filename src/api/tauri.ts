@@ -468,6 +468,14 @@ export const packagesMarkdown = (
 /// Create a worktree and apply updates in it. Does NOT push.
 ///
 /// Returns where the work landed and what each update actually did.
+/// Push the run's branch and open a pull request.
+///
+/// The only call in this app that writes to a shared remote. Takes the
+/// report from `applyPackageUpdates` rather than doing the work again,
+/// so the user has seen what landed before anything is pushed.
+export const openUpdatePr = (repoPath: string, report: RunReport) =>
+  invoke<string>("open_update_pr", { repoPath, report });
+
 export const applyPackageUpdates = (repoPath: string, requests: UpdateRequest[]) =>
   invoke<RunReport>("apply_package_updates", { repoPath, requests });
 

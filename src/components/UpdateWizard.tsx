@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import type { Ecosystem, Outdated, RunReport } from "@/types/pr";
-import { applyPackageUpdates } from "@/api/tauri";
+import { ExternalLink } from "./ExternalLink";
+import { applyPackageUpdates, openUpdatePr } from "@/api/tauri";
 import {
   Dialog,
   DialogContent,
@@ -100,7 +101,7 @@ export function UpdateWizard({
         </p>
 
         {report ? (
-          <Report report={report} />
+          <Report report={report} repo={repo} />
         ) : (
           <>
             <div className="space-y-1">
@@ -182,7 +183,33 @@ export function UpdateWizard({
 /// they genuinely differ: npm rewrites a pinned `4.17.21` request into
 /// `^4.17.21`, a range rather than a pin. Echoing back the requested
 /// version would look like a report while telling the user nothing.
-function Report({ report }: { report: RunReport }) {
+function Report({ report, repo }: { report: RunReport; repo: string }) {
+  const [opening, setOpening] = useState(false);
+  const [url, setUrl] = useState<string | null>(null);
+
+  const applied = report.results.filter((r) => r.error === null).length;
+  // Only where the resolved constraint can be read back. The other
+  // ecosystems report it as null, so the description would have to say
+  // "not verified" about every row.
+  const describable = report.ecosystems.every((e) => e === "npm" || e === "yarn");
+
+  const open = () => {
+    setOpening(true);
+    openUpdatePr(repo, report).then(
+      (u) => {
+        setOpening(false);
+        setUrl(u);
+        toast.success("Pull request opened", { description: u });
+      },
+      (e: unknown) => {
+        setOpening(false);
+        toast.error("Could not open the pull request", {
+          description: typeof e === "string" ? e : undefined,
+        });
+      },
+    );
+  };
+
   return (
     <div className="space-y-3 text-sm">
       <p className="text-[#8b949e]">
@@ -190,6 +217,33 @@ function Report({ report }: { report: RunReport }) {
         <br />
         Branch: <code className="text-[#e6edf3]">{report.branch}</code>
       </p>
+
+      {/* The one action here that leaves this machine. Everything above
+          is a local worktree the user can delete; this pushes a branch
+          and opens a pull request. */}
+      {url !== null ? (
+        <p className="text-xs">
+          <ExternalLink href={url} className="text-[#4493f8] hover:underline">
+            {url}
+          </ExternalLink>
+        </p>
+      ) : applied > 0 && describable ? (
+        <button
+          type="button"
+          disabled={opening}
+          onClick={open}
+          className="rounded border border-[#238636]/40 px-3 py-1 text-xs text-[#3fb950] hover:bg-[#238636]/10 disabled:opacity-50"
+        >
+          {opening ? "Opening…" : "Push and open a pull request"}
+        </button>
+      ) : applied > 0 ? (
+        // Said, not hidden. A missing button reads as a bug, where the
+        // reason is a real limitation worth knowing.
+        <p className="text-xs text-[#8b949e]">
+          A pull request can only be opened for npm and yarn so far — the other
+          ecosystems do not report which version actually landed.
+        </p>
+      ) : null}
       {report.results.map((r) => (
         <div key={r.name} className="rounded border border-[#30363d] p-2">
           <p className="text-[#e6edf3]">{r.name}</p>

@@ -19,5 +19,5 @@ pub use assess::{assess, Assessment};
 pub use model::{Repo, Worktree};
 pub use scan::{
     classify_repo, head_oid, pull_checkout, remove_orphan, remove_worktree, remove_worktree_forced,
-    remove_worktrees_with_progress, scan_dirs_fast, size_repo, RemovalOutcome,
+    remove_worktrees_with_progress, repo_identity, scan_dirs_fast, size_repo, RemovalOutcome,
 };
