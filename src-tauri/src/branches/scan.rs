@@ -78,17 +78,59 @@ fn retrying<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> Option<T> {
 /// Assuming `main` here would mean classifying every branch against a
 /// ref that may not exist, and reporting the whole repository as
 /// unmerged -- quietly, as "nothing is deletable".
-pub fn default_branch(dir: &Path) -> Option<String> {
-    let head = git(
+pub fn default_branch(dir: &Path) -> Result<String, DefaultBranchError> {
+    match git(
         dir,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-    )
-    .ok()?;
-    let head = head.trim();
-    if head.is_empty() {
-        return None;
+    ) {
+        Ok(head) => {
+            let head = head.trim();
+            if head.is_empty() {
+                Err(DefaultBranchError::NotSet)
+            } else {
+                Ok(head.to_string())
+            }
+        }
+        // git ANSWERED, and the answer is that there is no such symref.
+        // A repository with no remote, or one whose origin/HEAD was
+        // never set. That is a fact about the repository.
+        Err(e) if e.contains("is not a symbolic ref") || e.contains("not a valid ref") => {
+            Err(DefaultBranchError::NotSet)
+        }
+        // git could NOT be asked. Not a fact about anything.
+        Err(e) => Err(DefaultBranchError::Unavailable(e)),
     }
-    Some(head.to_string())
+}
+
+/// Why the default branch is not known.
+///
+/// The distinction #481 turned on. Both used to be `None`, so a git
+/// call that failed under load produced the same answer as a
+/// repository that genuinely has no `origin/HEAD` -- and the caller
+/// rendered it as a verdict about the branches.
+///
+/// A failed CHECK is not a finding. The Docker path already works this
+/// way: `images_in_use` refuses rather than proceeding when it cannot
+/// tell, because failing open there would delete an image in use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefaultBranchError {
+    /// git answered: this repository has no `origin/HEAD`.
+    NotSet,
+    /// git could not be asked, and might succeed on a retry.
+    Unavailable(String),
+}
+
+impl std::fmt::Display for DefaultBranchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DefaultBranchError::NotSet => {
+                write!(f, "this repository has no origin/HEAD to compare against")
+            }
+            DefaultBranchError::Unavailable(e) => {
+                write!(f, "could not read origin/HEAD: {e}")
+            }
+        }
+    }
 }
 
 /// Branches currently checked out in a worktree, by branch name.
@@ -326,9 +368,7 @@ fn classify(
 
 /// Every branch in a repository, classified.
 pub fn scan(dir: &Path) -> Result<Vec<Branch>, String> {
-    let Some(default) = default_branch(dir) else {
-        return Err("could not determine the default branch from origin/HEAD".into());
-    };
+    let default = default_branch(dir).map_err(|e| e.to_string())?;
 
     let locals = git(dir, &["for-each-ref", "--format", REF_FORMAT, "refs/heads"])?;
     let remotes = git(
