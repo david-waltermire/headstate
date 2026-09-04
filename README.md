@@ -40,6 +40,59 @@ separate modules so the read path stays independently auditable.
   commands on launch and won't proceed until they work — there is no
   separate login flow inside the app itself.
 
+### Building from source on Linux
+
+Releases ship a `.deb` and an `.AppImage`, so building from source is only
+necessary to develop against the app or to run an unreleased commit. The
+steps below were verified on Ubuntu 26.04; package names differ on other
+distributions, but the four things you need are the same.
+
+Install `gh` from the [GitHub CLI site](https://cli.github.com/), which
+carries current apt, dnf, and Homebrew instructions. The version in Ubuntu's
+own archive lags well behind and may sit behind an ESM subscription, so
+prefer GitHub's apt repository over `apt install gh`.
+
+Tauri links against GTK and WebKit at build time. The runtime libraries are
+usually installed already; the matching `-dev` packages that provide the
+headers and `.pc` files are usually not:
+
+```
+sudo apt install -y \
+  build-essential pkg-config libssl-dev \
+  libwebkit2gtk-4.1-dev libsoup-3.0-dev \
+  libxdo-dev libayatana-appindicator3-dev librsvg2-dev
+```
+
+Rust, stable channel, which is what CI pins:
+
+```
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+. "$HOME/.cargo/env"
+```
+
+Node 22 or newer, plus Yarn 4 from Corepack:
+
+```
+corepack enable
+yarn install --immutable
+```
+
+Use `corepack enable` rather than `npm i -g yarn`. The global npm package
+installs Yarn 1.22, which refuses outright to run a project whose
+`package.json` pins `"packageManager": "yarn@4.5.1"`.
+
+Confirm the backend compiles before launching anything:
+
+```
+cd src-tauri && cargo check
+```
+
+Then `make dev` from the repository root.
+
+CI runs the Rust and frontend suites plus Clippy on `ubuntu-latest` as well
+as macOS, so a Linux-only build or link failure is caught before it reaches
+you. The release workflow builds the `.deb` and `.AppImage` there too.
+
 ## Install
 
 Download the latest `.dmg` or `.app.tar.gz` from the
